@@ -1,0 +1,17 @@
+services:
+  workbench:
+    build: .
+    container_name: quan-ge-workbench
+    # 开机自启：Docker 服务启动时自动拉起容器（Windows Docker Desktop / 群晖 Container Manager 均生效）
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - TZ=Asia/Shanghai
+      - DATA_DIR=/data
+      # 容器内固定库文件名（容器环境无宿主写保护，无需每次重建新库）
+      - DB_FILE=qg-final.sqlite
+    volumes:
+      # 数据持久化：SQLite 数据库存放在宿主机 data/ 目录
+      - ./data:/data

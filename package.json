@@ -1,0 +1,21 @@
+{
+  "name": "personal-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "description": "自托管个人工作台：信息聚合、任务、家庭、学习、AI",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings server/index.js",
+    "build:web": "cd web && npm install && npm run build"
+  },
+  "dependencies": {
+    "dingtalk-stream": "^2.1.6-beta.1",
+    "express": "^4.21.2",
+    "imapflow": "^1.0.170",
+    "multer": "^2.2.0",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.62.1",
+    "rss-parser": "^3.13.0"
+  }
+}

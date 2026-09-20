@@ -1,0 +1,52 @@
+# ========== TTS 模型权重 / HF 缓存（可重新下载）==========
+tts/hf-cache/
+tts/MOSS-TTS-Nano/
+
+
+# ========== 运行时数据（数据库/用户数据/证书/发布包）==========
+data/
+*.sqlite
+*.sqlite3
+*.db
+ssl/
+*.eml
+
+# ========== 前端：依赖与构建产物 ==========
+node_modules/
+dist/
+*.apk
+
+# ========== Python ==========
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# ========== TTS 模型权重（可重新下载）==========
+tts/MOSS-TTS-Nano/
+
+# ========== 日志 ==========
+Logs/
+*.log
+
+# ========== 编辑器 / AI ==========
+.claude/
+.cursor/
+.vscode/
+.idea/
+
+# ========== 系统垃圾 ==========
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ========== 私密文件 ==========
+.env
+*.key
+*.pem
+
+# ========== 临时文件 ==========
+*.tmp
+*.bak

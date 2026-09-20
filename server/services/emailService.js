@@ -1,0 +1,548 @@
+const { ImapFlow } = require('imapflow');
+// 多租户：邮箱配置/邮件/附件目录全部归租户库（每人可配自己的邮箱）
+const { getSetting, setSetting, tenantIdOf } = require('../db');
+
+function getConfig(d) {
+  return d.prepare('SELECT * FROM email_config WHERE id=1').get() || {};
+}
+
+function saveConfig(d, cfg) {
+  d.prepare(
+    `UPDATE email_config SET imap_host=?, imap_port=?, imap_user=?, imap_pass=?, use_tls=?, refresh_minutes=?,
+     smtp_host=?, smtp_port=?, smtp_user=?, smtp_pass=?, smtp_tls=?, smtp_from_name=?, signature=?, trash_keep_days=?,
+     updated_at=datetime('now','localtime') WHERE id=1`
+  ).run(
+    cfg.imap_host || '', cfg.imap_port || 993, cfg.imap_user || '', cfg.imap_pass || '',
+    cfg.use_tls ? 1 : 0, Math.max(5, Number(cfg.refresh_minutes) || 20),
+    cfg.smtp_host || '', cfg.smtp_port || 465, cfg.smtp_user || '', cfg.smtp_pass || '',
+    cfg.smtp_tls ? 1 : 0, cfg.smtp_from_name || '', cfg.signature || '',
+    Math.max(1, Number(cfg.trash_keep_days) || 30)
+  );
+}
+
+function isConfigured(d) {
+  const c = getConfig(d);
+  return !!(c.imap_host && c.imap_user && c.imap_pass);
+}
+
+// 定时拉取入口（供 scheduler 调用，带防重入——按租户库句柄区分）
+const refreshing = new Set();
+async function refresh(d) {
+  if (refreshing.has(d)) return { ok: false, error: '正在拉取中' };
+  refreshing.add(d);
+  try {
+    // v1.2.5 附件解析修复后的一次性自愈：老库里被 '[]' 毒化的邮件自动补拉一次附件
+    // （用户要求附件随邮件默认直接拉取，不依赖手动点「补拉附件」——升级后第一次巡检即翻案）
+    const heal = !getSetting(d, 'email_att_fix_v125', 0);
+    const mails = await listEmails(d, heal ? 50 : 30, { force: heal });
+    if (heal) setSetting(d, 'email_att_fix_v125', 1);
+    return { ok: true, count: mails.length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  } finally {
+    refreshing.delete(d);
+  }
+}
+
+// ---------- MIME 正文解析（无 mailparser 依赖，直接解析 source） ----------
+function stripHtml(h) {
+  return String(h)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+// 取指定头部（处理折叠续行）；headerStr 为头区文本
+function pickHeader(headerStr, name) {
+  const unfolded = headerStr.replace(/\r?\n[ \t]+/g, ' ');
+  const m = unfolded.match(new RegExp('^' + name + '\\s*:\\s*(.*)$', 'im'));
+  return m ? m[1].trim() : null;
+}
+// 按 Content-Transfer-Encoding 解码字节为 UTF-8 文本
+function decodeBytes(buf, cte) {
+  const enc = String(cte || '').toLowerCase().trim();
+  if (enc === 'base64') {
+    try { return Buffer.from(buf.toString('utf8').replace(/[^A-Za-z0-9+/=]/g, ''), 'base64').toString('utf8'); }
+    catch { return buf.toString('utf8'); }
+  }
+  if (enc === 'quoted-printable') {
+    const s = buf.toString('latin1').replace(/=\r?\n/g, '');
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '=' && /[0-9A-Fa-f]{2}/.test(s.slice(i + 1, i + 3))) { out.push(parseInt(s.slice(i + 1, i + 3), 16)); i += 2; }
+      else out.push(s.charCodeAt(i) & 0xff);
+    }
+    return Buffer.from(out).toString('utf8');
+  }
+  return buf.toString('utf8'); // 7bit / 8bit / binary
+}
+// RFC2047 编码的附件名解码：=?UTF-8?B?...?= / =?GBK?Q?...?=
+function decodeMimeFilename(raw) {
+  let s = String(raw || '').trim();
+  // 相邻编码词之间的空白按 RFC2047 丢弃（分段拼接值里常见，否则文件名中间夹空格）
+  s = s.replace(/\?=\s+=\?/g, '?==?');
+  // 多段拼接 =?charset?B/Q?...?=
+  s = s.replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (_, charset, enc, data) => {
+    try {
+      let buf;
+      if (enc.toLowerCase() === 'b') buf = Buffer.from(data, 'base64');
+      else {
+        // Q 编码：_ 是空格，=XX 是十六进制字节
+        const bytes = [];
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] === '_') bytes.push(0x20);
+          else if (data[i] === '=' && /[0-9A-Fa-f]{2}/.test(data.slice(i + 1, i + 3))) { bytes.push(parseInt(data.slice(i + 1, i + 3), 16)); i += 2; }
+          else bytes.push(data.charCodeAt(i) & 0xff);
+        }
+        buf = Buffer.from(bytes);
+      }
+      // charset 真解码：GBK/Big5 中文附件名按各自码表（此前两个分支都是 utf8，中文名必乱码）
+      const cs = String(charset || '').toLowerCase();
+      const asBuf = ['gb2312', 'gbk', 'gb18030', 'big5'].includes(cs) ? cs : 'utf8';
+      try { return buf.toString(asBuf); } catch { return buf.toString('utf8'); }
+    } catch { return data; }
+  });
+  // 去掉两侧引号与换行
+  return s.replace(/^"|"$/g, '').replace(/\r?\n/g, ' ').trim();
+}
+
+// 从 Content-Disposition / Content-Type 值里取附件文件名。
+// 必须覆盖的格式（生产实测：浙江通行费电子发票的 zip 附件头）：
+//   ① 普通 filename="a.pdf"
+//   ② RFC2231 分段：filename*0="段1"; filename*1="段2"（段值里还可能混 RFC2047 编码词，
+//     且编码词会被从中间劈开——必须先按段号拼接、再统一解 RFC2047）
+//   ③ RFC2231 扩展值：filename*=UTF-8''%E5%8F%91.pdf（可分段 filename*0*=..）
+//   ④ 引号值含分号（旧正则 ([^;]+) 会截断）
+// filename 优先于 Content-Type 的 name；都没有返回 null。
+function _params2231(src, key) {
+  const re = new RegExp(key + '(\\*)?(\\d+)?(\\*)?\\s*=\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|([^;\\r\\n]*))', 'gi');
+  const out = { plain: null, segs: new Map() };
+  let m;
+  while ((m = re.exec(src))) {
+    const num = m[2] !== undefined ? Number(m[2]) : null;
+    const val = (m[4] !== undefined ? m[4] : (m[5] || '')).trim();
+    if (num !== null) out.segs.set(num, { ext: !!m[3], val });
+    else if (m[1] || m[3]) out.segs.set(0, { ext: true, val }); // filename*=...（无段号）
+    else if (out.plain === null) out.plain = val;                // 普通 filename=
+  }
+  return out;
+}
+function pickFilename(cd, ct) {
+  const src = [cd, ct].filter(Boolean).join(';\r\n');
+  for (const key of ['filename', 'name']) {
+    const p = _params2231(src, key);
+    if (p.segs.size) {
+      let charset = '', s = '', first = true, hadExt = false;
+      for (const idx of [...p.segs.keys()].sort((a, b) => a - b)) {
+        const seg = p.segs.get(idx);
+        let v = seg.val || '';
+        if (seg.ext) {
+          hadExt = true;
+          // 扩展值首段带 charset'lang' 前缀，摘出 charset 供后面按码表转文本
+          if (first) { const mm = v.match(/^([A-Za-z0-9!*._+-]*)'[^']*'([\s\S]*)$/); if (mm) { charset = mm[1].toLowerCase(); v = mm[2]; } }
+          v = v.replace(/%([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+        }
+        s += v; first = false;
+      }
+      if (hadExt) { // 扩展段拼出的是原始字节，按声明 charset 转文本
+        try {
+          const cs = ['gb2312', 'gbk', 'gb18030', 'big5'].includes(charset) ? charset : 'utf8';
+          s = Buffer.from(s, 'latin1').toString(cs);
+        } catch { /* 保持原样 */ }
+      }
+      const dec = decodeMimeFilename(s); // 段值里混的 RFC2047 编码词最后统一解
+      if (dec) return dec;
+    }
+    if (p.plain) return decodeMimeFilename(p.plain);
+  }
+  return null;
+}
+
+// 递归解析 MIME 结构，收集 text/plain、text/html 与附件（{filename, contentType, buf}）
+function _extract(latin) {
+  let split = latin.indexOf('\r\n\r\n'); let sep = 4;
+  if (split < 0) { split = latin.indexOf('\n\n'); sep = 2; }
+  if (split < 0) return {};
+  const headerStr = latin.slice(0, split);
+  const body = latin.slice(split + sep);
+  const ct = pickHeader(headerStr, 'content-type') || 'text/plain';
+  const boundary = (ct.match(/boundary\s*=\s*"?([^";\r\n]+)"?/i) || [])[1];
+  let plain = null, html = null;
+  const attachments = [];
+  if (boundary && /multipart/i.test(ct)) {
+    for (const part of body.split('--' + boundary)) {
+      if (/^--/.test(part)) break; // 结束边界
+      const sub = _extract(part.replace(/^\r?\n/, ''));
+      if (sub.plain && plain === null) plain = sub.plain;
+      if (sub.html && html === null) html = sub.html;
+      if (sub.attachments) attachments.push(...sub.attachments);
+    }
+  } else {
+    const cte = pickHeader(headerStr, 'content-transfer-encoding');
+    const cd = pickHeader(headerStr, 'content-disposition') || '';
+    const filename = pickFilename(cd, ct);
+    const ctMain = ct.split(';')[0].trim().toLowerCase();
+    // 附件判定：①disposition=attachment（没文件名也收，命名兜底）②有文件名且非正文体
+    // ③application/* 二进制部件（发票 PDF/zip 常连 name 头都没有——此前这类部件被判成正文，
+    //   附件丢失 + ZIP 二进制乱码灌进正文，生产 86 封邮件附件全空就是这个原因）
+    const isAttachment = /attachment/i.test(cd)
+      || (filename && !/^text\/(plain|html)/.test(ctMain))
+      || /^application\//.test(ctMain);
+    if (isAttachment) {
+      const name = filename || 'attachment';
+      const raw = Buffer.from(body, 'latin1');
+      let buf;
+      const enc = String(cte || '').toLowerCase().trim();
+      if (enc === 'base64') {
+        try { buf = Buffer.from(raw.toString('utf8').replace(/[^A-Za-z0-9+/=]/g, ''), 'base64'); }
+        catch { buf = raw; }
+      } else if (enc === 'quoted-printable') {
+        const bytes = [];
+        for (let i = 0; i < raw.length; i++) {
+          const ch = raw.toString('latin1')[i];
+          if (ch === '=' && /[0-9A-Fa-f]{2}/.test(raw.toString('latin1').slice(i + 1, i + 3))) { bytes.push(parseInt(raw.toString('latin1').slice(i + 1, i + 3), 16)); i += 2; }
+          else if (ch !== '\r' && ch !== '\n') bytes.push(raw[i]);
+        }
+        buf = Buffer.from(bytes);
+      } else buf = raw;
+      if (buf.length) attachments.push({ filename: name || 'attachment', contentType: ct.split(';')[0].trim(), buf });
+    } else if (/^text\/html/.test(ctMain)) {
+      const dec = decodeBytes(Buffer.from(body, 'latin1'), cte);
+      if (html === null) html = dec;
+    } else if (/^text\//.test(ctMain)) {
+      // 只有 text/* 才能当正文；其余无文件名的二进制部件（内嵌图片等）直接跳过，
+      // 绝不让二进制解码串污染 plain（旧行为：任何部件都进 plain）
+      const dec = decodeBytes(Buffer.from(body, 'latin1'), cte);
+      if (plain === null) plain = dec;
+    }
+  }
+  return { plain, html, attachments };
+}
+// 从 RFC822 原始 source（Buffer）提取正文纯文本：text/plain 优先，否则 HTML 转文本
+function extractBodyFromSource(src) {
+  if (!src || !src.length) return '';
+  const { plain, html } = _extract(src.toString('latin1'));
+  return (plain || (html ? stripHtml(html) : '') || '').slice(0, 8000);
+}
+// 提取附件（无正文）
+function extractAttachmentsFromSource(src) {
+  if (!src || !src.length) return [];
+  const { attachments } = _extract(src.toString('latin1'));
+  return attachments || [];
+}
+
+// ---------- 附件存储（NAS 目录可配置，归租户 settings） ----------
+const fs = require('fs');
+const path = require('path');
+
+function getAttachConfig(d) {
+  return getSetting(d, 'email_attachments', { dir: '' }); // dir 例：Z:/mail-attachments 或 \\NAS\mail
+}
+function saveAttachConfig(d, cfg) {
+  setSetting(d, 'email_attachments', { dir: String(cfg.dir || '').trim() });
+}
+// 保存附件文件：{dir}/t<租户>_{uid}_{安全文件名}；返回相对名（租户前缀防多租户共用目录时撞名）
+// 专属目录留空时回落「全局默认上传路径」的 email-attachments 子目录；都没配才不落盘
+function saveAttachment(d, uid, att) {
+  const dir = String(getAttachConfig(d).dir || '').trim() || require('../services/storagePaths').uploadSubDir('email-attachments') || '';
+  const safe = String(att.filename || 'attachment').replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 120);
+  const rel = `t${tenantIdOf(d) ?? 0}_${uid}_${safe}`;
+  if (dir) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), att.buf);
+      return { filename: att.filename, size: att.buf.length, path: rel, stored: 1 };
+    } catch (e) {
+      console.warn(`[email] 附件写盘失败(${dir}): ${e.message}`);
+    }
+  }
+  // 目录未配置/写失败：不落盘，仅在列表中登记（可下载时从库取——当前库不存附件体，故标记未存）
+  return { filename: att.filename, size: att.buf.length, path: '', stored: 0 };
+}
+function attachmentFullPath(d, rel) {
+  const dir = String(getAttachConfig(d).dir || '').trim() || require('../services/storagePaths').uploadSubDir('email-attachments') || '';
+  if (!dir || !rel) return null;
+  return path.join(dir, rel);
+}
+
+// ---------- 拉取邮件 ----------
+// limit = 拉取最新 N 封（按序列号从末尾取，确保是新邮件而非最旧的）
+// opts.force = 补拉模式：对「已登记过附件但解析结果为空 '[]'」的邮件强制重拉原文重解析
+// （解析器修好后，老邮件存的 '[]' 是毒化标记——常规拉取会永久跳过，必须 force 才能翻案；
+//   已有附件的邮件不重拉，避免白下载大附件）
+async function listEmails(d, limit = 30, opts = {}) {
+  const force = !!(opts && opts.force);
+  const cfg = getConfig(d);
+  if (!isConfigured(d)) throw new Error('邮箱尚未配置');
+
+  const client = new ImapFlow({
+    host: cfg.imap_host,
+    port: cfg.imap_port || 993,
+    secure: cfg.use_tls ? true : false,
+    auth: { user: cfg.imap_user, pass: cfg.imap_pass },
+    logger: false,
+    connectionTimeout: 15000,
+    socketTimeout: 60000,
+  });
+
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      const total = client.mailbox.exists || 0;
+      if (!total) return [];
+      const start = Math.max(1, total - limit + 1); // 取最后 limit 封（最新）
+      const known = new Map(
+        d.prepare('SELECT uid, seen, body, attachments FROM emails').all().map((r) => [r.uid, r])
+      );
+      const mails = [];
+      for await (const msg of client.fetch(`${start}:*`, { envelope: true, uid: true })) {
+        const uid = Number(msg.uid);
+        const env = msg.envelope || {};
+        mails.push({
+          uid,
+          subject: (env.subject || '').slice(0, 300),
+          from_addr: env.from?.[0]?.address || '',
+          date: env.date ? new Date(env.date).toISOString() : null,
+          seen: known.has(uid) ? !!known.get(uid).seen : false,
+        });
+      }
+      mails.sort((a, b) => (b.date || '').localeCompare(a.date || '')); // 最新在前
+
+      // 入库元信息（INSERT OR IGNORE，依赖 idx_emails_uid 唯一索引去重）
+      const insert = d.prepare(
+        "INSERT OR IGNORE INTO emails(uid,subject,from_addr,date,seen,folder) VALUES(?,?,?,?,0,'inbox')"
+      );
+      const tx = d.transaction((list) => {
+        for (const m of list) insert.run(m.uid, m.subject, m.from_addr, m.date);
+      });
+      tx(mails);
+
+      // 拉正文+附件：缺正文或没登记过附件信息的邮件，用 source 拉 + MIME 解析
+      let fetched = 0;
+      let attCount = 0;
+      const updates = [];
+      for (const m of mails) {
+        const prev = known.get(m.uid);
+        const hasAttInfo = prev && prev.attachments !== null && prev.attachments !== undefined && prev.attachments !== '';
+        if (prev && prev.body && hasAttInfo) {
+          // force 补拉：只翻案「登记过但一个附件都没有」的邮件（解析缺陷期的 '[]' 毒化行）
+          let skip = true;
+          if (force && prev.attachments === '[]') skip = false;
+          if (skip) { m.body = prev.body; m.attachments = null; continue; }
+        }
+        try {
+          const src = await client.fetchOne(m.uid, { source: true }, { uid: true });
+          const bodyText = extractBodyFromSource(src?.source);
+          const atts = extractAttachmentsFromSource(src?.source);
+          const meta = atts.map((a) => saveAttachment(d, m.uid, a));
+          if (meta.length) attCount += meta.length;
+          const attJson = JSON.stringify(meta); // 无附件存 []，避免下次重复拉
+          if (force || bodyText || meta.length) {
+            updates.push([bodyText || (prev?.body || ''), attJson, m.uid]);
+            m.body = bodyText || prev?.body || ''; m.attachments = meta; fetched++;
+          }
+        } catch (e) {
+          console.warn(`[email] 正文拉取失败 uid=${m.uid}: ${e.message}`);
+        }
+      }
+      if (updates.length) {
+        const upd = d.prepare('UPDATE emails SET body=?, attachments=? WHERE uid=?');
+        const tx2 = d.transaction((list) => { for (const u of list) upd.run(u[0], u[1], u[2]); });
+        tx2(updates);
+      }
+      console.log(`[email] 拉取 ${mails.length} 封元信息（最新 ${limit}），新拉正文 ${fetched} 封，附件 ${attCount} 个`);
+      return mails;
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+function markSeen(d, uid) {
+  d.prepare('UPDATE emails SET seen=1 WHERE uid=?').run(uid);
+}
+
+// ---------- SMTP 发送（Node 原生 net/tls，无 nodemailer 依赖） ----------
+const net = require('net');
+const tls = require('tls');
+const crypto = require('crypto');
+
+function b64(s) { return Buffer.from(s).toString('base64'); }
+
+// SMTP 会话封装：逐条命令→响应（多行响应以 250- / 334- 等续行，读到非 '-' 结尾行为止）
+class SmtpClient {
+  constructor(sock) { this.sock = sock; this.buf = ''; }
+  readReply() {
+    return new Promise((resolve, reject) => {
+      const onData = (chunk) => {
+        this.buf += chunk.toString('utf8');
+        // 完整响应：所有行都是 "xyz 文本"（末行无 '-'）
+        const lines = this.buf.split(/\r?\n/).filter(Boolean);
+        const done = lines.length && lines.every((l) => /^\d{3}( |-)/.test(l)) && !/\d{3}-\s*$/.test(this.buf.replace(/\r?\n$/, ''));
+        if (done) {
+          const code = Number(lines[lines.length - 1].slice(0, 3));
+          this.sock.off('data', onData);
+          this.buf = '';
+          if (code >= 400) reject(new Error(`SMTP ${code}: ${lines.join(' | ').slice(0, 300)}`));
+          else resolve(lines.join('\n'));
+        }
+      };
+      const onErr = (e) => { this.sock.off('data', onData); reject(e); };
+      this.sock.once('error', onErr);
+      this.sock.on('data', onData);
+    });
+  }
+  async cmd(line) {
+    this.sock.write(line + '\r\n');
+    return this.readReply();
+  }
+  close() { try { this.sock.destroy(); } catch {} }
+}
+
+async function smtpConnect(cfg) {
+  const host = cfg.smtp_host;
+  const port = Number(cfg.smtp_port) || 465;
+  const useTls = cfg.smtp_tls ? true : false;
+  let sock;
+  if (useTls) {
+    sock = await new Promise((resolve, reject) => {
+      const s = tls.connect({ host, port, rejectUnauthorized: false }, () => resolve(s));
+      s.once('error', reject);
+    });
+  } else {
+    sock = await new Promise((resolve, reject) => {
+      const s = net.connect({ host, port }, () => resolve(s));
+      s.once('error', reject);
+    });
+  }
+  sock.setTimeout(20000, () => sock.destroy(new Error('SMTP 超时')));
+  const c = new SmtpClient(sock);
+  try {
+    await c.readReply();                       // 220 问候
+    await c.cmd('EHLO workbench');             // 250
+    if (useTls) {
+      // 隐式 TLS（465）已在 TLS 层完成，无需 STARTTLS
+    } else {
+      // 明文端口（如 25/587）尝试 STARTTLS 升级（QQ/163 等 587 需要）
+      try {
+        const r = await c.cmd('STARTTLS');
+        if (/220/.test(r)) {
+          const tlsSock = await new Promise((resolve, reject) => {
+            const t = tls.connect({ socket: sock, rejectUnauthorized: false }, () => resolve(t));
+            t.once('error', reject);
+          });
+          c.sock = tlsSock;
+          await c.cmd('EHLO workbench');
+        }
+      } catch { /* 服务器不支持 STARTTLS，继续明文 */ }
+    }
+    await c.cmd('AUTH LOGIN');                 // 334
+    await c.cmd(b64(cfg.smtp_user));           // 334
+    const authOk = await c.cmd(b64(cfg.smtp_pass)); // 235
+    return { c, authOk };
+  } catch (e) {
+    c.close();
+    throw new Error('SMTP 连接/登录失败: ' + e.message);
+  }
+}
+
+function buildMime({ from, fromName, to, cc, subject, text, signature }) {
+  const boundary = '----wb_' + crypto.randomBytes(8).toString('hex');
+  const dateStr = new Date().toUTCString();
+  const msgId = `<${Date.now()}.${crypto.randomBytes(6).toString('hex')}@workbench>`;
+  const encodeHdr = (v) => '=?UTF-8?B?' + b64(v) + '?=';
+  const fullText = signature ? `${text}\n\n--\n${signature}` : text;
+  const lines = [
+    `From: ${encodeHdr(fromName || from)} <${from}>`,
+    `To: ${to}`,
+    ...(cc ? [`Cc: ${cc}`] : []),
+    `Subject: ${encodeHdr(subject)}`,
+    `Date: ${dateStr}`,
+    `Message-ID: ${msgId}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64(fullText).replace(/(.{76})/g, '$1\r\n'),
+    '',
+    `--${boundary}--`,
+    '',
+  ];
+  return lines.join('\r\n');
+}
+
+async function sendMail(d, { to, cc, subject, text }) {
+  const cfg = getConfig(d);
+  if (!cfg.smtp_host || !cfg.smtp_user || !cfg.smtp_pass) {
+    throw new Error('SMTP 尚未配置，请先在「设置」中填写发件服务器');
+  }
+  if (!to || !to.trim()) throw new Error('收件人不能为空');
+  const fromName = cfg.smtp_from_name || cfg.imap_user || cfg.smtp_user;
+  const body = buildMime({ from: cfg.smtp_user, fromName, to, cc, subject, text, signature: cfg.signature || '' });
+  const { c } = await smtpConnect(cfg);
+  try {
+    await c.cmd(`MAIL FROM:<${cfg.smtp_user}>`);
+    const all = String(to + (cc ? ',' + cc : '')).split(/[,;，；]/).map((s) => s.trim()).filter(Boolean);
+    for (const addr of all) await c.cmd(`RCPT TO:<${addr}>`);
+    await c.cmd('DATA');                       // 354
+    // 点补齐：正文里行首的点要加一个点（RFC 5321）
+    const safe = body.replace(/(^|\r?\n)\./g, '$1..');
+    await c.cmd(safe + '\r\n.');
+    await c.cmd('QUIT');
+    // 存入发件箱
+    d.prepare(`INSERT INTO emails(uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(NULL,?,?,?,?,1,?,'sent')`)
+      .run(subject || '', cfg.smtp_user, to, new Date().toISOString(), body);
+    return { ok: true };
+  } finally {
+    c.close();
+  }
+}
+
+// ---------- 文件夹视图 / 垃圾箱清理 ----------
+function listFolder(d, folder, { q = '', page = 1, pageSize = 20 } = {}) {
+  const like = `%${q}%`;
+  const where = folder === 'trash'
+    ? "folder='trash'"
+    : `folder='${folder}'`;
+  const cond = q ? `AND (subject LIKE ? OR from_addr LIKE ? OR to_addr LIKE ? OR body LIKE ?)` : '';
+  const params = q ? [like, like, like, like] : [];
+  const total = d.prepare(`SELECT COUNT(*) c FROM emails WHERE ${where} ${cond}`).get(...params).c;
+  const rows = d.prepare(`SELECT * FROM emails WHERE ${where} ${cond} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...params, pageSize, (page - 1) * pageSize);
+  return { total, rows };
+}
+
+// 垃圾箱按保留天数物理删除（scheduler 每日调）
+function purgeTrash(d) {
+  const days = Number(getConfig(d).trash_keep_days) || 30;
+  const r = d.prepare(`DELETE FROM emails WHERE folder='trash' AND deleted_at IS NOT NULL AND deleted_at < datetime('now','localtime', ?)`).run(`-${days} days`);
+  if (r.changes) console.log(`[email] 垃圾箱清理：删除 ${r.changes} 封（保留 ${days} 天）`);
+  return r.changes;
+}
+
+function saveDraft(d, { id, to, cc, subject, text }) {
+  const cfg = getConfig(d);
+  const sig = cfg.signature || '';
+  if (id) {
+    d.prepare(`UPDATE emails SET to_addr=?, subject=?, body=?, date=datetime('now','localtime') WHERE id=? AND folder='draft'`)
+      .run(to || '', subject || '', text || '', id);
+    return id;
+  }
+  const r = d.prepare(`INSERT INTO emails(uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(NULL,?,?,?,?,0,?,'draft')`)
+    .run(subject || '', cfg.smtp_user || '', to || '', new Date().toISOString(), text || '');
+  return Number(r.lastInsertRowid);
+}
+
+module.exports = {
+  getConfig, saveConfig, isConfigured, listEmails, markSeen, refresh,
+  extractBodyFromSource, extractAttachmentsFromSource,
+  sendMail, listFolder, purgeTrash, saveDraft,
+  getAttachConfig, saveAttachConfig, attachmentFullPath, saveAttachment,
+};
