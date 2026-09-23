@@ -26,7 +26,8 @@ function cp(rel) {
 // ---- 代码目录 ----
 rc('server');
 rc('vibeasr');   // 独立转写客户端引擎（linux/win 预编译，~8MB）
-rc('tts', ['/XD', 'MOSS-TTS-Nano', 'cache', 'hf-cache', 'tmp']); // TTS 脚本与空 voices；模型权重/缓存 2GB+ 不入包（首用自动下载）
+// TTS 脚本与空 voices；模型权重 758MB、.venv 1.4GB、缓存均不入包（目标机用「语音配音」页一键安装器补齐）
+rc('tts', ['/XD', 'MOSS-TTS-Nano', '.venv', '__pycache__', 'cache', 'hf-cache', 'tmp', 'generated_audio', 'examples']);
 rc('scripts', ['/XF', 'repro-switch-hole.mjs']); // 漏洞复现脚本不分发
 rc('web/src');
 rc('web/public'); // 前端静态：三大测评中心 H5、Material Icons 等
@@ -45,7 +46,7 @@ rc('node_modules');
 // ---- 根部单文件 ----
 for (const f of [
   'package.json', 'package-lock.json', 'start.bat',
-  'README.md', 'README-使用说明.md',
+  'README.md',
   'Dockerfile', 'docker-compose.yml', '.dockerignore', 'pack-deploy.sh',
   'web/index.html', 'web/package.json', 'web/package-lock.json', 'web/vite.config.js',
 ]) cp(f);
@@ -60,4 +61,4 @@ const z = spawnSync(BSDTAR, ['-a', '-c', '-f', ZIP, '-C', path.dirname(STAGE), p
 if (z.status !== 0) throw new Error('tar 压缩失败 code=' + z.status);
 
 const mb = (p) => (fs.statSync(p).size / 1024 / 1024).toFixed(1);
-console.log(`\n[release] ✅ 完成\n  staging: ${STAGE}（${mb(STAGE)}MB 估算见 du）\n  zip:     ${ZIP}（${mb(ZIP)}MB）\n  首启账号: admin / admin123（README-使用说明.md 有完整指引）`);
+console.log(`\n[release] ✅ 完成\n  staging: ${STAGE}（${mb(STAGE)}MB 估算见 du）\n  zip:     ${ZIP}（${mb(ZIP)}MB）\n  首启账号: admin / admin123（README.md 有完整指引）`);
