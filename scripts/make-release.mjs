@@ -26,7 +26,7 @@ function cp(rel) {
 // ---- 代码目录 ----
 rc('server');
 rc('vibeasr');   // 独立转写客户端引擎（linux/win 预编译，~8MB）
-rc('tts');       // TTS 脚本（voices 为空目录，随包带上）
+rc('tts', ['/XD', 'MOSS-TTS-Nano', 'cache', 'hf-cache', 'tmp']); // TTS 脚本与空 voices；模型权重/缓存 2GB+ 不入包（首用自动下载）
 rc('scripts', ['/XF', 'repro-switch-hole.mjs']); // 漏洞复现脚本不分发
 rc('web/src');
 rc('web/public'); // 前端静态：三大测评中心 H5、Material Icons 等

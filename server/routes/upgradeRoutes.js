@@ -260,7 +260,9 @@ const applyUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // 其数据库走子进程 DATA_DIR=/data/zhizu（持久卷），data/ 子目录永不入包。
 function applyTargetPath(name) {
   const rel = String(name || '').replace(/\\/g, '/');
-  if (!rel.startsWith('server/') && !rel.startsWith('web/dist/') && !rel.startsWith('tts/') && !rel.startsWith('vibeasr/') && !rel.startsWith('zhizu/')) return null;
+  // web/public/：测评中心 H5 静态（v1.6.3 运行时门禁要更新 H5 的 js/server.js）。
+  // 旧容器白名单无此前缀，H5 一直停留在镜像内置版本——v1.6.3-pre 先发本文件扩白名单，主包 H5 才能落盘。
+  if (!rel.startsWith('server/') && !rel.startsWith('web/dist/') && !rel.startsWith('web/public/') && !rel.startsWith('tts/') && !rel.startsWith('vibeasr/') && !rel.startsWith('zhizu/')) return null;
   const parts = rel.split('/');
   if (parts.some((s) => !s || s === '.' || s === '..')) return null;
   return rel;
