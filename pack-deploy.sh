@@ -1,5 +1,5 @@
 #!/bin/bash
-# 泉哥工作台 · Docker 部署打包脚本
+# 个人工作台 · Docker 部署打包脚本
 # 用法：
 #   1) 本机执行  bash pack-deploy.sh  生成 workbench-deploy.tar.gz（含源码 + 数据，不含 node_modules）
 #   2) 把 tar 包上传到服务器/群晖，解压后进入目录执行  docker compose up -d --build

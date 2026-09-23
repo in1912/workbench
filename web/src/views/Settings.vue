@@ -24,7 +24,8 @@
             <button class="small" style="padding:2px 8px" @click="editing = null">取消</button>
           </template>
           <template v-else>
-            <span style="font-size:13.5px">{{ p.icon }} {{ displayLabel(p) }}</span>
+            <span class="material-icons" style="font-size:15px; width:20px; color:var(--text3); flex-shrink:0" aria-hidden="true">{{ p.icon }}</span>
+            <span style="font-size:13.5px">{{ displayLabel(p) }}</span>
             <span class="grow"></span>
             <button class="small" style="padding:2px 8px" @click="startRename(p)">改名</button>
             <button class="small" style="padding:2px 8px" :disabled="i === 0" @click="moveOrder(i, -1)">↑</button>
@@ -89,10 +90,10 @@
         </div>
         <div class="form-row"><label>发件账号</label><input v-model="s.email.smtp_user" placeholder="you@example.com" /></div>
         <div class="form-row"><label>密码 / 授权码</label><input v-model="s.email.smtp_pass" type="password" placeholder="SMTP 授权码（通常与 IMAP 相同）" /></div>
-        <div class="form-row"><label>发件人显示名（可选）</label><input v-model="s.email.smtp_from_name" placeholder="如：泉哥" /></div>
+        <div class="form-row"><label>发件人显示名（可选）</label><input v-model="s.email.smtp_from_name" placeholder="如：张三" /></div>
         <div class="form-row">
           <label>邮件末尾签名（发送时自动附加）</label>
-          <textarea v-model="s.email.signature" rows="3" placeholder="如：&#10;泉哥&#10;电话：138xxxx"></textarea>
+          <textarea v-model="s.email.signature" rows="3" placeholder="如：&#10;张三&#10;电话：138xxxx"></textarea>
         </div>
         <div class="form-row"><label>垃圾箱保留天数</label><input v-model.number="s.email.trash_keep_days" type="number" min="1" max="365" /></div>
         <div class="muted" style="font-size:12px; margin-bottom:10px">垃圾箱邮件到期后每天自动清理；QQ/163 等邮箱的 SMTP 端口通常是 465 或 587，密码需用授权码。</div>
@@ -344,8 +345,8 @@
         <p class="muted" style="margin-bottom:10px">登录页、侧边栏、浏览器标题同步使用</p>
         <div v-if="!isAdmin" class="muted" style="font-size:12px; margin-bottom:8px; color:var(--orange, #e6a23c)">🔒 系统名称由管理员设置</div>
         <div class="row" style="flex-wrap:wrap; margin-bottom:8px">
-          <input v-model="sys.name" :disabled="!isAdmin" placeholder="中文名称（如：泉哥工作台）" style="width:200px" />
-          <input v-model="sys.name_en" :disabled="!isAdmin" placeholder="英文名称（如：QuanGe Workbench）" style="width:220px" />
+          <input v-model="sys.name" :disabled="!isAdmin" placeholder="中文名称（如：工作台）" style="width:200px" />
+          <input v-model="sys.name_en" :disabled="!isAdmin" placeholder="英文名称（如：Workbench）" style="width:220px" />
         </div>
         <button class="primary" :disabled="!isAdmin" @click="saveSysName">保存系统名称</button>
       </div>
@@ -480,7 +481,7 @@ const cm = ref({ home: '', work: '', key: '', work_start: '09:00', work_end: '18
 const cmResult = ref({});
 const dtText = ref('');
 const dtHint = ref('');
-const sys = ref({ name: '泉哥工作台', name_en: 'QuanGe Workbench' });
+const sys = ref({ name: '工作台', name_en: 'Workbench' });
 
 // ---------- 多成员共享模块 ----------
 const share = ref({ news: true, holiday: true, amap_key: true, ai_config: true, family: true });

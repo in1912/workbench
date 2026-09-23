@@ -68,6 +68,11 @@ router.get('/mbti/public/:id', (req, res) => {
   }
 });
 
+// ---------- 运行时门禁探测（EXEMPT 免登录）：H5 已加载页面的停用检查 ----------
+// 题目全在 JS 里、纯客户端可作答：静态 403 只拦得住「新打开」的访客，拦不住已开着的标签页。
+// H5 轮询本端点（启动即查 + 15s 一轮 + 切回前台即查），停用后整页锁定。无敏感数据。
+router.get('/mbti/gate', (req, res) => res.json({ enabled: isEnabled() }));
+
 // ---------- 分享域名前缀（登录可读；写仅管理员；留空 = 用当前访问地址） ----------
 router.get('/mbti/config', (req, res) => {
   res.json({ prefix: String(getSetting(db, PREFIX_KEY, '') || ''), enabled: isEnabled() });
@@ -81,7 +86,7 @@ router.put('/mbti/config', (req, res) => {
     const p = String(b.prefix || '').trim().replace(/\/+$/, '');
     if (p) {
       if (!/^https?:\/\/[^\s]+$/i.test(p)) {
-        return res.status(400).json({ error: '前缀须为 http(s):// 开头的地址（如 https://xxx.vicp.fun），或留空使用当前访问地址' });
+        return res.status(400).json({ error: '前缀须为 http(s):// 开头的地址（如 https://your.domain.com），或留空使用当前访问地址' });
       }
       if (p.length > 200) return res.status(400).json({ error: '前缀过长' });
     }

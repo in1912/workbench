@@ -43,9 +43,9 @@ router.use(express.json());
 // ---------- 系统信息（免登录：登录页/标题需要显示系统名称；系统键永在主库） ----------
 router.get('/system-info', (req, res) => {
   res.json({
-    name: getSetting('system_name', '泉哥工作台'),
-    name_en: getSetting('system_name_en', 'QuanGe Workbench'),
-    version: getSetting('current_version', '') || '',
+    name: getSetting('system_name', '工作台'),
+    name_en: getSetting('system_name_en', 'Workbench'),
+    version: getSetting('current_version', '') || 'v1.6.3',
   });
 });
 // 保存系统名称（管理员：系统级配置全员可见）
@@ -294,7 +294,7 @@ router.post('/settings/external-base', (req, res) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可配置外网访问地址' });
   const base = String((req.body && req.body.external) || '').trim().replace(/\/+$/, '');
   if (base && !/^https?:\/\/[^\s/?#]+$/.test(base)) {
-    return res.status(400).json({ error: '地址格式应为 http(s)://域名[:端口]（不带路径），如 https://xxx.vicp.fun' });
+    return res.status(400).json({ error: '地址格式应为 http(s)://域名[:端口]（不带路径），如 https://your.domain.com' });
   }
   setSetting(db, 'external_base_url', base);
   res.json({ ok: true, external: base });

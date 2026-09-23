@@ -19,7 +19,7 @@
       <div class="logo"><span class="dot"></span>{{ sysName }}<NetBadge /></div>
       <nav class="nav">
         <router-link v-for="n in visibleNavs" :key="n.to" :to="n.to" @click="menuOpen = false">
-          <span class="ico">{{ n.icon }}</span>{{ n.label }}
+          <span class="ico material-icons" aria-hidden="true">{{ n.icon }}</span>{{ n.label }}
         </router-link>
       </nav>
       <div class="sidebar-foot">

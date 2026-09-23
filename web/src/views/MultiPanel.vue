@@ -48,7 +48,7 @@
         <div class="cfg-row">
           <label>外网地址（花生壳 / 内网穿透域名，出门在外访问用）</label>
           <div class="cfg-line">
-            <input v-model="cfgExternal" placeholder="https://xxx.vicp.fun（留空 = 清除）" />
+            <input v-model="cfgExternal" placeholder="https://your.domain.com（留空 = 清除）" />
             <button class="small" :disabled="cfgBusy" @click="saveExternal">{{ cfgBusy ? '保存中…' : '保存' }}</button>
           </div>
         </div>

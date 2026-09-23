@@ -43,7 +43,7 @@
     <div class="card">
       <h3>🛠 生成新签名（自助签发）</h3>
       <div class="muted" style="font-size:12.5px; margin-bottom:10px">在这里生成即可，无需 openssl 命令行。生成会<b>立即替换</b>当前证书文件（旧的自动备份到 ssl/backup-时间戳/），重启服务后生效。有效期上限 {{ st.max_days || 825 }} 天（Chrome/苹果对自签名证书的信任上限）。</div>
-      <div class="form-row"><label>通用名称 CN（主域名/主机名）</label><input v-model="gen.cn" placeholder="localhost" /></div>
+      <div class="form-row"><label>通用名称 CN（主域名/主机名）</label><input v-model="gen.cn" placeholder="your.domain.com" /></div>
       <div class="form-row"><label>附加域名 / IP（逗号分隔，自动分类进 SAN）</label><input v-model="gen.san" :placeholder="`192.168.110.105, nas.local`" /></div>
       <div class="row">
         <div class="form-row" style="flex:1"><label>有效天数（1-{{ st.max_days || 825 }}）</label><input v-model.number="gen.days" type="number" min="1" :max="st.max_days || 825" /></div>
@@ -77,7 +77,7 @@
         <b>怎么使用（生成 → 重启 → 信任）？</b>
         <p>① 在上方填 CN（一般填花生壳域名）和要覆盖的域名/IP，点「生成并替换」；② 点「重启服务」（Docker 自动拉起）；③ 用 https://你的域名 访问；④ 每台设备做一次信任：Windows 双击下载的 cert.pem → 安装证书 → 存储位置选「本地计算机」→「将所有的证书都放入下列存储」→ 浏览选「受信任的根证书颁发机构」；iPhone/Android 下载 cert.pem 后在设置里安装（iOS 装完还要到 设置→通用→关于本机→证书信任设置 打开完全信任）。</p>
         <b>适用什么场景？</b>
-        <p>家庭/小团队自建系统：局域网 IP 直连（https://192.168.x.x:21716）、花生壳等内网穿透域名（http://localhost:3000）。注意：① 有效期不能超过 825 天；② 花生壳映射必须是 TCP 型（HTTP 型会拦截 TLS 握手）；③ 公网正式对外运营请改用 Let's Encrypt 等正规免费证书（需域名解析验证）。</p>
+        <p>家庭/小团队自建系统：局域网 IP 直连（https://192.168.x.x:21716）、花生壳等内网穿透域名（如 https://your.domain.com）。注意：① 有效期不能超过 825 天；② 花生壳映射必须是 TCP 型（HTTP 型会拦截 TLS 握手）；③ 公网正式对外运营请改用 Let's Encrypt 等正规免费证书（需域名解析验证）。</p>
       </div>
     </div>
   </div>

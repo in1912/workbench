@@ -45,12 +45,18 @@ export const TAB_DEFS = {
     { key: 'push', label: '推送记录' },
     { key: 'config', label: '定时配置' },
   ],
-  tools: [
-    // 三大测试中心排前（v1.3.0）：抑郁测试 / 心理测试 / 职业测试（v1.3.1「专业心理测试」改名）
-    // H5 分别嵌 /dep/index.html、/pro/index.html、/mbti/index.html；管理列表与分享前缀配置在各 tab
+  // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从「效率工具」页移入
+  // H5 分别嵌 /dep/index.html、/pro/index.html、/mbti/index.html；管理列表与分享前缀配置在各 tab
+  private: [
     { key: 'dep', label: '抑郁测试' },
     { key: 'pro', label: '心理测试' },
     { key: 'mbti', label: '职业测试' },
+  ],
+  tools: [
+    // 智作平台（文案库）排第一（2026-09 v1.6.2）：iframe 嵌入同源 /zhizu/，自带登录与角色体系
+    { key: 'zhizu', label: '智作平台' },
+    // 录音转写为默认落点（2026-09-22 用户要求：模块默认进录音转写）
+    { key: 'vibe', label: '录音转写' },
     { key: 'clip', label: '剪贴板' },
     { key: 'links', label: '快捷启动' },
     // 学习页移来的 3 个 tab（2026-09 v1.2.0）

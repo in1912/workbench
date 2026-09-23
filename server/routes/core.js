@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
-const { routedDb, db, getTenantDb } = require('../db');
+const crypto = require('crypto');
+const { routedDb, db, getTenantDb, getSetting, setSetting } = require('../db');
 const messageService = require('../services/messageService');
 const storagePaths = require('../services/storagePaths');
 
@@ -422,20 +423,194 @@ router.delete('/reviews/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- 剪贴板 ----------
+// ---------- 剪贴板（手动录入 + Windows 采集代理，v1.6.2） ----------
 router.get('/clipboard', (req, res) => {
   res.json(req.tdb.prepare('SELECT * FROM clipboard_items ORDER BY id DESC LIMIT 200').all());
 });
 router.post('/clipboard', (req, res) => {
   const { content, source } = req.body;
   if (!content || !content.trim()) return res.json({ ok: true });
-  const r = req.tdb.prepare('INSERT INTO clipboard_items(content,source) VALUES(?,?)')
-    .run(content.trim(), source || 'manual');
+  const r = req.tdb.prepare('INSERT INTO clipboard_items(content,source,device) VALUES(?,?,?)')
+    .run(content.trim().slice(0, 10000), source === 'manual' ? 'manual' : String(source || 'manual').slice(0, 30), '');
   res.json({ id: r.lastInsertRowid });
 });
 router.delete('/clipboard/:id', (req, res) => {
   req.tdb.prepare('DELETE FROM clipboard_items WHERE id=?').run(req.params.id);
   res.json({ ok: true });
+});
+
+// ---------- 剪贴板采集代理（v1.6.2）：Windows 电脑端脚本，一键下载/安装/卸载 ----------
+// 同录音转写客户端包模式：脚本按「下载来源」内嵌服务器地址（IP 访问嵌 IP、域名访问嵌域名），
+// key=登记密钥 + uid=下载管理员的用户 id 双凭证；采集数据落该管理员的租户库。
+function clipKey() {
+  let k = getSetting('clip_client_key', '');
+  if (!k) { k = crypto.randomBytes(16).toString('hex'); setSetting('clip_client_key', k); }
+  return k;
+}
+function clipBaseUrl(req) {
+  const clean = (u) => String(u || '').replace(/\/+$/, '');
+  const org = clean(req.get('origin'));
+  if (/^https?:\/\//i.test(org)) return org;
+  const ref = clean(String(req.get('referer') || '').replace(/^(https?:\/\/[^/?#]+).*$/i, '$1'));
+  if (/^https?:\/\//i.test(ref)) return ref;
+  const xfp = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  return `${xfp || req.protocol}://${req.get('host')}`;
+}
+
+// PS 5.1 注意（沿用 vibeasr-setup.ps1 踩坑结论）：中文须 UTF-8 BOM（下载时服务端补）；
+// TLS 信任回调用编译型 C#（脚本块形式在 TLS 线程崩）；剪贴板 API 需 STA（安装命令带 -STA）；
+// $Host/$args 是自动变量不可赋值；函数名不能叫 Curl（Invoke-RestMethod 的别名 curl 会遮蔽）。
+const CLIP_PS = [
+  '# 个人工作台·剪贴板采集脚本（由「效率工具→剪贴板」页生成，按下载来源内嵌服务器地址）',
+  '# 用法：与 install-clipboard.bat 放同一文件夹，双击 install-clipboard.bat 安装（无需管理员）。',
+  '# 安装位置：%LOCALAPPDATA%\\WorkbenchClipboard；当前用户开机自启。卸载：双击 uninstall-clipboard.bat，',
+  '#   或 powershell -ExecutionPolicy Bypass -File 本文件 -Remove',
+  'param([switch]$Remove)',
+  "$Server = '__SERVER__'",
+  "$Key    = '__KEY__'",
+  "$Uid    = __UID__",
+  "$RunName = 'WorkbenchClipboard'",
+  "$Dir = Join-Path $env:LOCALAPPDATA 'WorkbenchClipboard'",
+  "$LogFile = Join-Path $Dir 'agent.log'",
+  "function Log([string]$m) { try { Add-Content -Path $LogFile -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $m) -ErrorAction SilentlyContinue } catch {} }",
+  '',
+  'if ($Remove) {',
+  "  Log 'uninstall'",
+  "  Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name $RunName -ErrorAction SilentlyContinue",
+  "  Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like ('*' + $Dir + '*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+  "  Remove-Item $Dir -Recurse -Force -ErrorAction SilentlyContinue",
+  "  Write-Host '已卸载剪贴板采集'",
+  '  exit',
+  '}',
+  '',
+  '# --- 安装分支：不从安装目录运行时，先落位再转常驻 ---',
+  'if ($PSCommandPath -and (-not $PSCommandPath.StartsWith($Dir))) {',
+  '  New-Item -ItemType Directory -Force -Path $Dir | Out-Null',
+  "  Log ('installing from ' + $PSCommandPath)",
+  "  Copy-Item $PSCommandPath (Join-Path $Dir 'watcher.ps1') -Force",
+  "  $cmd = 'powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + (Join-Path $Dir 'watcher.ps1') + '\"'",
+  "  New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name $RunName -Value $cmd -PropertyType String -Force | Out-Null",
+  "  Write-Host ('安装完成（' + $Dir + '），已开始后台采集并设为开机自启')",
+  "  Start-Process -FilePath 'powershell.exe' -ArgumentList ('-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"' + (Join-Path $Dir 'watcher.ps1') + '\"')",
+  '  exit',
+  '}',
+  '',
+  '# --- 常驻分支：监听剪贴板 → 变化即推送；每 9 分钟刷新登记（页面显示在线状态） ---',
+  'Add-Type -AssemblyName System.Windows.Forms',
+  '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12',
+  '# 工作台可能是内网自签名 HTTPS（按下载来源内嵌）：编译型 C# 回调放行证书（脚本块形式会在 TLS 线程炸）',
+  "if (-not ('ClipTlsTrust' -as [type])) {",
+  "  Add-Type -TypeDefinition 'using System.Net; using System.Security.Cryptography.X509Certificates; public class ClipTlsTrust : ICertificatePolicy { public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; } }'",
+  '}',
+  '[System.Net.ServicePointManager]::CertificatePolicy = New-Object ClipTlsTrust',
+  '# 本机代理会掐断内网请求，强制直连',
+  '[System.Net.WebRequest]::DefaultWebProxy = $null',
+  '# 单实例互斥',
+  "$mtx = New-Object System.Threading.Mutex($false, 'Global\\WorkbenchClipboard')",
+  'if (-not $mtx.WaitOne(0)) { exit }',
+  '',
+  '$Machine = $env:COMPUTERNAME',
+  '$regBody = @{ key = $Key; uid = [int]$Uid; host = $Machine } | ConvertTo-Json',
+  'function Register-Clip {',
+  "  try { Invoke-RestMethod -Method Post -Uri ($Server + '/api/clipboard/agent-register') -ContentType 'application/json; charset=utf-8' -Body $regBody | Out-Null } catch {}",
+  '}',
+  'Register-Clip',
+  "Log ('watching clipboard -> ' + $Server)",
+  '',
+  "$last = ''",
+  '$lastReg = Get-Date',
+  'for (;;) {',
+  '  Start-Sleep -Seconds 3',
+  '  try {',
+  '    $text = [System.Windows.Forms.Clipboard]::GetText()',
+  '    if ($text -and $text.Length -gt 1 -and $text -ne $last) {',
+  '      $last = $text',
+  '      if ($text.Length -gt 20000) { $text = $text.Substring(0, 20000) }',
+  '      $body = @{ key = $Key; uid = [int]$Uid; host = $Machine; content = $text } | ConvertTo-Json',
+  '      try {',
+  "        Invoke-RestMethod -Method Post -Uri ($Server + '/api/clipboard/agent-push') -ContentType 'application/json; charset=utf-8' -Body $body | Out-Null",
+  "      } catch { Log ('push failed: ' + $_.Exception.Message) }",
+  '    }',
+  '  } catch { # 剪贴板被其他程序占用时忽略',
+  '  }',
+  '  if (((Get-Date) - $lastReg).TotalMinutes -ge 9) { $lastReg = Get-Date; Register-Clip }',
+  '}',
+].join('\n');
+
+// bat 全 ASCII（cmd 内嵌中文经传参必乱码）
+const CLIP_INSTALL_BAT = [
+  '@echo off',
+  'cd /d "%~dp0"',
+  'powershell -STA -NoProfile -ExecutionPolicy Bypass -File "%~dp0clipboard-setup.ps1"',
+  'pause',
+].join('\r\n');
+
+// 卸载自包含：不依赖当初的 ps1 还在；$PID 排除自身（卸载命令行里含目录名会自匹配）
+const CLIP_UNINSTALL_BAT = [
+  '@echo off',
+  'powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $dir = Join-Path $env:LOCALAPPDATA \'WorkbenchClipboard\'; Remove-ItemProperty -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\' -Name \'WorkbenchClipboard\' -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like (\'*\' + $dir + \'*\') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 1; Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path $dir) { Write-Host \'Some files are locked, please reboot and run again\' } else { Write-Host \'Workbench clipboard watcher uninstalled\' } }"',
+  'pause',
+].join('\r\n');
+
+// 三件套下发（仅管理员；ps1 内嵌下载来源地址 + 密钥 + 下载者 uid）
+router.get('/clipboard/agent', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可下载采集脚本' });
+  const t = String(req.query.type || '');
+  if (t === 'setup') {
+    const ps = CLIP_PS.replace(/__SERVER__/g, clipBaseUrl(req)).replace(/__KEY__/g, clipKey()).replace(/__UID__/g, String(req.user.id));
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="clipboard-setup.ps1"');
+    return res.end('﻿' + ps); // UTF-8 BOM：PS 5.1 无 BOM 按 ANSI 解析中文
+  }
+  if (t === 'install') {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename="install-clipboard.bat"');
+    return res.end(CLIP_INSTALL_BAT);
+  }
+  if (t === 'uninstall') {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename="uninstall-clipboard.bat"');
+    return res.end(CLIP_UNINSTALL_BAT);
+  }
+  res.status(400).json({ error: '未知类型' });
+});
+
+// 代理登记/推送（EXEMPT 免登录；key + uid 双校验，数据落该管理员的租户库）
+function clipAgentDb(b) {
+  if (String(b.key || '') !== clipKey()) return null;
+  const uid = Number(b.uid) || 0;
+  const u = db.prepare('SELECT id, role FROM users WHERE id=?').get(uid);
+  if (!u || u.role !== 'admin') return null;
+  return getTenantDb(uid);
+}
+router.post('/clipboard/agent-register', (req, res) => {
+  const tdb = clipAgentDb(req.body || {});
+  if (!tdb) return res.status(403).json({ error: '密钥不对' });
+  const host = String(req.body.host || '').trim().slice(0, 60) || '未知电脑';
+  tdb.prepare(`INSERT INTO clipboard_devices(host, first_seen, last_seen) VALUES(?,?,?)
+    ON CONFLICT(host) DO UPDATE SET last_seen=excluded.last_seen`).run(host, Date.now(), Date.now());
+  res.json({ ok: true });
+});
+router.post('/clipboard/agent-push', (req, res) => {
+  const tdb = clipAgentDb(req.body || {});
+  if (!tdb) return res.status(403).json({ error: '密钥不对' });
+  const host = String(req.body.host || '').trim().slice(0, 60) || '未知电脑';
+  const content = String(req.body.content || '').trim().slice(0, 10000);
+  if (!content) return res.json({ ok: true });
+  // 同机同内容 10 分钟内去重（采集脚本重启后 $last 清零会重推最后一次内容）
+  const last = tdb.prepare('SELECT content, created_at FROM clipboard_items WHERE device=? ORDER BY id DESC LIMIT 1').get(host);
+  if (last && last.content === content) {
+    const t = Date.parse(String(last.created_at || '').replace(' ', 'T'));
+    if (!Number.isFinite(t) || Date.now() - t < 10 * 60 * 1000) return res.json({ ok: true, dup: true });
+  }
+  const r = tdb.prepare("INSERT INTO clipboard_items(content, source, device) VALUES(?, 'agent', ?)").run(content, host);
+  tdb.prepare('INSERT OR IGNORE INTO clipboard_devices(host, first_seen, last_seen) VALUES(?,?,?)').run(host, Date.now(), Date.now());
+  tdb.prepare('UPDATE clipboard_devices SET last_seen=?, push_count=push_count+1 WHERE host=?').run(Date.now(), host);
+  res.json({ id: r.lastInsertRowid });
+});
+// 已登记的采集电脑列表（谁装了采集脚本、在不在线）
+router.get('/clipboard/devices', (req, res) => {
+  res.json(req.tdb.prepare('SELECT * FROM clipboard_devices ORDER BY last_seen DESC LIMIT 50').all());
 });
 
 // ---------- 快捷启动 ----------

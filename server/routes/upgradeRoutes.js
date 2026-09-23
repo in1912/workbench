@@ -30,7 +30,12 @@ if (!fs.existsSync(PKG_DIR)) fs.mkdirSync(PKG_DIR, { recursive: true });
 // 扫描范围：白名单源码目录 + 根目录配置文件；node_modules 等一律排除。
 // tts/ 只随包带引擎代码（moss_server.py + MOSS-TTS-Nano 仓库）：.venv/models/缓存等
 // 大体积且每机各异的内容排除——目标机用「语音配音」页的一键安装器自行补齐。
-const INCLUDE_DIRS = ['server', 'web/src', 'web/public', 'scripts', 'tts'];
+// vibeasr/ 随包带 Windows 引擎二进制（win-x64 的 exe+3 个 MinGW DLL，共约 5.6MB）：
+// 生产容器是 Linux，自身引擎由一键安装器源码编译；这 4 个文件专供「客户端电脑算力」
+// 部署包下发（clientFileList 只认 *.exe/*.dll，Linux 产物不会被误发）。
+// whisper.cpp 引擎二进制在 server/whisper/<plat>-<arch>/（server/ 前缀天然过应用白名单，
+// 不设独立顶层 whisper/ 目录——旧容器白名单会跳过新前缀，v1.5.0 踩过同款鸡生蛋）。
+const INCLUDE_DIRS = ['server', 'web/src', 'web/public', 'scripts', 'tts', 'vibeasr'];
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__', '.venv', 'hf-cache', 'models', 'cache', 'voices', 'tmp', 'generated_audio', 'examples']);
 function isRootFileIncluded(name) {
   if (name === 'Dockerfile' || name === 'docker-compose.yml' || name === '.dockerignore') return true;
@@ -247,13 +252,15 @@ router.post('/upgrade/package', async (req, res) => {
 // 自动拉起容器（可写层保留），新代码与新前端快照即生效；本地直跑则需手动重启。
 const applyUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
-// 应用端路径白名单：容器内只需要可运行部分（server 源码 + 前端构建产物 + tts 引擎代码）。
+// 应用端路径白名单：容器内只需要可运行部分（server 源码 + 前端构建产物 + tts/vibeasr 引擎文件 + zhizu 子服务）。
 // web/src、scripts、根文件等源码条目不落盘（容器内无构建环境，仅留档于包内）。
 // tts/ 落到容器层 /app/tts：引擎的 venv/模型由一键安装器装进持久卷 /data/tts，
 // 仓库代码副本留在 /app/tts 供安装器离线复用。
+// zhizu/ 落到 /app/zhizu：智作平台子服务运行时（server 源码 + web/dist + package.json）；
+// 其数据库走子进程 DATA_DIR=/data/zhizu（持久卷），data/ 子目录永不入包。
 function applyTargetPath(name) {
   const rel = String(name || '').replace(/\\/g, '/');
-  if (!rel.startsWith('server/') && !rel.startsWith('web/dist/') && !rel.startsWith('tts/')) return null;
+  if (!rel.startsWith('server/') && !rel.startsWith('web/dist/') && !rel.startsWith('tts/') && !rel.startsWith('vibeasr/') && !rel.startsWith('zhizu/')) return null;
   const parts = rel.split('/');
   if (parts.some((s) => !s || s === '.' || s === '..')) return null;
   return rel;

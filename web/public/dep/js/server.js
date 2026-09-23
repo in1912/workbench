@@ -192,6 +192,31 @@
     return d.replace(/\/+$/, '') + CGI_PATH + '#/result/' + profileId;
   }
 
+  // ---------- 运行时门禁（workbench 模式）：管理员关闭对外开关后，已加载的页面也立即停用 ----------
+  // 题目全在 JS 里、纯客户端即可作答：静态页 403 只拦得住「新打开」的访客，拦不住已开着的
+  // 标签页（bfcache 返回、长驻 SPA 都还在内存里）。此处轮询工作台免登录 gate 端点（无敏感
+  // 数据），一旦停用就整页锁定；网络失败不锁（离线可用性优先）。端点不存在（旧版工作台）
+  // 返回 401/404，同样不锁。
+  function gateLockdown() {
+    if (document.getElementById('wb_gate_lock')) return;
+    var d = document.createElement('div');
+    d.id = 'wb_gate_lock';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-family:system-ui,sans-serif;color:#555;padding:24px';
+    d.innerHTML = '<div><div style="font-size:44px">🚫</div><h2 style="margin:10px 0 6px">测试已停用</h2><p style="margin:0;color:#888">该测试中心当前未对外开放，请联系管理员开启。</p></div>';
+    (document.body || document.documentElement).appendChild(d);
+  }
+  function gateCheck() {
+    fetch(WB_API + '/gate')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.enabled === false) gateLockdown(); })
+      .catch(function () { /* 网络失败不锁页面 */ });
+  }
+  if (MODE === 'workbench') {
+    gateCheck();
+    setInterval(gateCheck, 15000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) gateCheck(); });
+  }
+
   window.MBTI_SITE = { load: loadSite, save: saveSite, KEY: SITE_KEY };
   window.MBTI_SERVER = {
     CGI_PATH, mode, available, apiBase, syncProfile, fetchAll, fetchOne, remove, buildShareLink,

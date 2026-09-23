@@ -150,7 +150,8 @@ body {
 }
 .sidebar .nav a:hover { background: var(--bg3); color: var(--text); }
 .sidebar .nav a.router-link-active { background: rgba(79, 124, 247, 0.16); color: var(--accent); }
-.sidebar .nav .ico { width: 18px; text-align: center; font-size: 14px; }
+/* Material Icons 单色字体图标（v1.6.2）：随文字颜色渲染，宽度对齐 ligature 图标 */
+.sidebar .nav .ico { width: 22px; text-align: center; font-size: 18px; line-height: 1; flex-shrink: 0; }
 
 .main { flex: 1; padding: 22px 28px 60px; max-width: 1200px; min-width: 0; }
 

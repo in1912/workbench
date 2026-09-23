@@ -179,7 +179,15 @@ CREATE TABLE IF NOT EXISTS clipboard_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   content TEXT NOT NULL,
   source TEXT DEFAULT 'manual',
+  device TEXT DEFAULT '',          -- 采集来源电脑名（v1.6.2 剪贴板采集代理；手动录入为空）
   created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS clipboard_devices (  -- 已安装采集脚本的电脑（v1.6.2；落在各管理员自己的租户库）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  host TEXT NOT NULL UNIQUE,
+  first_seen INTEGER DEFAULT 0,
+  last_seen INTEGER DEFAULT 0,
+  push_count INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS quick_links (
@@ -830,6 +838,47 @@ CREATE TABLE IF NOT EXISTS piano_records (
 );
 CREATE INDEX IF NOT EXISTS idx_piano_records ON piano_records(user_id, id DESC);
 
+-- ---------- 录音转写（VibeVoice-ASR：浏览器录音/上传音频 → 说话人分离转写） ----------
+CREATE TABLE IF NOT EXISTS vibe_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  user_name TEXT NOT NULL DEFAULT '',   -- 操作人中文姓名（display_name 优先）
+  source TEXT NOT NULL DEFAULT 'record',-- record=系统内录音 | upload=上传文件
+  fmt TEXT NOT NULL DEFAULT 'wav',      -- wav | mp3（录音格式；上传的按实际扩展名）
+  started_at TEXT DEFAULT '',           -- 开始录制时间（上传=开始上传时间）
+  ended_at TEXT DEFAULT '',             -- 结束录制时间（上传=上传完成时间）
+  duration_sec REAL DEFAULT 0,          -- 录音时长（服务端读文件判定；录音兜底用起止时间差）
+  file_path TEXT DEFAULT '',
+  file_mime TEXT DEFAULT 'audio/wav',
+  file_size INTEGER DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending=待转写 | running=转写中 | done=已生成 | failed=失败
+  transcript_md TEXT DEFAULT '',        -- 转写文本（markdown，详情框渲染/导出用）
+  transcript_json TEXT DEFAULT '',      -- 模型原始 utterances（导出 txt 重建干净文本用）
+  transcript_chars INTEGER DEFAULT 0,   -- 正文字数（不含时间戳/标题）
+  transcribed_at TEXT DEFAULT '',
+  model TEXT DEFAULT '',
+  error TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_vibe_records ON vibe_records(id DESC);
+
+-- 客户端拉取模式任务队列：客户端引擎多半在外网/NAT 后（服务器永远连不到它的内网 IP），
+-- 反向而行——任务入队、客户端主动回连工作台领取并回传结果（客户端→工作台方向已证明可达）
+CREATE TABLE IF NOT EXISTS vibe_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_id INTEGER NOT NULL,
+  req_body TEXT NOT NULL,               -- OpenAI 兼容请求体（含音频 data URL，认领时下发；终态清空省库容）
+  status TEXT NOT NULL DEFAULT 'queued',-- queued=待领 | claimed=已领 | done=完成 | failed=失败
+  engine TEXT DEFAULT 'vibeasr',         -- 任务归属引擎：vibeasr=1.5B BitNet | vibe7b=7B vLLM（老任务 NULL 按 vibeasr 兜底）
+  error TEXT DEFAULT '',
+  created_at INTEGER DEFAULT 0,         -- 入队时刻（epoch ms，超时判定用）
+  claimed_at INTEGER DEFAULT 0,
+  finished_at INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_vibe_jobs_pending ON vibe_jobs(status, id);
+-- idx_vibe_jobs_pending2(status, engine, id) 在列迁移后就位后再建（见下方 addCol(vibe_jobs, engine) 后的语句），
+-- 不能随主 DDL 一起建：旧库此时 engine 列尚未 addCol 补齐，CREATE INDEX 会因「no such column」启动崩溃
+
 -- ---------- 心愿卡（产品 + 每日打卡；每天每人最多 2 次、每产品 1 次） ----------
 CREATE TABLE IF NOT EXISTS wish_products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1031,6 +1080,15 @@ addCol(db, 'mbti_records', 'test_id', "TEXT DEFAULT ''");
 addCol(db, 'mbti_records', 'test_title', "TEXT DEFAULT ''");
 addCol(db, 'mbti_records', 'summary', "TEXT DEFAULT ''");
 addCol(db, 'mbti_records', 'ai_analysis_done', 'INTEGER NOT NULL DEFAULT 0'); // 1=该档案已生成过 AI 深度分析
+// 录音转写耗时（v1.5.9，v1.5.10 起列名改「转写耗时」）：run_ms=本次转写开始的 epoch 毫秒；elapsed_ms=完成耗时；
+// 直连与拉取两条路共用——含排队/引擎加载/推理全程，老记录无值显示 —）
+addCol(db, 'vibe_records', 'run_ms', 'INTEGER DEFAULT 0');
+addCol(db, 'vibe_records', 'elapsed_ms', 'INTEGER DEFAULT 0');
+// 任务引擎路由（v1.6.0）：该任务由哪套客户端引擎领取——vibeasr=1.5B BitNet 纯CPU | vibe7b=7B vLLM(WSL2+显卡)；
+// 老任务/老 sidecar 无此概念，NULL 与空串一律按 vibeasr 兜底（向后兼容）
+addCol(db, 'vibe_jobs', 'engine', "TEXT DEFAULT 'vibeasr'");
+// engine 列就位后再建索引（旧库列是 addCol 补的，索引不能随主 DDL 建，否则列未就绪时启动会崩）
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_jobs_pending2 ON vibe_jobs(status, engine, id)'); } catch {}
 // 存量回填：老记录的 test_id/test_title/summary 从档案 JSON 带出（每次启动只处理空列行，幂等）
 try {
   const bfRows = db.prepare("SELECT id, data FROM mbti_records WHERE test_id=''").all();
@@ -1476,10 +1534,59 @@ function migrateTypingIntoLearning() {
 }
 migrateTypingIntoLearning();
 
+// 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
+// （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。
+function migrateClipboardAgent() {
+  const fix = (d) => {
+    addCol(d, 'clipboard_items', 'device', "TEXT DEFAULT ''");
+    d.exec(`CREATE TABLE IF NOT EXISTS clipboard_devices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      host TEXT NOT NULL UNIQUE,
+      first_seen INTEGER DEFAULT 0,
+      last_seen INTEGER DEFAULT 0,
+      push_count INTEGER DEFAULT 0
+    )`);
+  };
+  fix(db);
+  forEachTenant(fix);
+}
+migrateClipboardAgent();
+
+function migrateTestsIntoPrivate() {
+  if (getSetting(db, 'tests_move_private_v1', false)) return;
+  setSetting(db, 'tests_move_private_v1', true);
+  const MOVED = ['dep', 'pro', 'mbti'];
+  const users = db.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all();
+  for (const u of users) {
+    let pages;
+    try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+    let tabs;
+    try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+    let changed = false;
+    // 页受限且含 tools 的用户补 private 页（原来能经 tools 用测试中心的，迁移后保持能用）
+    if (Array.isArray(pages) && pages.length && pages.includes('tools')) {
+      if (!pages.includes('private')) { pages.push('private'); changed = true; }
+    }
+    // tools 有 tab 细分（受限列表）的：三个测试键移到 private 细分。
+    // private 一律落成数组（哪怕空数组）：tools 细分原本为空=测试中心全关的用户，不能因迁移反而放开
+    if (tabs && typeof tabs === 'object' && Array.isArray(tabs.tools)) {
+      const moved = tabs.tools.filter((t) => MOVED.includes(t));
+      tabs.tools = tabs.tools.filter((t) => !MOVED.includes(t));
+      const cur = Array.isArray(tabs.private) ? tabs.private : [];
+      tabs.private = [...new Set([...cur, ...moved])];
+      changed = true;
+    }
+    if (changed) db.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE id=?')
+      .run(JSON.stringify(pages), JSON.stringify(tabs), u.id);
+  }
+  console.log('[db] 三大测试中心已移至「私有项目」页（用户授权已迁移）');
+}
+migrateTestsIntoPrivate();
+
 // 家庭共享底账初始化（一次性，守卫 family_share_v1；函数定义在模块层，见文件尾）
 migrateFamilyShare();
 
-// 管理员改名：RENAME_USER=旧名:新名（如 admin:admin）
+// 管理员改名：RENAME_USER=旧名:新名（如 user1:admin）
 // 用于在服务进程内修改账号名（宿主写保护下外部进程无法改库）
 const renameUser = process.env.RENAME_USER;
 if (renameUser && renameUser.includes(':')) {

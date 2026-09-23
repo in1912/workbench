@@ -27,7 +27,7 @@
           <td class="c-page">
             <label class="pl">
               <input type="checkbox" :value="p.key" v-model="user.allowed_pages" />
-              <span class="picon">{{ p.icon }}</span>{{ p.label }}
+              <span class="picon material-icons" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}
             </label>
           </td>
           <td class="c-tabs">
@@ -116,7 +116,7 @@ function clearAllTabs() {
 .c-tabs { line-height: 2; }
 .perm-table input[type="checkbox"] { width: auto; margin: 0; flex-shrink: 0; }
 .pl { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-weight: 500; }
-.picon { color: var(--accent); }
+.picon { color: var(--accent); font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
 .tl {
   display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap;
   padding: 2px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2);

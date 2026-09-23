@@ -2,10 +2,9 @@
   <div>
     <h2 class="page-title">效率工具</h2>
     <div class="tabs">
-      <!-- 三大测评中心排前（v1.3.0）：抑郁测试 / 心理测试 / 职业测试（v1.3.1「专业心理测试」改名） -->
-      <button v-if="canTab('tools','dep')" :class="{active: tab==='dep'}" @click="switchTab('dep')">抑郁测试</button>
-      <button v-if="canTab('tools','pro')" :class="{active: tab==='pro'}" @click="switchTab('pro')">心理测试</button>
-      <button v-if="canTab('tools','mbti')" :class="{active: tab==='mbti'}" @click="switchTab('mbti')">职业测试</button>
+      <!-- 智作平台（文案库，v1.6.2）排第一：iframe 嵌同源 /zhizu/，自带登录/角色，随工作台进程启动 -->
+      <button v-if="canTab('tools','zhizu')" :class="{active: tab==='zhizu'}" @click="switchTab('zhizu')">智作平台</button>
+      <button v-if="canTab('tools','vibe')" :class="{active: tab==='vibe'}" @click="switchTab('vibe')">录音转写</button>
       <button v-if="canTab('tools','clip')" :class="{active: tab==='clip'}" @click="switchTab('clip')">剪贴板</button>
       <button v-if="canTab('tools','links')" :class="{active: tab==='links'}" @click="switchTab('links')">快捷启动</button>
       <!-- 学习页移来的 3 个 tab（2026-09 v1.2.0） -->
@@ -15,21 +14,49 @@
       <button v-if="canTab('tools','monitor')" :class="{active: tab==='monitor'}" @click="switchTab('monitor')">电脑监控</button>
     </div>
 
-    <template v-if="tab==='clip'">
+    <!-- ============ 智作平台（文案库整体嵌入，v1.6.2） ============ -->
+    <template v-if="tab==='zhizu'">
+      <div class="zhizu-card">
+        <div v-if="zhizuLoading" class="muted" style="padding:48px; text-align:center">智作平台加载中…（服务随工作台自动启动，首次约需几秒）</div>
+        <iframe v-show="!zhizuLoading" src="/zhizu/" class="zhizu-frame" title="智作平台" @load="zhizuLoading = false"></iframe>
+      </div>
+    </template>
+
+    <template v-else-if="tab==='clip'">
+      <div class="card" style="margin-bottom:12px">
+        <h3>🖥 剪贴板采集 <span class="muted" style="font-size:12px; font-weight:400">Windows 电脑把系统剪贴板自动推送到本页</span></h3>
+        <div v-if="meAdmin" class="row" style="gap:10px; flex-wrap:wrap">
+          <button class="primary" @click="dlClip('setup')">⬇ 下载采集脚本 (ps1)</button>
+          <button class="primary" @click="dlClip('install')">⬇ 下载安装批处理 (bat)</button>
+          <button class="primary" @click="dlClip('uninstall')">⬇ 下载卸载脚本 (bat)</button>
+        </div>
+        <div class="muted" style="margin-top:8px; font-size:12.5px; line-height:1.8">
+          安装：两个文件（clipboard-setup.ps1 + install-clipboard.bat）放同一文件夹，双击 install-clipboard.bat 即完成——装到
+          <code>%LOCALAPPDATA%\WorkbenchClipboard</code>，开机自动采集，无需管理员权限；卸载双击 uninstall-clipboard.bat。<br />
+          脚本按<b>本次下载所用的地址</b>（IP 或域名）自动连接；采集内容进入下载账号（管理员）的剪贴板列表。<span v-if="!meAdmin">脚本下载需管理员账号。</span>
+        </div>
+        <div v-if="clipDevices.length" style="margin-top:10px; border-top:1px dashed var(--border); padding-top:8px">
+          <div v-for="d in clipDevices" :key="d.id" class="clip-dev">
+            <span class="badge" :class="clipOnline(d) ? 'green' : 'red'">{{ clipOnline(d) ? '在线' : '离线' }}</span>
+            <b style="font-size:13px">💻 {{ d.host }}</b>
+            <span class="muted" style="font-size:12px">最近上报 {{ fmtTs(d.last_seen) }} · 累计推送 {{ d.push_count }} 条</span>
+          </div>
+        </div>
+      </div>
       <div class="card" style="margin-bottom:12px">
         <div class="row">
-          <input v-model="clipText" placeholder="粘贴内容，自动保存为剪贴板记录..." class="grow" @keyup.enter="addClip" />
+          <input v-model="clipText" placeholder="粘贴内容，手动保存为剪贴板记录..." class="grow" @keyup.enter="addClip" />
           <button class="primary" @click="addClip">保存</button>
-        </div>
-        <div class="muted" style="margin-top:8px">
-          本地自动采集：Windows 用户可运行 <code>scripts/clipboard-watcher.ps1</code> 脚本，自动把系统剪贴板推送到本工作台。
         </div>
       </div>
       <div class="card">
         <div v-for="c in clips" :key="c.id" class="list-item">
           <div class="grow">
-            <div>{{ c.content }}</div>
-            <div class="meta">{{ c.source }} · {{ c.created_at?.slice(0,16) }}</div>
+            <!-- 来源电脑在前、时间在后、内容在下一行（2026-09 用户要求：内容前要有登记的电脑与时间） -->
+            <div class="meta" style="margin-bottom:3px">
+              <span class="badge blue">💻 {{ c.device || '手动录入' }}</span> · {{ c.created_at?.slice(0,19) }}
+            </div>
+            <div style="white-space:pre-wrap; word-break:break-word">{{ c.content }}</div>
           </div>
           <button class="small" @click="copy(c.content)">复制</button>
           <button class="icon-btn" @click="delClip(c)">✕</button>
@@ -69,10 +96,7 @@
       </div>
     </template>
 
-    <!-- ============ 三大测评中心（v1.3.0，共用 TestCenterTab 组件） ============ -->
-    <TestCenterTab v-else-if="tab==='dep'" center="dep" />
-    <TestCenterTab v-else-if="tab==='pro'" center="pro" />
-    <TestCenterTab v-else-if="tab==='mbti'" center="mbti" />
+    <!-- ============ 三大测评中心已移至「私有项目」页（2026-09 v1.6.2） ============ -->
 
     <!-- ============ 学习计划（自学习页移来） ============ -->
     <template v-else-if="tab==='plans'">
@@ -129,6 +153,9 @@
     <!-- ============ 电脑监控（v1.3.5） ============ -->
     <MonitorPanel v-else-if="tab==='monitor'" />
 
+    <!-- ============ 录音转写（VibeVoice-ASR） ============ -->
+    <VibeVoiceTab v-else-if="tab==='vibe'" />
+
     <!-- ============ 复盘（自学习页移来） ============ -->
     <template v-else>
       <div class="row" style="margin-bottom:12px">
@@ -163,28 +190,43 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { marked } from 'marked';
 import { api } from '../api';
-import { canTab, firstTab } from '../tabs';
-import TestCenterTab from '../components/TestCenterTab.vue';
+import { canTab, firstTab, TAB_DEFS } from '../tabs';
 import MonitorPanel from '../components/MonitorPanel.vue';
+import VibeVoiceTab from '../components/VibeVoiceTab.vue';
 
 const route = useRoute();
 const router = useRouter();
 
-const tab = ref(firstTab('tools', 'clip'));
+const tab = ref(firstTab('tools', 'zhizu')); // 默认落点=智作平台（2026-09-23 用户要求；v1.5.10 曾为录音转写）
 // 支持 /tools?tab=xxx 直达；切 tab 时同步地址栏（学习页移来的 3 个 tab 旧链接 /learning?tab=plans 也自然回落到本页）
+// canTab 对管理员「未知 key」也放行（allowedTabs=null），必须再用 TAB_DEFS 校验 key 真实存在——
+// 否则旧收藏 /tools?tab=dep（已移入私有项目）会把 tab 置成不存在的键，无高亮且内容落进 v-else 复盘分支
+const isToolsTab = (t) => TAB_DEFS.tools.some((d) => d.key === t);
 function switchTab(t) {
   tab.value = t;
   router.replace({ query: { ...route.query, tab: t } });
 }
 watch(() => route.query.tab, (t) => {
-  if (t && t !== tab.value && canTab('tools', String(t))) tab.value = String(t);
+  if (t && t !== tab.value && isToolsTab(String(t)) && canTab('tools', String(t))) { tab.value = String(t); load(); }
 });
-if (route.query.tab && canTab('tools', String(route.query.tab))) tab.value = String(route.query.tab);
+if (route.query.tab && isToolsTab(String(route.query.tab)) && canTab('tools', String(route.query.tab))) tab.value = String(route.query.tab);
 
 const clips = ref([]);
 const clipText = ref('');
+const clipDevices = ref([]);
+const meAdmin = (() => { try { return JSON.parse(localStorage.getItem('wb_user') || '{}').role === 'admin'; } catch { return false; } })();
 const links = ref([]);
 const link = ref({ name: '', url: '', icon: '', category: 'general' });
+
+// ---------- 智作平台（v1.6.2） ----------
+const zhizuLoading = ref(true);
+
+// ---------- 剪贴板采集（v1.6.2） ----------
+function dlClip(type) {
+  api.download(`/clipboard/agent?type=${type}`).catch((e) => alert('下载失败：' + e.message));
+}
+const clipOnline = (d) => Date.now() - (Number(d.last_seen) || 0) < 15 * 60 * 1000; // 15 分钟内有上报=在线（与服务端一致）
+const fmtTs = (ms) => (Number(ms) > 0 ? new Date(Number(ms)).toLocaleString('sv').slice(0, 19) : '—');
 
 // ---------- 学习计划 / 学习记录 / 复盘（自学习页移来） ----------
 const data = ref({ plans: [], records: [] });
@@ -201,6 +243,7 @@ async function load() {
   // 各数据源独立容错：无对应 tab 权限时接口 403，不能拖垮其他 tab
   // （三大测评中心的数据加载在 TestCenterTab 组件内自行完成）
   try { clips.value = await api.get('/clipboard'); } catch { clips.value = []; }
+  try { if (canTab('tools', 'clip')) clipDevices.value = await api.get('/clipboard/devices'); } catch { clipDevices.value = []; }
   try { links.value = await api.get('/links'); } catch { links.value = []; }
   try { data.value = await api.get('/learning'); } catch { data.value = { plans: [], records: [] }; }
   try { if (canTab('tools', 'review')) reviews.value = await api.get('/reviews'); } catch { reviews.value = []; }
@@ -269,3 +312,11 @@ async function delReview(rv) { await api.del(`/reviews/${rv.id}`); await load();
 
 onMounted(load);
 </script>
+
+<style scoped>
+/* 智作平台 iframe：占满内容区剩余高度（文案库暗紫主题整页嵌入） */
+.zhizu-card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #14061f; }
+.zhizu-frame { width: 100%; height: calc(100vh - 205px); min-height: 620px; border: 0; display: block; }
+/* 剪贴板采集：已登记电脑行 */
+.clip-dev { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12.5px; flex-wrap: wrap; }
+</style>

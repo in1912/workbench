@@ -16,6 +16,7 @@ const typingRoutes = require('./routes/typingRoutes');
 const ttsRoutes = require('./routes/ttsRoutes');
 const vstudyRoutes = require('./routes/vstudyRoutes');
 const pianoRoutes = require('./routes/pianoRoutes');
+const vibeRoutes = require('./routes/vibeRoutes');
 const wishRoutes = require('./routes/wishRoutes');
 const mbtiRoutes = require('./routes/mbtiRoutes');
 const depRoutes = require('./routes/depRoutes');
@@ -36,6 +37,14 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// 智作平台（文案库，v1.6.2）：子进程随工作台启动，对外仅暴露同源路径 /zhizu（效率工具→智作平台 iframe 嵌入）。
+// 必须挂在 express.json 之前：请求体原样透传给子进程解析（含 multipart），代理不做任何改写；
+// 其登录/角色体系（wk_token）独立于工作台（wb_token），同源 iframe 下互不干扰。
+const zhizu = require('./services/zhizuService');
+app.use('/zhizu', zhizu.proxy);
+zhizu.start();
+
 app.use(express.json({ limit: '12mb' })); // 家庭图床图片以 base64 JSON 提交（原图上限 5MB ≈ base64 6.7MB）
 
 // 花生壳 HTTP 型映射会直接掐掉 PATCH 方法的连接（实测 GET/POST/PUT/DELETE 均可达、PATCH 必断）；
@@ -58,10 +67,12 @@ app.use((req, res, next) => {
 // /mbti 写入口也免登录（v1.2.25）：H5 测试者多用手机直接打开、未登录工作台，档案号(uid)即写入凭证；
 // 管理端点(列表/授权/删除/配置)不在名单内，且路由内另有 adminOnly 双保险
 const EXEMPT = ['/auth/login', '/health', '/tile', '/map-static', '/system-info', '/dingtalk/bind/callback', '/auth/dingtalk-info', '/auth/dingtalk/login',
-  '/mbti/public', '/mbti/records', '/mbti/user-info', '/mbti/ai-auth', '/mbti/ai-analysis',
-  '/dep/public', '/dep/records', '/dep/user-info', '/dep/ai-auth', '/dep/ai-analysis',
-  '/pro/public', '/pro/records', '/pro/user-info', '/pro/ai-auth', '/pro/ai-analysis',
+  '/mbti/public', '/mbti/records', '/mbti/user-info', '/mbti/ai-auth', '/mbti/ai-analysis', '/mbti/gate',
+  '/dep/public', '/dep/records', '/dep/user-info', '/dep/ai-auth', '/dep/ai-analysis', '/dep/gate',
+  '/pro/public', '/pro/records', '/pro/user-info', '/pro/ai-auth', '/pro/ai-analysis', '/pro/gate',
   '/monitor/agent/config', '/monitor/agent/shot',
+  '/clipboard/agent-register', '/clipboard/agent-push', // 剪贴板采集代理（key+uid 即凭证：登记/推送，v1.6.2）
+  '/vibe/client-download', '/vibe/client-register', '/vibe/job', // 录音转写客户端（key 即凭证：引擎下发/登记回连/拉取模式领任务回传结果）
   '/pets/desktop']; // 桌面宠物（key 即凭证：state/frame/action）
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();
@@ -89,6 +100,7 @@ app.use('/api', typingRoutes);
 app.use('/api', ttsRoutes);
 app.use('/api', vstudyRoutes);
 app.use('/api', pianoRoutes);
+app.use('/api', vibeRoutes);
 app.use('/api', wishRoutes);
 app.use('/api', mbtiRoutes);
 app.use('/api', depRoutes);

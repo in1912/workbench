@@ -2,8 +2,8 @@
 // 服务端 /system-info 与设置页保存为最终依据，任何页面改名后全站即时生效。
 import { ref } from 'vue';
 
-export const sysName = ref(localStorage.getItem('wb_sysname') || '泉哥工作台');
-export const sysNameEn = ref(localStorage.getItem('wb_sysname_en') || 'QuanGe Workbench');
+export const sysName = ref(localStorage.getItem('wb_sysname') || '工作台'); // 兜底《工作台》：无用户配置名时的默认（2026-09-23 用户要求，不再用旧品牌名）
+export const sysNameEn = ref(localStorage.getItem('wb_sysname_en') || 'Workbench');
 
 // 拿到服务端名称（登录页/App 拉取）或设置页保存后调用：更新共享状态并同步缓存
 export function setSysInfo(name, nameEn) {

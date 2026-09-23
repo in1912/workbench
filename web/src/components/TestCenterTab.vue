@@ -18,7 +18,7 @@
         <span class="muted" style="font-size:12px">关闭后：测试网页、分享链接与全部免登录接口对外失效（403），防止匿名滥用；管理员的记录管理不受影响。</span>
       </div>
       <div class="row">
-        <input v-model="prefix" placeholder="http://localhost:3000（留空 = 使用当前访问地址）" class="grow" />
+        <input v-model="prefix" placeholder="https://your.domain.com（留空 = 使用当前访问地址）" class="grow" />
         <button class="primary" @click="savePrefix">保存</button>
       </div>
       <div class="muted" style="margin-top:8px">
@@ -98,8 +98,8 @@
                 <td>{{ r.name || r.uid || r.id.slice(0, 10) + '…' }}</td>
                 <td>{{ fmtDbTime(r.finished_at || r.updated_at) }}</td>
                 <td>
-                  <button class="small" @click="view(r)">查看</button>
-                  <button class="small" @click="copyLink(r)">复制链接</button>
+                  <button class="small" :disabled="!enabled" :title="enabled ? '' : '已停用对外测试，预览/分享链接不可用'" @click="view(r)">查看</button>
+                  <button class="small" :disabled="!enabled" :title="enabled ? '' : '已停用对外测试，预览/分享链接不可用'" @click="copyLink(r)">复制链接</button>
                   <button class="small" @click="del(r)">删除</button>
                 </td>
               </tr>

@@ -52,7 +52,7 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'search', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'business', 'ai', 'files', 'pay', 'pets', 'settings'];
+const PAGES = ['dashboard', 'search', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'private', 'business', 'ai', 'files', 'pay', 'pets', 'settings'];
 
 function pageForPath(p) {
   if (p.startsWith('/overview')) return 'dashboard';
@@ -68,9 +68,10 @@ function pageForPath(p) {
   if (p.startsWith('/tts')) return 'learning'; // 语音合成（听写播报/语音配音）归学习页
   if (p.startsWith('/vstudy')) return 'learning'; // 视频教学（目录/播放/记录/设置/学时流水）归学习页
   if (p.startsWith('/clipboard') || p.startsWith('/links')) return 'tools';
-  if (p.startsWith('/mbti')) return 'tools'; // 职业测试（MBTI H5 同步/管理；免登录的 /mbti/public/* 在 EXEMPT，不经过这里）
-  if (p.startsWith('/dep')) return 'tools'; // 抑郁测试中心（v1.3.0，/api/dep/*；免登录端点在 EXEMPT）
-  if (p.startsWith('/pro')) return 'tools'; // 专业心理测试中心（v1.3.0，/api/pro/*；免登录端点在 EXEMPT）
+  // 三大测试中心移入新页「私有项目」（2026-09 v1.6.2；免登录的 /xxx/public/* 在 EXEMPT，不经过这里）
+  if (p.startsWith('/mbti')) return 'private'; // 职业测试（MBTI H5 同步/管理）
+  if (p.startsWith('/dep')) return 'private'; // 抑郁测试中心（/api/dep/*）
+  if (p.startsWith('/pro')) return 'private'; // 专业心理测试中心（/api/pro/*）
   if (p.startsWith('/monitor')) return 'tools'; // Computer monitoring (v1.3.5): Tools page last tab, bound to tools page permission (otherwise any logged-in user could read screenshots)
   if (p.startsWith('/business') || p.startsWith('/business/skills')) return 'business';
   if (p.startsWith('/ai')) return 'ai';
@@ -149,12 +150,14 @@ const TAB_PATHS = {
     ['push', ['/pushes']],   // 原「AI 推送」页的两个 tab 并入业务系统
     ['config', ['/schedules']],
   ],
-  tools: [
-    // 三大测试中心排前（v1.3.0）：抑郁测试 / 专业心理测试 / 职业测试（原「心理测试」改名）
-    // 三个中心接口同构：档案同步 / 分享前缀 / 管理列表（免登录的 /xxx/public/:id 不经过权限校验）
+  // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从「效率工具」页移入
+  // 三个中心接口同构：档案同步 / 分享前缀 / 管理列表（免登录的 /xxx/public/:id 不经过权限校验）
+  private: [
     ['dep', ['/dep/records', '/dep/users', '/dep/config']],
     ['pro', ['/pro/records', '/pro/users', '/pro/config']],
     ['mbti', ['/mbti/records', '/mbti/users', '/mbti/config']],
+  ],
+  tools: [
     ['clip', ['/clipboard']],
     ['links', ['/links']],
     // monitor (v1.3.5)
@@ -163,6 +166,8 @@ const TAB_PATHS = {
     ['plans', ['/learning/plans']],
     ['records', ['/learning/records']],
     ['review', ['/reviews']],
+    // 录音转写（VibeVoice-ASR）：录音/上传/列表/转写/导出/设置
+    ['vibe', ['/vibe']],
   ],
   pets: [
     // 主查看 tab（宠物列表/喂养/悬浮窗）：整页共享端点不绑路径，空数组=仅作授权表勾选项
@@ -230,7 +235,7 @@ function initAdmin() {
   const count = db.prepare('SELECT COUNT(*) c FROM users WHERE is_bot=0').get().c;
   if (count === 0) {
     const uname = process.env.DEFAULT_ADMIN || 'admin';
-    const upass = process.env.DEFAULT_ADMIN_PASSWORD || '123456';
+    const upass = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
     db.prepare('INSERT INTO users(username,password_hash,role,allowed_pages) VALUES(?,?,?,?)')
       .run(uname, hashPassword(upass), 'admin', '[]');
     console.log(`[auth] 已创建初始管理员 ${uname}（密码 ${upass}，请登录后立即修改）`);

@@ -1,0 +1,13 @@
+{
+  "name": "wenanku",
+  "version": "1.0.0",
+  "description": "文案库 - AI短视频文案创作管理系统",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "build": "cd web && npm run build"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
