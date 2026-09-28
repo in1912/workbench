@@ -78,6 +78,10 @@
           <input v-model="sk.request_path" placeholder="数据接口路径（可选，如 /api/orders/today）" class="grow" />
           <input v-model="sk.cron" placeholder="定时 cron（可选，如 0 9 * * *）" style="width:180px" />
         </div>
+        <label class="row" style="margin-bottom:8px; cursor:pointer; gap:6px; align-items:center">
+          <input type="checkbox" v-model="sk.local_format" style="width:auto" />
+          <span>本地整理（<b>不调用 AI</b>）：抓取/接口数据直接排成 Markdown 表格，零算力消耗、结果确定性；适合"取数列表"类任务</span>
+        </label>
         <div class="row">
           <button class="primary" @click="saveSkill">{{ editingSkill ? '保存修改' : '保存 Skill' }}</button>
           <button v-if="editingSkill" @click="cancelSkillEdit">取消</button>
@@ -97,6 +101,8 @@
               <span class="badge" v-if="k.cron">定时：{{ k.cron }}</span>
               <span class="badge blue" v-if="k.request_path">接口：{{ k.request_path }}</span>
               <span class="badge" v-if="recipeOf(k)">浏览器抓取配方</span>
+              <span class="badge green" v-if="k.local_format">本地整理（无 AI）</span>
+              <span class="badge amber" v-if="k.last_ai_model">AI：{{ k.last_ai_model }} · {{ k.last_ai_tokens }} tokens</span>
               <span class="muted" v-if="k.last_run_at">上次执行 {{ k.last_run_at?.slice(0,16) }}</span>
             </div>
             <div class="d muted" style="margin-top:6px">指令：{{ k.prompt || '（无）' }}</div>
@@ -107,7 +113,8 @@
               <div v-if="openRecipe === k.id" class="recipe-box">
                 <div class="muted small" style="margin-bottom:8px">
                   执行链路：<b>Playwright 无头浏览器</b>（server/services/browserSkillService.js）按下面配方操作页面抓取 →
-                  结构化数据存本页「推送记录」+ 飞书表格卡片 → 最后才把数据交给 AI（指令栏的提示词）整理文字。抓取不依赖 AI。
+                  结构化数据存本页「推送记录」+ 飞书表格卡片 → 勾选「本地整理」的 Skill 到此为止（数据直接本地排表，全程无 AI），
+                  未勾选的才把数据交给 AI（指令栏的提示词）整理文字，结果尾部会标注<b>所用模型与 token 消耗</b>（列表上方黄色徽章同步显示）。抓取本身不依赖 AI。
                 </div>
                 <div v-if="recipeOf(k).custom" class="recipe-sec">
                   <b class="small">⚙ 自定义流程</b> <span class="badge amber">{{ recipeOf(k).custom }}</span>
@@ -248,13 +255,14 @@
               <label>类型</label>
               <select v-model="timeType" style="width:100%">
                 <option value="daily">每天</option>
-                <option value="weekly">每周</option>
+                <option value="weekdays">周一至周五</option>
+                <option value="weekly">每周（自选星期）</option>
                 <option value="monthly">每月</option>
                 <option value="custom">自定义cron</option>
               </select>
             </div>
-            <!-- 每周：选星期几（多选按钮） -->
-            <div v-if="timeType === 'weekly'" style="flex:1; min-width:300px">
+            <!-- 每周：选星期几（多选按钮）——按国家工作日历时推送日由日历决定，隐藏手选 -->
+            <div v-if="timeType === 'weekly' && holidayMode !== 'workday'" style="flex:1; min-width:300px">
               <div class="row" style="justify-content:space-between; margin-bottom:4px">
                 <label style="font-size:12.5px; color:var(--text2)">星期（可多选）</label>
                 <button class="small" @click="selectWeekdays" style="font-size:11px; padding:2px 6px">工作日</button>
@@ -264,7 +272,7 @@
               </div>
             </div>
             <!-- 每月：选几号（多选按钮） -->
-            <div v-if="timeType === 'monthly'" style="flex:1; min-width:300px">
+            <div v-if="timeType === 'monthly' && holidayMode !== 'workday'" style="flex:1; min-width:300px">
               <div class="row" style="justify-content:space-between; margin-bottom:4px">
                 <label style="font-size:12.5px; color:var(--text2)">日期（可多选）</label>
                 <div class="row" style="gap:4px">
@@ -299,6 +307,20 @@
             </div>
             <button class="primary" @click="addSchedule">＋ 添加</button>
           </div>
+          <!-- 节假日门控：到点后按日历判断当日是否推送（自定义 cron 同样生效） -->
+          <div class="row" style="flex-wrap:wrap; gap:8px; margin-top:8px; align-items:flex-end">
+            <div class="form-row" style="flex:0 0 200px">
+              <label>节假日</label>
+              <select v-model="holidayMode" style="width:100%">
+                <option value="">不判断（照常推送）</option>
+                <option value="skip">法定节假日不推送</option>
+                <option value="workday">按国家工作日历</option>
+              </select>
+            </div>
+            <div class="muted" style="font-size:11.5px; flex:1; min-width:240px; padding-bottom:6px">
+              数据源跟随「系统设置 → 节假日」（timor.tech / apizero.cn）。<template v-if="holidayMode === 'workday'">按国家工作日历：法定节假日不推、周末调休补班日照常推（此时星期/日期选择不生效，推送日由日历决定）；</template>日历拉取失败时按无日历处理。
+            </div>
+          </div>
           <div class="muted" style="font-size:12px; margin-top:6px">
             预览：<b>{{ cronPreview }}</b>
           </div>
@@ -319,6 +341,7 @@
             <b>{{ sc.system_name }} · {{ sc.skill_name }}</b>
             <span class="muted" style="font-size:12px; margin-left:8px">→ {{ sc.feishu_target_name || '已配置会话' }}</span>
             <span class="badge blue" style="margin-left:8px; font-size:11px" :title="sc.cron">{{ cronLabel(sc.cron) }}</span>
+            <span v-if="sc.holiday_mode" class="badge" style="margin-left:4px; font-size:11px" :title="sc.holiday_mode === 'workday' ? '数据源跟随系统设置「节假日」：法定节假日不推、调休补班日照推' : '数据源跟随系统设置「节假日」：法定节假日不推送'">{{ sc.holiday_mode === 'workday' ? '按工作日历' : '节假日不推' }}</span>
             <span v-if="!sc.enabled" class="badge" style="margin-left:4px; font-size:11px">已停用</span>
           </div>
           <div class="row" style="gap:6px">
@@ -348,7 +371,7 @@ const systems = ref([]);
 const skills = ref([]);
 const sys = ref({ name: '', url: '', type: 'web', token: '', username: '', password: '', description: '' });
 const editingSys = ref(null);
-const sk = ref({ system_id: null, name: '', prompt: '', request_path: '', cron: '', enabled: 1 });
+const sk = ref({ system_id: null, name: '', prompt: '', request_path: '', cron: '', enabled: 1, local_format: 0 });
 const editingSkill = ref(null);
 const runningId = ref(null);
 
@@ -406,18 +429,18 @@ async function saveSkill() {
   if (!sk.value.system_id) { alert('请先选择业务系统'); return; }
   if (!sk.value.name.trim()) { alert('请填写引导词 / 名称'); return; }
   await api.post('/business/skills', { ...sk.value, id: editingSkill.value?.id, enabled: 1 });
-  sk.value = { system_id: sk.value.system_id, name: '', prompt: '', request_path: '', cron: '', enabled: 1 };
+  sk.value = { system_id: sk.value.system_id, name: '', prompt: '', request_path: '', cron: '', enabled: 1, local_format: 0 };
   editingSkill.value = null;
   await load();
   flash('Skill 已保存，定时任务已生效');
 }
 function editSkill(k) {
   editingSkill.value = k;
-  sk.value = { system_id: k.system_id, name: k.name, prompt: k.prompt, request_path: k.request_path, cron: k.cron, enabled: k.enabled };
+  sk.value = { system_id: k.system_id, name: k.name, prompt: k.prompt, request_path: k.request_path, cron: k.cron, enabled: k.enabled, local_format: k.local_format ? 1 : 0 };
 }
 function cancelSkillEdit() {
   editingSkill.value = null;
-  sk.value = { system_id: null, name: '', prompt: '', request_path: '', cron: '', enabled: 1 };
+  sk.value = { system_id: null, name: '', prompt: '', request_path: '', cron: '', enabled: 1, local_format: 0 };
 }
 async function toggleSkill(k) {
   await api.put(`/business/skills/${k.id}`, { ...k, enabled: k.enabled ? 0 : 1 });
@@ -470,10 +493,12 @@ const feishuChats = ref([]);
 const schedRunning = ref(0);
 const newSched = ref({ skill_id: '', feishu_target: '', cron: '0 9 * * 1-5' });
 // 时间选择器
-const timeType = ref('daily');   // daily / weekly / monthly / custom
+const timeType = ref('daily');   // daily / weekdays / weekly / monthly / custom
 const timeHour = ref('09');      // 时
 const timeMin = ref('00');       // 分
 const timeCron = ref('0 9 * * 1-5'); // 自定义
+// 节假日门控：''=不判断 | 'skip'=法定节假日不推送 | 'workday'=按国家工作日历（补班日照推）
+const holidayMode = ref('');
 
 // 星期多选
 const weekDays = [
@@ -503,7 +528,10 @@ function buildCron() {
   if (timeType.value === 'custom') return timeCron.value;
   const m = Number(timeMin.value);
   const h = Number(timeHour.value);
+  // 按国家工作日历：推送日由日历在到点时判断（周一至五非节假日 ∪ 调休补班日），cron 按每天注册
+  if (holidayMode.value === 'workday') return `${m} ${h} * * *`;
   if (timeType.value === 'daily') return `${m} ${h} * * *`;
+  if (timeType.value === 'weekdays') return `${m} ${h} * * 1-5`;
   if (timeType.value === 'weekly') {
     if (!dowSel.value.length) return '';
     return `${m} ${h} * * ${dowSel.value.sort().join(',')}`;
@@ -534,7 +562,12 @@ function cronLabel(cronStr) {
   }
   return `每天 ${time}`;
 }
-const cronPreview = computed(() => cronLabel(buildCron()));
+const cronPreview = computed(() => {
+  let s = cronLabel(buildCron());
+  if (holidayMode.value === 'skip') s += ' · 法定节假日不推送';
+  else if (holidayMode.value === 'workday') s += ' · 按国家工作日历（节假日不推、调休补班日照推）';
+  return s;
+});
 
 // 各数据源独立容错：无 skill tab 权限时 /business/skills 403，定时列表仍要能显示
 async function loadSchedules() {
@@ -589,6 +622,7 @@ async function addSchedule() {
       feishu_target_name: targetName,
       cron: f.cron,
       enabled: true,
+      holiday_mode: holidayMode.value,
     });
     flash('定时推送配置已添加');
     newSched.value = { skill_id: '', feishu_target: '', cron: buildCron() };

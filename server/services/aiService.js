@@ -18,7 +18,10 @@ function chatEndpoint(base) {
   return String(base || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '') + '/chat/completions';
 }
 
-async function chat(messages, { maxTokens = 1024, temperature = 0.7, reasoningEffort, tdb = null } = {}) {
+// chatEx：与 chat 同逻辑，但返回 { content, model, usage }（usage 取 OpenAI 兼容响应的
+// prompt/completion/total tokens；个别网关不回传 usage 时为 null）。
+// chat 保持只返回文本，既有调用方零改动；需要向用户标注「用了哪个模型、耗了多少 token」的场景用 chatEx。
+async function chatEx(messages, { maxTokens = 1024, temperature = 0.7, reasoningEffort, tdb = null } = {}) {
   const cfg = getConfig(tdb);
   if (!cfg.model || !cfg.base_url || !cfg.api_key) {
     throw new Error('AI 尚未配置，请先在「设置」中填写模型名称 / API 地址 / API Key');
@@ -66,7 +69,17 @@ async function chat(messages, { maxTokens = 1024, temperature = 0.7, reasoningEf
   const msg = data.choices?.[0]?.message;
   const content = msg?.content || msg?.reasoning_content || '';
   if (!content) throw new Error('AI 返回内容为空，请重试一次');
-  return content.trim();
+  const u = data.usage || null;
+  const usage = u ? {
+    prompt_tokens: u.prompt_tokens ?? null,
+    completion_tokens: u.completion_tokens ?? null,
+    total_tokens: u.total_tokens ?? null,
+  } : null;
+  return { content: content.trim(), model: cfg.model, usage };
+}
+
+async function chat(messages, opts = {}) {
+  return (await chatEx(messages, opts)).content;
 }
 
 async function summarize(text, instruction, tdb = null) {
@@ -114,4 +127,4 @@ async function ocrImages(dataUrls, { hint = '', tdb = null } = {}) {
   return out;
 }
 
-module.exports = { getConfig, hasConfig, chatEndpoint, chat, summarize, ocrImages };
+module.exports = { getConfig, hasConfig, chatEndpoint, chat, chatEx, summarize, ocrImages };

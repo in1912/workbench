@@ -423,16 +423,26 @@ router.delete('/reviews/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- 剪贴板（手动录入 + Windows 采集代理，v1.6.2） ----------
+// ---------- 剪贴板（仅脚本采集，v1.6.6 起去掉手动录入；Windows 采集代理 v1.6.2） ----------
+// 分页 + 筛选：page/size（size≤100），device=来源电脑名，q=内容关键字，start/end=YYYY-MM-DD 时间范围
 router.get('/clipboard', (req, res) => {
-  res.json(req.tdb.prepare('SELECT * FROM clipboard_items ORDER BY id DESC LIMIT 200').all());
-});
-router.post('/clipboard', (req, res) => {
-  const { content, source } = req.body;
-  if (!content || !content.trim()) return res.json({ ok: true });
-  const r = req.tdb.prepare('INSERT INTO clipboard_items(content,source,device) VALUES(?,?,?)')
-    .run(content.trim().slice(0, 10000), source === 'manual' ? 'manual' : String(source || 'manual').slice(0, 30), '');
-  res.json({ id: r.lastInsertRowid });
+  const { device, q, start, end } = req.query;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const size = Math.min(100, Math.max(1, Number(req.query.size) || 15));
+  const where = []; const args = [];
+  if (device) { where.push('device=?'); args.push(String(device).slice(0, 100)); }
+  if (q) {
+    // LIKE 转义 %/_/\，关键字原样匹配
+    const kw = String(q).replace(/[%_\\]/g, (m) => '\\' + m).slice(0, 200);
+    where.push("content LIKE ? ESCAPE '\\'"); args.push('%' + kw + '%');
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start || '')) { where.push('created_at >= ?'); args.push(start + ' 00:00:00'); }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(end || '')) { where.push('created_at <= ?'); args.push(end + ' 23:59:59'); }
+  const w = where.length ? ' WHERE ' + where.join(' AND ') : '';
+  const total = req.tdb.prepare('SELECT COUNT(*) c FROM clipboard_items' + w).get(...args).c;
+  const items = req.tdb.prepare('SELECT * FROM clipboard_items' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?')
+    .all(...args, size, (page - 1) * size);
+  res.json({ items, total, page, size });
 });
 router.delete('/clipboard/:id', (req, res) => {
   req.tdb.prepare('DELETE FROM clipboard_items WHERE id=?').run(req.params.id);

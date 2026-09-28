@@ -52,7 +52,7 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'search', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'private', 'business', 'ai', 'files', 'pay', 'pets', 'settings'];
+const PAGES = ['dashboard', 'search', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'private', 'business', 'ai', 'files', 'pay', 'pets', 'smarthome', 'settings'];
 
 function pageForPath(p) {
   if (p.startsWith('/overview')) return 'dashboard';
@@ -65,7 +65,10 @@ function pageForPath(p) {
   if (p.startsWith('/family') || p.startsWith('/kids') || p.startsWith('/kid-tasks') || p.startsWith('/family-profiles') || p.startsWith('/lunar')) return 'family';
   // 学习计划/学习记录/复盘已移到「效率工具」页（2026-09 v1.2.0）
   if (p.startsWith('/learning') || p.startsWith('/reviews')) return 'tools';
-  if (p.startsWith('/tts')) return 'learning'; // 语音合成（听写播报/语音配音）归学习页
+  // 语音合成接口跨页共享：听写播报（学习页）与语音配音（效率工具页，2026-09 v1.6.5 移入）都用
+  // 合成/音色/状态 → 仅需登录（同 /holidays 跨页共享先例）；音色库管理与引擎安装绑 tools.tts tab
+  if (p.startsWith('/tts/manage') || p.startsWith('/tts/engine')) return 'tools';
+  if (p.startsWith('/tts')) return null;
   if (p.startsWith('/vstudy')) return 'learning'; // 视频教学（目录/播放/记录/设置/学时流水）归学习页
   if (p.startsWith('/clipboard') || p.startsWith('/links')) return 'tools';
   // 三大测试中心移入新页「私有项目」（2026-09 v1.6.2；免登录的 /xxx/public/* 在 EXEMPT，不经过这里）
@@ -73,6 +76,9 @@ function pageForPath(p) {
   if (p.startsWith('/dep')) return 'private'; // 抑郁测试中心（/api/dep/*）
   if (p.startsWith('/pro')) return 'private'; // 专业心理测试中心（/api/pro/*）
   if (p.startsWith('/monitor')) return 'tools'; // Computer monitoring (v1.3.5): Tools page last tab, bound to tools page permission (otherwise any logged-in user could read screenshots)
+  // 智能家居（v1.6.8）：米家设备总览/属性读写/能力描述为页内共享；
+  // /mihome/callback 在 index.js EXEMPT 免登录名单里（OAuth 回跳无登录态），不经过这里
+  if (p.startsWith('/mihome') || p.startsWith('/micam')) return 'smarthome'; // v1.6.19：摄像头事件凭证/截图/录像代理
   if (p.startsWith('/business') || p.startsWith('/business/skills')) return 'business';
   if (p.startsWith('/ai')) return 'ai';
   if (p.startsWith('/pushes') || p.startsWith('/schedules')) return 'business'; // 原「AI 推送」页已并入业务系统页
@@ -134,8 +140,6 @@ const TAB_PATHS = {
     ['wish', ['=/wish/checkin', '=/wish/products']],
     // 心愿卡设置（上传/改/删产品）：受限，独立于 wish tab
     ['wishset', ['/wish/manage']],
-    // 语音配音：音色库管理与引擎安装（安装接口内部再限管理员）归本 tab；独立合成走共享的 /tts/synthesize
-    ['tts', ['/tts/manage', '/tts/engine']],
   ],
   pay: [
     ['dash', ['/pay/dashboard', '/pay/rank', '/pay/ai-analysis']],
@@ -168,6 +172,9 @@ const TAB_PATHS = {
     ['review', ['/reviews']],
     // 录音转写（VibeVoice-ASR）：录音/上传/列表/转写/导出/设置
     ['vibe', ['/vibe']],
+    // 语音配音从「学习」页移来（2026-09 v1.6.5）：音色库管理与引擎安装（安装接口内部再限管理员）；
+    // 共享的合成/音色/状态在 pageForPath 已放行为仅需登录（听写播报也用）
+    ['tts', ['/tts/manage', '/tts/engine']],
   ],
   pets: [
     // 主查看 tab（宠物列表/喂养/悬浮窗）：整页共享端点不绑路径，空数组=仅作授权表勾选项
@@ -178,6 +185,15 @@ const TAB_PATHS = {
     ['records', ['/pets/records']],
     ['settings', ['/pets/config', '/pets/gif']],
     ['assign', ['/pets/assign', '/pets/members']],
+  ],
+  // 智能家居（v1.6.8）：米家总览/控制整页共享；绑定与解绑归「设置」tab
+  // v1.6.16 增「监控」「参数翻译」tab：直播取流/词典/详情页参数查询均为页内共享
+  smarthome: [
+    ['mijia', []],
+    ['monitor', []],
+    ['terms', []],
+    // v1.6.19：事件凭证注入/清空归设置；v1.6.24：二次验证登录表单并入设置 tab（原独立 tab 移除），全站可用
+    ['settings', ['/mihome/bind', '/mihome/unbind', '/micam/inject', '/micam/unbind', '/micam/login', '/micam/verify', '/micam/inject-target']],
   ],
 };
 

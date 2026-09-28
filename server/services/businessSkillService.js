@@ -47,18 +47,29 @@ function listSkills(d, systemId) {
 function saveSkill(d, data) {
   const { id, system_id, name, prompt, request_path, enabled } = data;
   const cronVal = data.cron || data.cron_expr || '';
+  const localFmt = data.local_format ? 1 : 0;
   if (!system_id) throw new Error('请先添加业务系统');
   if (!name) throw new Error('Skill 名称（引导词）必填');
+  // browser_recipe 只在请求体显式携带时写入（管理页编辑表单不带该字段——
+  // 带缺省值会在编辑其它字段时误清配方；API/脚本创建配方走显式传参）
+  const hasRecipe = Object.prototype.hasOwnProperty.call(data, 'browser_recipe');
+  const recipeVal = hasRecipe ? String(data.browser_recipe || '') : '';
   if (id) {
-    d.prepare(
-      `UPDATE business_skills SET system_id=?, name=?, prompt=?, request_path=?, cron=?, enabled=? WHERE id=?`
-    ).run(system_id, name, prompt || '', request_path || '', cronVal, enabled ? 1 : 0, id);
+    if (hasRecipe) {
+      d.prepare(
+        `UPDATE business_skills SET system_id=?, name=?, prompt=?, request_path=?, cron=?, enabled=?, local_format=?, browser_recipe=? WHERE id=?`
+      ).run(system_id, name, prompt || '', request_path || '', cronVal, enabled ? 1 : 0, localFmt, recipeVal, id);
+    } else {
+      d.prepare(
+        `UPDATE business_skills SET system_id=?, name=?, prompt=?, request_path=?, cron=?, enabled=?, local_format=? WHERE id=?`
+      ).run(system_id, name, prompt || '', request_path || '', cronVal, enabled ? 1 : 0, localFmt, id);
+    }
     registerAllTenantSkillJobs();
     return id;
   }
   const r = d.prepare(
-    'INSERT INTO business_skills(system_id,name,prompt,request_path,cron,enabled) VALUES(?,?,?,?,?,?)'
-  ).run(system_id, name, prompt || '', request_path || '', cronVal, enabled ? 1 : 0);
+    'INSERT INTO business_skills(system_id,name,prompt,request_path,cron,enabled,local_format,browser_recipe) VALUES(?,?,?,?,?,?,?,?)'
+  ).run(system_id, name, prompt || '', request_path || '', cronVal, enabled ? 1 : 0, localFmt, recipeVal);
   registerAllTenantSkillJobs();
   return r.lastInsertRowid;
 }
@@ -91,7 +102,10 @@ async function runSkillById(d, id, opts = {}) {
 async function runSkill(d, skill, opts = {}) {
   const sys = d.prepare('SELECT * FROM business_systems WHERE id=?').get(skill.system_id);
   if (!sys) throw new Error('所属业务系统不存在');
-  if (!aiService.hasConfig(d)) throw new Error('AI 尚未配置，无法执行 Skill 任务');
+  // 本地整理模式不需要 AI；AI 模式才检查配置
+  if (!skill.local_format && !aiService.hasConfig(d)) {
+    throw new Error('AI 尚未配置，无法执行 Skill 任务（或在 Skill 里勾选「本地整理」改为不依赖 AI）');
+  }
 
   let data = '';
   if (skill.browser_recipe) {
@@ -111,6 +125,8 @@ async function runSkill(d, skill, opts = {}) {
   }
 
   // 浏览器表格提取：把结构化数据存入 skill_pushes（供「AI推送」页 HTML 表格展示）
+  // cols/rows 提升到外层：本地整理模式直接复用，避免二次解析
+  let tableCols = null, tableRows = null;
   if (skill.browser_recipe) {
     try {
       const rc = JSON.parse(skill.browser_recipe);
@@ -118,6 +134,8 @@ async function runSkill(d, skill, opts = {}) {
         const parsed = JSON.parse(data);
         let rows = Array.isArray(parsed) ? parsed : (parsed.rows || []);
         if (!Array.isArray(parsed) && parsed.footer) rows = [...rows, ['合计', ...parsed.footer]];
+        tableCols = rc.extract.colNames;
+        tableRows = rows;
         d.prepare('INSERT INTO skill_pushes(system_id, skill_name, columns, rows) VALUES(?,?,?,?)')
           .run(skill.system_id, skill.name, JSON.stringify(rc.extract.colNames), JSON.stringify(rows));
         // 飞书推送：群触发只回触发群(opts.onlyTarget)；定时/AI助手推全部会话
@@ -138,22 +156,84 @@ async function runSkill(d, skill, opts = {}) {
     } catch (e) { console.warn('[skill] 保存推送失败:', e.message); }
   }
 
-  const sysLine = `业务系统：${sys.name}（${sys.url}）`;
-  const messages = [
-    {
-      role: 'system',
-      content:
-        `你是业务助手，正在处理「${sys.name}」系统的定时/指令任务。${sysLine}` +
-        (data ? `\n以下是系统接口返回的数据（可能不完整，基于它回答）：\n${String(data).slice(0, 8000)}` : '') +
-        '\n请按任务指令执行，输出简洁明确、可直接阅读的中文结果，不要编造数据。',
-    },
-    { role: 'user', content: skill.prompt },
-  ];
-  const result = (await aiService.chat(messages, { maxTokens: 1600, tdb: d })).trim();
-  d.prepare(`UPDATE business_skills SET last_result=?, last_run_at=datetime('now','localtime') WHERE id=?`)
-    .run(result, skill.id);
+  // 本地整理（local_format=1）：不调用 AI，把抓取/接口数据确定性排版为 Markdown
+  // AI 模式：chatEx 拿到 usage，结果尾部标注「模型 + token 消耗」并落库（last_ai_model/last_ai_tokens）
+  let result, aiModel = '', aiTokens = 0;
+  if (skill.local_format) {
+    result = localFormat(sys, skill, data, tableCols, tableRows);
+  } else {
+    const sysLine = `业务系统：${sys.name}（${sys.url}）`;
+    const messages = [
+      {
+        role: 'system',
+        content:
+          `你是业务助手，正在处理「${sys.name}」系统的定时/指令任务。${sysLine}` +
+          (data ? `\n以下是系统接口返回的数据（可能不完整，基于它回答）：\n${String(data).slice(0, 8000)}` : '') +
+          '\n请按任务指令执行，输出简洁明确、可直接阅读的中文结果，不要编造数据。',
+      },
+      { role: 'user', content: skill.prompt },
+    ];
+    const { content, model, usage } = await aiService.chatEx(messages, { maxTokens: 1600, tdb: d });
+    const tokLine = usage && usage.total_tokens != null
+      ? ` · tokens：输入 ${usage.prompt_tokens ?? '?'} + 输出 ${usage.completion_tokens ?? '?'} = ${usage.total_tokens}`
+      : ' · tokens：网关未回传';
+    result = content.trim() + `\n\n（AI 整理 · 模型 ${model || '未知'}${tokLine}）`;
+    aiModel = model || '';
+    aiTokens = (usage && usage.total_tokens) || 0;
+  }
+  d.prepare(`UPDATE business_skills SET last_result=?, last_run_at=datetime('now','localtime'), last_ai_model=?, last_ai_tokens=? WHERE id=?`)
+    .run(result, aiModel, aiTokens, skill.id);
   // 结果只写入 skill_pushes（AI 推送页展示），不再写入每日待办
   return result;
+}
+
+// ---------- 本地整理（不调用 AI） ----------
+// 单元格转义：Markdown 表格的 | 与换行会破坏表格结构
+function mdCell(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+}
+function mdTable(cols, rows) {
+  const lines = [`| ${cols.map(mdCell).join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`];
+  for (const r of rows) {
+    const cells = Array.isArray(r) ? cols.map((_, i) => r[i]) : cols.map((c) => (r && r[c] !== undefined ? r[c] : ''));
+    lines.push(`| ${cells.map(mdCell).join(' | ')} |`);
+  }
+  return lines.join('\n');
+}
+// 数据 → 可读 Markdown：结构化表格直接排表；JSON 数组（对象按字段并集 / 数组按最大宽度）排表；
+// JSON 对象排键值对；其余按原文输出（截断 4000 字符）。
+function localFormat(sys, skill, data, tableCols, tableRows) {
+  const stamp = new Date().toLocaleString('zh-CN', { hour12: false });
+  let body = '';
+  if (tableCols && tableRows && tableRows.length) {
+    body = mdTable(tableCols, tableRows);
+  } else {
+    const text = String(data || '').trim();
+    if (!text || text.startsWith('（')) {
+      body = text || '（未取到数据）';
+    } else {
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch { /* 非 JSON 原文输出 */ }
+      if (Array.isArray(parsed) && parsed.length && parsed.every((x) => x && typeof x === 'object' && !Array.isArray(x))) {
+        const cols = [...new Set(parsed.flatMap((x) => Object.keys(x)))];
+        body = mdTable(cols, parsed);
+      } else if (Array.isArray(parsed) && parsed.length && parsed.every((x) => Array.isArray(x))) {
+        const width = Math.max(...parsed.map((x) => x.length));
+        const cols = Array.from({ length: width }, (_, i) => `列${i + 1}`);
+        body = mdTable(cols, parsed);
+      } else if (Array.isArray(parsed)) {
+        body = parsed.length ? text.slice(0, 4000) : '（接口返回空数据）';
+      } else if (parsed && typeof parsed === 'object') {
+        body = Object.entries(parsed)
+          .map(([k, v]) => `- **${mdCell(k)}**：${typeof v === 'object' ? mdCell(JSON.stringify(v)) : mdCell(v)}`)
+          .join('\n');
+      } else {
+        body = text.slice(0, 4000);
+      }
+    }
+  }
+  return `【${sys.name}】${skill.name}\n（本地整理 · ${stamp} · 未调用 AI）\n\n${body}`;
 }
 
 async function proxyGet(sys, requestPath) {
@@ -204,6 +284,14 @@ function registerSkillJobs(d) {
         const job = cron.schedule(sc.cron, async () => {
           console.log(`[schedule] 定时推送: ${sc.skill_name} → ${sc.feishu_target_name || sc.feishu_target}`);
           try {
+            // 节假日门控：到点先判当日（中国墙钟）是否该推；「立即执行」不经过这里
+            if (sc.holiday_mode) {
+              const g = await holidayGate(d, sc.holiday_mode);
+              if (g.skip) {
+                console.log(`[schedule] ${sc.skill_name} 本次跳过：${g.reason}`);
+                return;
+              }
+            }
             // 指定目标推到该会话
             const target = JSON.parse(sc.feishu_target);
             await runSkillById(d, sc.skill_id, { onlyTarget: target });
@@ -238,22 +326,58 @@ function listSchedules(d) {
     return d.prepare('SELECT * FROM skill_schedules ORDER BY id').all();
   } catch { return []; }
 }
+// ---------- 节假日门控（数据源=系统设置「节假日」：timor.tech / apizero.cn，holidayService 统一拉取缓存） ----------
+// mode: ''=不判断（照常推送） | 'skip'=法定节假日不推送 | 'workday'=按国家工作日历
+//       （法定节假日跳过；周末调休补班日照常推送；无日历数据时退化为周一至周五）
+// 返回 {skip, reason}；skip=true 表示本次到点应跳过。date 参数供测试注入（中国墙钟 {year,mmdd,dow}）。
+function cnToday() {
+  // 容器时区可能是 UTC：按 +8 偏移取中国标准时间墙钟（cron 都按 Asia/Shanghai 注册）
+  const d = new Date(Date.now() + 8 * 3600 * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return { year: d.getUTCFullYear(), mmdd: `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`, dow: d.getUTCDay() };
+}
+async function holidayGate(d, mode, ctx) {
+  if (!mode) return { skip: false };
+  const today = ctx || cnToday();
+  let info = null;
+  try {
+    const map = await require('./holidayService').getHolidays(d, today.year) || {};
+    info = map[today.mmdd] || null; // { name, holiday } —— holiday=false 的条目是调休补班日
+  } catch (e) { console.warn('[schedule] 节假日日历获取失败，按无日历处理:', e.message); }
+  const weekend = today.dow === 0 || today.dow === 6;
+  if (mode === 'skip') {
+    // 只跳法定节假日（含调休放的周末）；补班日/普通日不受影响
+    if (info && info.holiday) return { skip: true, reason: `今日为法定节假日「${info.name || today.mmdd}」` };
+    return { skip: false };
+  }
+  if (mode === 'workday') {
+    if (info) {
+      if (info.holiday) return { skip: true, reason: `今日为法定节假日「${info.name || today.mmdd}」` };
+      return { skip: false, reason: `今日为调休补班日「${info.name || today.mmdd}」` };
+    }
+    if (weekend) return { skip: true, reason: '今日为周末（非调休补班日）' };
+    return { skip: false };
+  }
+  return { skip: false };
+}
+
 function saveSchedule(d, data) {
-  const { id, skill_id, system_id, skill_name, system_name, feishu_target, feishu_target_name, cron, enabled } = data || {};
+  const { id, skill_id, system_id, skill_name, system_name, feishu_target, feishu_target_name, cron, enabled, holiday_mode } = data || {};
   if (!skill_id || !feishu_target || !cron) throw new Error('Skill、飞书会话和推送时间为必填');
+  const hMode = holiday_mode === 'skip' || holiday_mode === 'workday' ? holiday_mode : '';
   // 解析飞书目标 JSON 提取显示名
   let displayName = feishu_target_name || '';
   if (!displayName) {
     try { displayName = JSON.parse(feishu_target).name || ''; } catch { displayName = ''; }
   }
   if (id) {
-    d.prepare('UPDATE skill_schedules SET skill_id=?, system_id=?, skill_name=?, system_name=?, feishu_target=?, feishu_target_name=?, cron=?, enabled=? WHERE id=?')
-      .run(skill_id, system_id || 0, skill_name || '', system_name || '', feishu_target, displayName, cron, enabled !== false ? 1 : 0, id);
+    d.prepare('UPDATE skill_schedules SET skill_id=?, system_id=?, skill_name=?, system_name=?, feishu_target=?, feishu_target_name=?, cron=?, enabled=?, holiday_mode=? WHERE id=?')
+      .run(skill_id, system_id || 0, skill_name || '', system_name || '', feishu_target, displayName, cron, enabled !== false ? 1 : 0, hMode, id);
     registerAllTenantSkillJobs();
     return id;
   }
-  const r = d.prepare('INSERT INTO skill_schedules(skill_id,system_id,skill_name,system_name,feishu_target,feishu_target_name,cron,enabled) VALUES(?,?,?,?,?,?,?,?)')
-    .run(skill_id, system_id || 0, skill_name || '', system_name || '', feishu_target, displayName, cron, enabled !== false ? 1 : 0);
+  const r = d.prepare('INSERT INTO skill_schedules(skill_id,system_id,skill_name,system_name,feishu_target,feishu_target_name,cron,enabled,holiday_mode) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(skill_id, system_id || 0, skill_name || '', system_name || '', feishu_target, displayName, cron, enabled !== false ? 1 : 0, hMode);
   registerAllTenantSkillJobs();
   return Number(r.lastInsertRowid);
 }
@@ -271,5 +395,5 @@ function runScheduleNow(d, id) {
 module.exports = {
   encrypt, decrypt, sanitizeSystem, listSkills, saveSkill, deleteSkill,
   matchSkill, runSkillById, runSkill, registerSkillJobs, registerAllTenantSkillJobs,
-  listSchedules, saveSchedule, deleteSchedule, runScheduleNow,
+  listSchedules, saveSchedule, deleteSchedule, runScheduleNow, holidayGate, cnToday,
 };

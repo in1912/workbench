@@ -12,6 +12,7 @@
       <button v-if="canTab('tools','records')" :class="{active: tab==='records'}" @click="switchTab('records')">学习记录</button>
       <button v-if="canTab('tools','review')" :class="{active: tab==='review'}" @click="switchTab('review')">复盘</button>
       <button v-if="canTab('tools','monitor')" :class="{active: tab==='monitor'}" @click="switchTab('monitor')">电脑监控</button>
+      <button v-if="canTab('tools','tts')" :class="{active: tab==='tts'}" @click="switchTab('tts')">语音配音</button>
     </div>
 
     <!-- ============ 智作平台（文案库整体嵌入，v1.6.2） ============ -->
@@ -24,7 +25,7 @@
 
     <template v-else-if="tab==='clip'">
       <div class="card" style="margin-bottom:12px">
-        <h3>🖥 剪贴板采集 <span class="muted" style="font-size:12px; font-weight:400">Windows 电脑把系统剪贴板自动推送到本页</span></h3>
+        <h3>🖥 剪贴板采集 <span class="muted" style="font-size:12px; font-weight:400">Windows 电脑把系统剪贴板自动推送到本页（仅脚本采集）</span></h3>
         <div v-if="meAdmin" class="row" style="gap:10px; flex-wrap:wrap">
           <button class="primary" @click="dlClip('setup')">⬇ 下载采集脚本 (ps1)</button>
           <button class="primary" @click="dlClip('install')">⬇ 下载安装批处理 (bat)</button>
@@ -35,33 +36,74 @@
           <code>%LOCALAPPDATA%\WorkbenchClipboard</code>，开机自动采集，无需管理员权限；卸载双击 uninstall-clipboard.bat。<br />
           脚本按<b>本次下载所用的地址</b>（IP 或域名）自动连接；采集内容进入下载账号（管理员）的剪贴板列表。<span v-if="!meAdmin">脚本下载需管理员账号。</span>
         </div>
+        <!-- 已登记电脑：点击计算机名即筛选该电脑的记录（再点一次取消） -->
         <div v-if="clipDevices.length" style="margin-top:10px; border-top:1px dashed var(--border); padding-top:8px">
-          <div v-for="d in clipDevices" :key="d.id" class="clip-dev">
+          <div class="muted" style="font-size:11.5px; margin-bottom:4px">点击计算机名查看该电脑的记录：</div>
+          <div v-for="d in clipDevices" :key="d.id" class="clip-dev clip-dev-click"
+               :class="{ 'clip-dev-active': clipFilter.device === d.host }"
+               @click="pickDevice(d.host)">
             <span class="badge" :class="clipOnline(d) ? 'green' : 'red'">{{ clipOnline(d) ? '在线' : '离线' }}</span>
             <b style="font-size:13px">💻 {{ d.host }}</b>
             <span class="muted" style="font-size:12px">最近上报 {{ fmtTs(d.last_seen) }} · 累计推送 {{ d.push_count }} 条</span>
+            <span v-if="clipFilter.device === d.host" class="muted" style="font-size:11px">← 正在查看，点击取消</span>
           </div>
         </div>
       </div>
+      <!-- 筛选栏：关键字 / 电脑 / 时间范围 -->
       <div class="card" style="margin-bottom:12px">
-        <div class="row">
-          <input v-model="clipText" placeholder="粘贴内容，手动保存为剪贴板记录..." class="grow" @keyup.enter="addClip" />
-          <button class="primary" @click="addClip">保存</button>
+        <div class="row" style="flex-wrap:wrap; gap:8px; align-items:flex-end">
+          <div class="form-row grow" style="min-width:200px">
+            <label>搜索关键字</label>
+            <input v-model="clipFilter.q" placeholder="内容包含的关键字…" @keyup.enter="clipSearch" />
+          </div>
+          <div class="form-row" style="flex:0 0 170px">
+            <label>电脑</label>
+            <select v-model="clipFilter.device" @change="clipSearch">
+              <option value="">全部电脑</option>
+              <option v-for="d in clipDevices" :key="d.id" :value="d.host">{{ d.host }}</option>
+            </select>
+          </div>
+          <div class="form-row" style="flex:0 0 155px">
+            <label>开始日期</label>
+            <input type="date" v-model="clipFilter.start" @change="clipSearch" />
+          </div>
+          <div class="form-row" style="flex:0 0 155px">
+            <label>结束日期</label>
+            <input type="date" v-model="clipFilter.end" @change="clipSearch" />
+          </div>
+          <button class="primary" @click="clipSearch">🔍 搜索</button>
+          <button class="small" @click="clipReset">重置</button>
         </div>
       </div>
       <div class="card">
+        <div class="row" style="justify-content:space-between; margin-bottom:8px; flex-wrap:wrap; gap:8px">
+          <span class="muted" style="font-size:12px">共 {{ clipTotal }} 条{{ clipFilter.device ? ' · ' + clipFilter.device : '' }}</span>
+          <div class="row" style="gap:6px; align-items:center">
+            <span class="muted" style="font-size:12px">每页</span>
+            <select v-model.number="clipSize" style="width:64px" @change="clipSearch">
+              <option v-for="n in [5, 15, 30, 50, 100]" :key="n" :value="n">{{ n }}</option>
+            </select>
+            <span class="muted" style="font-size:12px">条</span>
+          </div>
+        </div>
         <div v-for="c in clips" :key="c.id" class="list-item">
           <div class="grow">
             <!-- 来源电脑在前、时间在后、内容在下一行（2026-09 用户要求：内容前要有登记的电脑与时间） -->
             <div class="meta" style="margin-bottom:3px">
-              <span class="badge blue">💻 {{ c.device || '手动录入' }}</span> · {{ c.created_at?.slice(0,19) }}
+              <span class="badge blue">💻 {{ c.device || '未知来源' }}</span> · {{ c.created_at?.slice(0,19) }}
             </div>
             <div style="white-space:pre-wrap; word-break:break-word">{{ c.content }}</div>
           </div>
           <button class="small" @click="copy(c.content)">复制</button>
           <button class="icon-btn" @click="delClip(c)">✕</button>
         </div>
-        <div v-if="!clips.length" class="empty">暂无剪贴板记录</div>
+        <div v-if="!clips.length" class="empty">暂无剪贴板记录（仅收脚本采集）</div>
+        <!-- 分页：前后翻页 + 每页条数 -->
+        <div v-if="clipPages > 1" class="row" style="justify-content:center; gap:10px; margin-top:10px; align-items:center">
+          <button class="small" :disabled="clipPage <= 1" @click="clipGoPage(clipPage - 1)">← 上一页</button>
+          <span class="muted" style="font-size:12.5px">第 {{ clipPage }} / {{ clipPages }} 页</span>
+          <button class="small" :disabled="clipPage >= clipPages" @click="clipGoPage(clipPage + 1)">下一页 →</button>
+        </div>
       </div>
     </template>
 
@@ -153,6 +195,9 @@
     <!-- ============ 电脑监控（v1.3.5） ============ -->
     <MonitorPanel v-else-if="tab==='monitor'" />
 
+    <!-- ============ 语音配音（自学习页移来，2026-09 v1.6.5） ============ -->
+    <TtsPanel v-else-if="tab==='tts'" />
+
     <!-- ============ 录音转写（VibeVoice-ASR） ============ -->
     <VibeVoiceTab v-else-if="tab==='vibe'" />
 
@@ -193,6 +238,7 @@ import { api } from '../api';
 import { canTab, firstTab, TAB_DEFS } from '../tabs';
 import MonitorPanel from '../components/MonitorPanel.vue';
 import VibeVoiceTab from '../components/VibeVoiceTab.vue';
+import TtsPanel from '../learning/TtsPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -212,8 +258,13 @@ watch(() => route.query.tab, (t) => {
 if (route.query.tab && isToolsTab(String(route.query.tab)) && canTab('tools', String(route.query.tab))) tab.value = String(route.query.tab);
 
 const clips = ref([]);
-const clipText = ref('');
 const clipDevices = ref([]);
+// 剪贴板分页 + 筛选（v1.6.6：默认 15 条/页，可 5/15/30/50/100；关键字/电脑/时间范围）
+const clipTotal = ref(0);
+const clipPage = ref(1);
+const clipSize = ref(15);
+const clipFilter = ref({ device: '', q: '', start: '', end: '' });
+const clipPages = computed(() => Math.max(1, Math.ceil(clipTotal.value / clipSize.value)));
 const meAdmin = (() => { try { return JSON.parse(localStorage.getItem('wb_user') || '{}').role === 'admin'; } catch { return false; } })();
 const links = ref([]);
 const link = ref({ name: '', url: '', icon: '', category: 'general' });
@@ -242,20 +293,42 @@ const renderedDraft = computed(() => marked.parse(reviewDraft.value || ''));
 async function load() {
   // 各数据源独立容错：无对应 tab 权限时接口 403，不能拖垮其他 tab
   // （三大测评中心的数据加载在 TestCenterTab 组件内自行完成）
-  try { clips.value = await api.get('/clipboard'); } catch { clips.value = []; }
+  try { await loadClips(); } catch { clips.value = []; clipTotal.value = 0; }
   try { if (canTab('tools', 'clip')) clipDevices.value = await api.get('/clipboard/devices'); } catch { clipDevices.value = []; }
   try { links.value = await api.get('/links'); } catch { links.value = []; }
   try { data.value = await api.get('/learning'); } catch { data.value = { plans: [], records: [] }; }
   try { if (canTab('tools', 'review')) reviews.value = await api.get('/reviews'); } catch { reviews.value = []; }
 }
 
-async function addClip() {
-  if (!clipText.value.trim()) return;
-  await api.post('/clipboard', { content: clipText.value.trim(), source: 'manual' });
-  clipText.value = '';
-  await load();
+// 剪贴板：服务端分页拉取（筛选条件变化一律回到第 1 页）
+async function loadClips() {
+  const f = clipFilter.value;
+  const qs = new URLSearchParams({
+    page: String(clipPage.value), size: String(clipSize.value),
+    device: f.device || '', q: f.q || '', start: f.start || '', end: f.end || '',
+  });
+  const d = await api.get('/clipboard?' + qs.toString());
+  clips.value = d.items || [];
+  clipTotal.value = d.total || 0;
 }
-async function delClip(c) { await api.del(`/clipboard/${c.id}`); await load(); }
+function clipSearch() { clipPage.value = 1; loadClips(); }
+function clipReset() { clipFilter.value = { device: '', q: '', start: '', end: '' }; clipPage.value = 1; loadClips(); }
+function clipGoPage(n) {
+  if (n < 1 || n > clipPages.value || n === clipPage.value) return;
+  clipPage.value = n;
+  loadClips();
+}
+// 点击上方计算机名：筛选该电脑（再点一次取消）
+function pickDevice(host) {
+  clipFilter.value.device = clipFilter.value.device === host ? '' : host;
+  clipSearch();
+}
+async function delClip(c) {
+  await api.del(`/clipboard/${c.id}`);
+  // 当前页删空后自动前翻一页（保持停留在有效页）
+  if (clips.value.length === 1 && clipPage.value > 1) clipPage.value -= 1;
+  await loadClips();
+}
 function copy(text) {
   navigator.clipboard?.writeText(text).then(() => {});
 }
@@ -319,4 +392,7 @@ onMounted(load);
 .zhizu-frame { width: 100%; height: calc(100vh - 205px); min-height: 620px; border: 0; display: block; }
 /* 剪贴板采集：已登记电脑行 */
 .clip-dev { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12.5px; flex-wrap: wrap; }
+.clip-dev-click { cursor: pointer; border-radius: 8px; padding: 2px 8px; margin: 2px 0; transition: background .15s; }
+.clip-dev-click:hover { background: var(--bg2, rgba(0,0,0,.05)); }
+.clip-dev-active { background: var(--bg2, rgba(0,0,0,.08)); outline: 1px solid var(--border); }
 </style>

@@ -20,7 +20,7 @@
     <PayoutPanel v-else-if="tab === 'payout'" />
     <PianoPanel v-else-if="tab === 'piano'" />
     <WishPanel v-else-if="tab === 'wish'" />
-    <TtsPanel v-else-if="tab === 'tts'" />
+    <!-- 语音配音已移至「效率工具」页最后一个 tab（2026-09 v1.6.5） -->
   </div>
 </template>
 
@@ -29,7 +29,6 @@ import { ref, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { canTab, firstTab, TAB_DEFS } from '../tabs';
 import DictationPanel from '../learning/DictationPanel.vue';
-import TtsPanel from '../learning/TtsPanel.vue';
 import VStudyPanel from '../learning/VStudyPanel.vue';
 import VSettingsPanel from '../learning/VSettingsPanel.vue';
 import VLogPanel from '../learning/VLogPanel.vue';

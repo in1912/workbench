@@ -420,6 +420,14 @@ function applyColumnMigrations(d) {
   addCol(d, 'news', 'ai_tokens', 'INTEGER DEFAULT 0');
   addCol(d, 'news', 'ai_model', "TEXT DEFAULT ''");
   addCol(d, 'business_skills', 'browser_recipe', "TEXT DEFAULT ''");
+  // 本地整理开关（1=不调用 AI，抓取/接口数据直接本地排版为 Markdown 表格）
+  addCol(d, 'business_skills', 'local_format', 'INTEGER DEFAULT 0');
+  // AI 整理模式留痕：上次执行用的模型与 token 消耗（本地整理恒为 ''/0）
+  addCol(d, 'business_skills', 'last_ai_model', "TEXT DEFAULT ''");
+  addCol(d, 'business_skills', 'last_ai_tokens', 'INTEGER DEFAULT 0');
+  // 定时推送节假日门控：''=不判断 | 'skip'=法定节假日不推送 | 'workday'=按国家工作日历（补班日照推）
+  // 数据源跟随系统设置「节假日」（timor.tech / apizero.cn，见 holidayService）
+  addCol(d, 'skill_schedules', 'holiday_mode', "TEXT DEFAULT ''");
   addCol(d, 'pay_bills', 'category_src', "TEXT DEFAULT ''");
   addCol(d, 'pay_bills', 'source_file', "TEXT DEFAULT ''");
   addCol(d, 'pay_bills', 'modify_time', "TEXT DEFAULT ''");
@@ -1533,6 +1541,41 @@ function migrateTypingIntoLearning() {
   console.log('[db] 「打字赚钱」已并入「学习」页、「计划/记录/复盘」已移至「效率工具」（用户授权已迁移）');
 }
 migrateTypingIntoLearning();
+
+// 一次性迁移（2026-09 v1.6.5）：「语音配音」tab 从「学习」页移到「效率工具」页最后一个 tab。
+// allowed_tabs.learning 细分里勾了 'tts' → 挪到 tools 细分；learning 原无细分（=该页全开，tts 隐式可用）
+// 但 tools 有细分且不含 tts、且用户有学习页权限 → 补进 tools 细分（避免移页后反而丢权限，同打字迁移语义）。
+// 主库 + 全部租户库都跑（幂等，tts_merge_v165 标记）。
+function migrateTtsToTools() {
+  const fix = (d) => {
+    if (getSetting(d, 'tts_merge_v165', false)) return;
+    setSetting(d, 'tts_merge_v165', true);
+    const users = d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all();
+    for (const u of users) {
+      let pages;
+      try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+      let tabs;
+      try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+      let changed = false;
+      const learnList = Array.isArray(tabs.learning) ? tabs.learning : null;
+      const toolsList = Array.isArray(tabs.tools) ? tabs.tools : null;
+      if (learnList && learnList.includes('tts')) {
+        tabs.learning = learnList.filter((t) => t !== 'tts');
+        tabs.tools = toolsList ? [...new Set([...toolsList, 'tts'])] : ['tts'];
+        changed = true;
+      } else if (!learnList && toolsList && !toolsList.includes('tts')
+        && (!Array.isArray(pages) || pages.length === 0 || pages.includes('learning'))) {
+        tabs.tools = [...toolsList, 'tts'];
+        changed = true;
+      }
+      if (changed) d.prepare('UPDATE users SET allowed_tabs=? WHERE id=?').run(JSON.stringify(tabs), u.id);
+    }
+  };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] 「语音配音」tab 已从「学习」页移至「效率工具」页（用户授权已迁移）');
+}
+migrateTtsToTools();
 
 // 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
 // （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。

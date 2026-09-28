@@ -30,7 +30,6 @@ export const TAB_DEFS = {
     // 隐藏伪 tab：不出现在页内 tab 栏，但权限表里可勾选（对应受限子功能）
     { key: 'pianoconfirm', label: '练琴确认', restricted: true, hidden: true },
     { key: 'wishset', label: '心愿卡设置', restricted: true, hidden: true },
-    { key: 'tts', label: '语音配音' },
   ],
   pay: [
     { key: 'dash', label: '账务看板' },
@@ -65,6 +64,8 @@ export const TAB_DEFS = {
     { key: 'review', label: '复盘' },
     // 电脑监控（v1.3.5）
     { key: 'monitor', label: '电脑监控' },
+    // 语音配音从「学习」页移来（2026-09 v1.6.5），排最后一个 tab
+    { key: 'tts', label: '语音配音' },
   ],
   pets: [
     { key: 'pets', label: '我的宠物' },
@@ -73,6 +74,14 @@ export const TAB_DEFS = {
     { key: 'records', label: '养育记录' },
     { key: 'settings', label: '设置与预览' },
     { key: 'assign', label: '宠物分配' },
+  ],
+  // 智能家居（2026-09 v1.6.8）：米家设备总览与控制 / 摄像头直播 / 参数中英对照 / 扫码绑定设置
+  // v1.6.24：二次验证登录并入「设置」tab（原独立 tab 移除），外网内网同样操作
+  smarthome: [
+    { key: 'mijia', label: '米家' },
+    { key: 'monitor', label: '监控' },
+    { key: 'terms', label: '参数翻译' },
+    { key: 'settings', label: '设置' },
   ],
 };
 

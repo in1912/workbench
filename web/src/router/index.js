@@ -16,6 +16,8 @@ const routes = [
   { path: '/business', component: () => import('../views/Business.vue'), meta: { title: '业务系统', page: 'business' } },
   { path: '/ai', component: () => import('../views/AiChat.vue'), meta: { title: 'AI 助手', page: 'ai' } },
   { path: '/pets', component: () => import('../views/Pets.vue'), meta: { title: '我的宠物', page: 'pets' } },
+  // 智能家居（2026-09 v1.6.8）：米家扫码绑定 + 家庭/房间/设备卡片控制
+  { path: '/smart-home', component: () => import('../views/SmartHome.vue'), meta: { title: '智能家居', page: 'smarthome' } },
   // 「打字赚钱」4 个 tab 已并入学习页（2026-09 v1.2.0）；旧地址带参跳转过去（tab key 不变）
   { path: '/typing', redirect: (to) => ({ path: '/learning', query: { tab: to.query.tab || 'practice' } }) },
   // 「领养宠物」已并回电子宠物模块的 tab；旧地址带参跳转过去

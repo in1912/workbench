@@ -17,6 +17,7 @@ export const NAV_ITEMS = [
   { to: '/pay', icon: 'account_balance_wallet', label: '个人账务', page: 'pay' },
   { to: '/ai', icon: 'smart_toy', label: 'AI 助手', page: 'ai' },
   { to: '/pets', icon: 'pets', label: '我的宠物', page: 'pets' },
+  { to: '/smart-home', icon: 'home', label: '智能家居', page: 'smarthome' },
   { to: '/messages', icon: 'chat', label: '短消息', page: 'messages' },
   { to: '/users', icon: 'manage_accounts', label: '用户管理', page: 'users', adminOnly: true },
   { to: '/settings', icon: 'settings', label: '设置', page: 'settings' },

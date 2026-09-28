@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "flv.js": "^1.6.2",
+    "hls.js": "^1.7.3",
     "leaflet": "^1.9.4",
     "mammoth": "^1.12.2",
     "marked": "^15.0.7",
