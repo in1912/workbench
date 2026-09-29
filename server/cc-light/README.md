@@ -46,6 +46,11 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = Claude Code 工作状态室外灯�
 
 手动控制：`node D:\CC\ESP32\light\send.js <模式名>`
 
+## 一键安装 / 卸载（推荐）
+
+- **安装**：`cc-light-install.cmd` 与 daemon.py 等文件放同一文件夹（打包下载解压后即满足），双击——自动找 Python、缺 bleak 自动装、注册开机自启任务 `CC-Light-Daemon`、立即启动守护进程；装了 Node.js 会询问是否同时安装 Claude Code 钩子；最后自动读 daemon.log 验证并显示连接结果
+- **卸载**：双击 `cc-light-uninstall.cmd`——先发熄灯命令、停守护进程、删自启任务、卸载 Claude Code 钩子；文件夹随后手动删除即可（板上固件保留，以后想用再跑安装脚本）
+
 ## 开机自启（可选，二选一）
 
 **方式 A：计划任务**（管理员或普通权限均可，在 cmd 中执行一次）：
@@ -72,6 +77,7 @@ python -m mpremote connect COM3 exec 'import machine; machine.reset()'
 
 ## 常见问题
 
+- **蓝牙设置里搜不到「Agent light」**：正常现象，不是故障——设备只支持 BLE 低功耗蓝牙（ESP32-C3 无经典蓝牙），Windows/手机的「蓝牙设置 → 添加设备」列表只显示经典蓝牙设备；且 BLE 设备只在**广播**时可见，守护进程连接成功后广播即暂停（BLE 扫描器也搜不到）。确认连接看 daemon.log 的 `BLE connected`；想亲眼看：停掉守护进程后用 nRF Connect 等 BLE 扫描 App 搜「Agent light」
 - **灯全灭且 status.json connected=false**：板子没通电 / 蓝牙被断开；守护进程每几秒自动重连，通电即恢复并续上最后灯态
 - **灯态卡死**：看门狗兜底（busy 30 分钟、thinking/ai 15 分钟无变化自动 off）；也可手动 `node send.js off`
 - **想看极性检测读数**：`tail daemon.log` 找 `board: Agent light 1.1 HIGH r… y… g…`（LOW=共阳/3.3V 接法，HIGH=共阴/GND 接法）

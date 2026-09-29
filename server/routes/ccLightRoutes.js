@@ -14,6 +14,8 @@ const FILES = [
   { name: 'main.py', desc: '板上固件（MicroPython）：9 种灯效 + BLE 蓝牙服务 + 极性自动检测' },
   { name: 'daemon.py', desc: '电脑守护进程：BLE 连接板子 + UDP 命令接收 + 断线重连 + 看门狗' },
   { name: 'send.js', desc: '命令发送器：Claude Code 钩子入口（也可手动 node send.js traffic 测试）' },
+  { name: 'cc-light-install.cmd', desc: '一键安装：自动找 Python、缺 bleak 自动装、注册开机自启、启动守护进程（有 Node 还会问是否装钩子）——与程序文件放同一文件夹双击' },
+  { name: 'cc-light-uninstall.cmd', desc: '一键卸载：熄灯 + 停守护进程 + 删开机自启任务 + 卸载 Claude Code 钩子' },
   { name: 'install-hooks.js', desc: '钩子安装器：合并进 ~/.claude/settings.json，自动备份；--remove 卸载' },
   { name: 'start-daemon.cmd', desc: '守护进程一键启动（双击；优先用 PATH 里的 pythonw）' },
   { name: 'README.md', desc: '完整使用说明：接线 / 刷机 / 蓝牙连接 / 排障' },

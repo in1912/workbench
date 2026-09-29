@@ -99,6 +99,12 @@
           USB 只在刷固件时用一次，之后板子插任意 USB 电源即可，电脑端守护进程自动扫描连接（蓝牙名 <b>Agent light</b>）。<br />
           链路：claude 钩子 → send.js → UDP（本机）→ daemon.py → 蓝牙 → 板子。板子断电重启会自动重连并续上最后灯态。
         </div>
+        <div class="cc-note">
+          <b>为什么蓝牙设置里搜不到「Agent light」？</b>（正常现象，不是故障）<br />
+          本设备只支持 <b>BLE 低功耗蓝牙</b>（ESP32-C3 没有经典蓝牙）——Windows / 手机的「蓝牙设置 → 添加设备」列表只显示经典蓝牙设备，BLE 设备不会出现在里面；
+          而且 BLE 设备只在<b>广播</b>时可见，守护进程连接成功后广播即暂停，此时连 BLE 扫描器（手机 nRF Connect 等 App）也搜不到它。<br />
+          确认连接请看 daemon.log（出现 <code>BLE connected</code> / <code>board: Agent light …</code>）；想亲眼看设备广播：先停掉守护进程，再用 BLE 扫描 App 搜「Agent light」。
+        </div>
         <table class="cc-table">
           <thead><tr><th style="width:150px">灯效</th><th>含义 / 触发时机</th></tr></thead>
           <tbody>
@@ -118,15 +124,19 @@
       <div class="card">
         <h3>① 蓝牙连接电脑（日常使用流程，装好一次即可）</h3>
         <ol class="cc-steps">
-          <li>电脑要求：带蓝牙适配器（支持 BLE）；已装 <b>Python 3.12+</b> 与 <b>Node.js</b>（钩子发送器用）</li>
-          <li>装依赖（cmd 里执行一次）：<code>pip install bleak</code></li>
+          <li>电脑要求：带蓝牙适配器（支持 BLE）；已装 <b>Python 3.12+</b>；装了 <b>Node.js</b> 还可以联动 Claude Code 钩子</li>
           <li>板子通电：任意 USB 充电头 / 充电宝，不需要连电脑</li>
-          <li>把下方「文件下载」的文件下载到同一个文件夹（或直接「打包下载」）</li>
-          <li>双击 <code>start-daemon.cmd</code> → 文件夹里 daemon.log 出现 <code>BLE connected</code> 与
-            <code>board: Agent light 1.1 ...</code> 即连接成功（守护进程需常驻，开机自启命令见 README）</li>
-          <li>安装钩子：<code>node install-hooks.js</code>（自动备份 ~/.claude/settings.json，卸载加 --remove）</li>
+          <li>点下方「打包下载」并解压（单独下载文件的话，把所有文件放同一个文件夹）</li>
+          <li>双击 <code>cc-light-install.cmd</code> 一键安装：自动找 Python → 缺 bleak 自动装 → 注册开机自启（任务名
+            CC-Light-Daemon）→ 立即启动守护进程 → 有 Node 时询问是否同时安装 Claude Code 钩子 → 自动验证</li>
+          <li>成功标志：安装窗口显示 <code>[OK] Connected to board "Agent light"</code>（daemon.log 里有
+            <code>BLE connected</code> 与 <code>board: Agent light 1.1 ...</code>）</li>
           <li>新开一个 claude 会话 → 灯自动跟随状态；手动验证：<code>node send.js traffic</code></li>
         </ol>
+        <div class="muted" style="font-size:12.5px; margin-top:6px">
+          手动方式（不想一键装）：<code>start-daemon.cmd</code> 只启动守护进程、不注册自启；钩子单独用
+          <code>node install-hooks.js</code>（卸载加 <code>--remove</code>）。不需要了双击 <code>cc-light-uninstall.cmd</code> 一键卸载。
+        </div>
       </div>
 
       <div class="card">
@@ -156,8 +166,15 @@
           </div>
           <button class="small" style="flex-shrink:0" :disabled="f.missing" @click="ccDl(f.name)">下载</button>
         </div>
-        <div style="margin-top:12px">
-          <button class="primary" @click="ccDlPack">📦 打包下载全部（cc-light.zip）</button>
+        <div class="row" style="gap:8px; margin-top:12px; flex-wrap:wrap">
+          <button class="primary" @click="ccDl('cc-light-install.cmd')">⬇ 下载安装批处理</button>
+          <button class="primary" @click="ccDl('cc-light-uninstall.cmd')">⬇ 下载卸载脚本</button>
+        </div>
+        <div style="margin-top:8px">
+          <button class="primary" @click="ccDlPack">📦 打包下载全部（cc-light.zip，推荐——含安装/卸载脚本）</button>
+        </div>
+        <div class="muted" style="font-size:12.5px; margin-top:8px">
+          安装 / 卸载脚本必须与 daemon.py 等文件放同一文件夹（打包下载解压后即满足，直接双击 cc-light-install.cmd）。
         </div>
       </div>
 
@@ -993,6 +1010,7 @@ onBeforeUnmount(() => {
 .sh-events { margin-top: 6px; }
 
 /* Agent红绿灯 tab（v1.8.1）：灯效表 / 步骤 / 下载清单 */
+.cc-note { border: 1px solid rgba(79, 124, 247, .4); background: rgba(79, 124, 247, .08); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.8; margin: 0 0 12px; }
 .cc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .cc-table th, .cc-table td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; line-height: 1.6; }
 .cc-table th { background: var(--bg2); white-space: nowrap; }
