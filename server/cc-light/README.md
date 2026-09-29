@@ -56,10 +56,10 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = Claude Code 工作状态室外灯�
 
 ## 开机自启（可选，二选一）
 
-**方式 A：计划任务**（管理员或普通权限均可，在 cmd 中执行一次）：
+**方式 A：计划任务**（推荐直接双击 `cc-light-install.cmd`，它就是干这个的；手动方式如下，路径换成你的实际 Python 与解压路径）：
 
 ```cmd
-schtasks /Create /F /TN "CC-Light-Daemon" /TR "\"C:\Users\W\AppData\Local\Programs\Python\Python312\pythonw.exe\" \"D:\CC\ESP32\light\daemon.py\"" /SC ONLOGON /RL LIMITED
+schtasks /Create /F /TN "CC-Light-Daemon" /TR "\"C:\Users\你\AppData\Local\Programs\Python\Python312\pythonw.exe\" \"D:\解压路径\cc-light\daemon.py\"" /SC ONLOGON /RL LIMITED
 schtasks /Run /TN "CC-Light-Daemon"
 ```
 
