@@ -75,11 +75,10 @@ export const TAB_DEFS = {
     { key: 'settings', label: '设置与预览' },
     { key: 'assign', label: '宠物分配' },
   ],
-  // 智能家居（2026-09 v1.6.8）：米家设备总览与控制 / 摄像头直播 / 参数中英对照 / 扫码绑定设置
-  // v1.6.24：二次验证登录并入「设置」tab（原独立 tab 移除），外网内网同样操作
+  // 智能家居（2026-09 v1.6.8）：米家设备总览与控制 / 参数中英对照 / 扫码绑定设置
+  // v1.6.29：移除「监控」tab（小米云已停 HLS 出流，事件凭证通道一并下线）
   smarthome: [
     { key: 'mijia', label: '米家' },
-    { key: 'monitor', label: '监控' },
     { key: 'terms', label: '参数翻译' },
     { key: 'settings', label: '设置' },
   ],

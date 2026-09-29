@@ -116,7 +116,7 @@ router.get('/news/hot', async (req, res) => {
     const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 15));
     res.json(await newsService.getHotBoard(routedDb(req.tdb, 'news'), 'realtime', { limit }));
   } catch (e) {
-    res.status(502).json({ error: '百度热搜获取失败：' + e.message });
+    res.status(503).json({ error: '百度热搜获取失败：' + e.message });
   }
 });
 // 百度榜单（新闻页 tab：热搜/电影/电视剧）：今天=实时抓取+当日快照落库（fresh=1 跳过缓存）；
@@ -128,7 +128,7 @@ router.get('/news/hotboard', async (req, res) => {
     const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 60));
     res.json(await newsService.getHotBoard(routedDb(req.tdb, 'news'), board, { date, limit, force: req.query.fresh === '1' }));
   } catch (e) {
-    res.status(502).json({ error: '榜单获取失败：' + e.message });
+    res.status(503).json({ error: '榜单获取失败：' + e.message });
   }
 });
 // 榜单有存档的历史日期（永久，不截 90 天）
@@ -411,7 +411,7 @@ router.post('/business/:id/proxy', async (req, res) => {
     const text = await r.text();
     res.status(r.status).json({ status: r.status, body: text });
   } catch (e) {
-    res.status(502).json({ error: e.message });
+    res.status(503).json({ error: e.message });
   }
 });
 
@@ -765,13 +765,13 @@ router.get('/tile', async (req, res) => {
   const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${z}/${y}/${x}`;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!r.ok) return res.status(502).end();
+    if (!r.ok) return res.status(503).end();
     const buf = Buffer.from(await r.arrayBuffer());
     if (tileCache.size > 500) tileCache.clear();
     tileCache.set(key, buf);
     res.type('image/jpeg').send(buf);
   } catch (e) {
-    res.status(502).end();
+    res.status(503).end();
   }
 });
 

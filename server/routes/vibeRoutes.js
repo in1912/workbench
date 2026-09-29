@@ -200,18 +200,18 @@ router.get('/vibe/health', async (req, res) => {
       const engines = getClients();
       const e = cfg.client_engine === 'vibe7b' ? 'vibe7b' : 'vibeasr';
       if (!clientOnline(engines[e])) {
-        return res.status(502).json({ error: ENGINE_TIP[e] + '（15 分钟内无心跳）' });
+        return res.status(503).json({ error: ENGINE_TIP[e] + '（15 分钟内无心跳）' });
       }
       return res.json({ ok: true, mode: 'client', models: ['vibevoice'], pull: true, engine: e, engine_label: ENGINE_LABEL[e] });
     }
     const { base_url } = await resolveBackend(cfg);
     const r = await fetch(base_url + '/v1/models', { signal: AbortSignal.timeout(cfg.engine_mode === 'server' ? 15000 : 6000) });
-    if (!r.ok) return res.status(502).json({ error: `服务可达但返回 ${r.status}（确认服务已启动）` });
+    if (!r.ok) return res.status(503).json({ error: `服务可达但返回 ${r.status}（确认服务已启动）` });
     const d = await r.json().catch(() => ({}));
     const models = (d.data || []).map((m) => m.id).slice(0, 10);
     res.json({ ok: true, mode: cfg.engine_mode, models });
   } catch (e) {
-    res.status(502).json({ error: '连不上：' + e.message });
+    res.status(503).json({ error: '连不上：' + e.message });
   }
 });
 

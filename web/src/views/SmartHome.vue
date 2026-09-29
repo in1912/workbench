@@ -3,7 +3,6 @@
     <h2 class="page-title">智能家居</h2>
     <div class="tabs">
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
-      <button v-if="canTab('smarthome','monitor')" :class="{active: tab==='monitor'}" @click="switchTab('monitor')">监控</button>
       <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">参数翻译</button>
       <button v-if="canTab('smarthome','settings')" :class="{active: tab==='settings'}" @click="switchTab('settings')">设置</button>
     </div>
@@ -66,55 +65,6 @@
 
         <div v-if="data && !data.homes.length && !loading" class="card" style="text-align:center;color:var(--muted);padding:36px">
           米家账号下暂无设备：先在米家 App 里添加设备，再点上方「刷新」。
-        </div>
-      </template>
-    </template>
-
-    <!-- ==================== 监控 tab ==================== -->
-    <template v-else-if="tab==='monitor'">
-      <!-- 未绑定引导 -->
-      <div v-if="!status.bound && !camLoading" class="card" style="text-align:center;padding:40px">
-        <span class="material-icons" style="font-size:44px;color:var(--muted)">videocam</span>
-        <h3 style="margin:12px 0 8px">米家账号尚未绑定</h3>
-        <p style="color:var(--muted);margin:0 0 16px">绑定后可在这里查看家里的摄像头实时画面（3 列自适应展示，点击放大播放）。</p>
-        <button v-if="canTab('smarthome','settings')" class="btn" @click="switchTab('settings')">去扫码绑定</button>
-      </div>
-
-      <template v-else>
-        <div class="card sh-toolbar">
-          <span class="sh-home-name"><span class="material-icons" style="font-size:16px;vertical-align:-3px">videocam</span> 摄像头 {{ cams.length }} 台</span>
-          <span style="color:var(--muted);font-size:13px">
-            {{ camLiveCount }} 台可直播 · 点击画面放大播放<template v-if="camLoading"> · 正在获取直播流…</template>
-          </span>
-          <span style="flex:1"></span>
-          <button class="btn" :disabled="camLoading" @click="loadCams(true)">{{ camLoading ? '获取中…' : '刷新' }}</button>
-        </div>
-
-        <div class="card">
-          <div class="cam-grid">
-            <div v-for="c in cams" :key="c.did" class="cam-tile" :class="{ offline: !c.online }">
-              <!-- 直播画面（云端 HLS → 本站代理转发） -->
-              <video v-if="c.playlist" :ref="(el) => setCamRef(el, c)" muted autoplay playsinline @click="openCamModal(c)"></video>
-              <!-- 看家事件截图（无直播流时的最近画面，v1.6.19） -->
-              <img v-else-if="c.snap" :src="c.snap" class="cam-snap" alt="最近事件画面" @click="openCamModal(c)" />
-              <div v-else class="cam-empty">
-                <span class="material-icons" style="font-size:34px">videocam_off</span>
-                <p style="margin:0">{{ camLoading ? '正在获取直播流…' : (c.err || c.snapErr || '该设备不支持云端直播') }}</p>
-                <small v-if="!camLoading && c.err && c.err.includes('未就绪')" style="opacity:.8">小米云端转码暂未对该设备生效，链路已就绪，云端开放后即可直接播放</small>
-                <small v-else-if="!camLoading && !micamBound" style="opacity:.8">最近画面截图需注入小米事件凭证（见「设置」tab）</small>
-                <button v-if="!camLoading" class="btn sm ghost" @click.stop="retryCam(c)">重试</button>
-              </div>
-              <!-- 半透明播放按钮：点击放大播放（直播或事件录像） -->
-              <div v-if="c.playlist || (c.snap && c.clipUrl)" class="cam-overlay" @click="openCamModal(c)">
-                <span class="cam-play"><i class="cam-tri"></i></span>
-              </div>
-              <div v-if="c.snap && !c.playlist" class="cam-snap-time">看家事件 · {{ snapTimeText(c) }}</div>
-              <div class="cam-label"><i :class="c.online ? 'on' : ''"></i>{{ c.name }}<template v-if="!c.online">（离线）</template></div>
-            </div>
-          </div>
-          <div v-if="!cams.length && !camLoading" style="color:var(--muted);text-align:center;padding:24px">
-            家里没有摄像头设备（或型号未接入米家云）。
-          </div>
         </div>
       </template>
     </template>
@@ -231,65 +181,6 @@
             <div v-else style="margin-top:10px;font-size:12px">
               <a href="#" class="sh-auth-link" @click.prevent="relayShow = true">「完成绑定」提示被小米风控拒绝？点此在你的浏览器直接换令牌 →</a>
             </div>
-          </div>
-        </template>
-      </div>
-
-      <!-- 摄像头事件凭证 + 二次验证登录表单（v1.6.24 并入设置 tab，外网/内网同样操作） -->
-      <div class="card" style="max-width:680px">
-        <h3 style="margin:0 0 10px">摄像头事件凭证（截图 / 录像）</h3>
-        <template v-if="micamStatus.bound">
-          <div class="sh-kv"><span>小米用户 ID</span><b>{{ micamStatus.user_id || '-' }}</b></div>
-          <div class="sh-kv"><span>注入时间</span><b>{{ fmtTime(micamStatus.injected_at) }}</b></div>
-          <div style="font-size:12px;color:var(--muted);padding:4px 0 2px">
-            凭证有效期一般数周；监控页提示「凭证已过期」时，点「更新凭证」重跑一次登录注入即可。
-          </div>
-          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-            <button class="btn" @click="vFormOpen = !vFormOpen">{{ vFormOpen ? '收起表单' : '更新凭证' }}</button>
-            <button class="btn danger" @click="doMicamUnbind">清空事件凭证</button>
-          </div>
-        </template>
-        <p v-else style="color:var(--muted);font-size:13px;margin:0 0 10px">
-          监控页的「最近画面截图 / 事件录像」走小米智能摄像头云接口，OAuth 授权拿不到画面，
-          需要用小米账号密码换专用凭证（与米家 App 同协议）。在下面完成小米账号登录并注入即可：
-        </p>
-
-        <!-- 登录 + 注入表单（已绑定时点「更新凭证」展开） -->
-        <template v-if="!micamStatus.bound || vFormOpen">
-          <p style="color:var(--muted);font-size:12px;line-height:1.8;margin:10px 0 0">
-            密码只在本页提交、只在服务器内存中换凭证，<b>不保存</b>；凭证以 AES 加密存储。
-          </p>
-
-          <h4 class="vf-h">① 小米账号登录</h4>
-          <div class="vf-grid">
-            <input v-model.trim="vUser" placeholder="小米账号（手机号 / 邮箱 / 小米ID）" autocomplete="username">
-            <input v-model="vPass" type="password" placeholder="小米密码" autocomplete="current-password">
-          </div>
-          <div v-if="vCapImg" class="vf-cap">
-            <img :src="vCapImg" alt="验证码">
-            <input v-model.trim="vCap" placeholder="输入图中字符">
-          </div>
-          <div v-if="vVerifyUrl" class="vf-verify">
-            <div>小米要求安全验证：<a :href="vVerifyUrl" target="_blank" rel="noopener">点此打开验证页</a>，
-              在手机上完成验证后会收到短信/邮件验证码，填到下面再点按钮。</div>
-            <input v-model.trim="vCode" placeholder="短信 / 邮件验证码（4-8 位数字）">
-          </div>
-
-          <h4 class="vf-h">② 注入到目标工作台</h4>
-          <div class="vf-grid">
-            <input v-model.trim="vBase" placeholder="目标工作台地址" />
-            <input v-if="!isLocalTarget" v-model.trim="vTUser" placeholder="目标工作台账号" autocomplete="username">
-            <input v-if="!isLocalTarget" v-model="vTPass" type="password" placeholder="目标工作台密码" autocomplete="current-password">
-          </div>
-          <div style="font-size:12px;color:var(--muted);margin-top:6px">
-            默认注入<b>本站（当前访问地址）</b>，无需填账号密码；改为其他工作台地址时需填那边的账号密码。
-          </div>
-
-          <button class="btn" style="margin-top:16px" :disabled="vBusy" @click="doVerifyLogin">
-            {{ vBusy ? '处理中…' : (vVerifyUrl ? '提交验证码并注入' : vCapImg ? '继续登录' : '登录并注入') }}
-          </button>
-          <div v-if="vLogs.length" class="vf-log">
-            <div v-for="(l, i) in vLogs" :key="i" :class="'vf-' + l.c">{{ l.m }}</div>
           </div>
         </template>
       </div>
@@ -418,31 +309,6 @@
         </div>
       </div>
     </div>
-    <!-- ==================== 摄像头放大播放弹窗（直播 / 事件录像 / 大图） ==================== -->
-    <div v-if="camModal.open && camModal.cam" class="sh-mask" @click.self="closeCamModal">
-      <div class="cam-modal">
-        <div class="cam-modal-head">
-          <span class="material-icons" style="font-size:22px;color:var(--text2,#888)">videocam</span>
-          <b style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            {{ camModal.cam.name }} · {{ camModal.mode === 'clip' ? '事件录像' : camModal.mode === 'image' ? '最近画面' : '实时画面' }}
-          </b>
-          <button class="sh-close" @click="closeCamModal">✕</button>
-        </div>
-        <video v-if="camModal.src" :ref="setModalRef" controls autoplay muted playsinline></video>
-        <img v-else-if="camModal.mode === 'image' && camModal.cam.snap" :src="camModal.cam.snap" class="cam-modal-img" alt="最近事件画面" />
-        <div v-else style="aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:var(--muted);background:#000;border-radius:16px 16px 0 0">
-          {{ camModal.cam.err || '无可用画面' }}
-        </div>
-        <div class="cam-modal-foot">
-          <span style="color:var(--muted);font-size:12px;flex:1">
-            <template v-if="camModal.mode === 'clip'">事件录像（看家事件片段）由小米云存储、经本站代理转发；关闭窗口即停止播放。</template>
-            <template v-else-if="camModal.mode === 'image'">截图为最近一次看家事件画面（{{ snapTimeText(camModal.cam) }}），有人/物移动时自动更新。</template>
-            <template v-else>画面由小米云转码、经本站代理转发；关闭窗口即停止拉流。</template>
-          </span>
-          <button v-if="camModal.mode === 'live' && camModal.cam.rtsp" class="btn sm ghost" @click="copyRtsp(camModal.cam)">复制 RTSP（VLC 用）</button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -460,18 +326,13 @@ const tab = ref(firstTab('smarthome', 'mijia'));
 function switchTab(t) {
   tab.value = t;
   router.replace({ query: { ...route.query, tab: t } });
-  if (t === 'settings') {
-    if (status.value.bound) {
-      loadPrefs();
-      if (!data.value) loadHomes(false); // 默认家庭下拉需要家庭列表（服务端 10s 缓存）
-    }
-    loadMicamStatus(); // 摄像头事件凭证状态（独立于米家 OAuth 绑定）
+  if (t === 'settings' && status.value.bound) {
+    loadPrefs();
+    if (!data.value) loadHomes(false); // 默认家庭下拉需要家庭列表（服务端 10s 缓存）
   }
-  if (t === 'settings') vBase.value = location.origin; // 注入目标默认本站（当前访问地址，v1.6.24）
-  if (t === 'monitor' && status.value.bound) loadCams(false);
 }
-// 兼容旧链接 ?tab=verify：二次验证已并入设置 tab（v1.6.24）
-const normalizeTab = (t) => (t === 'verify' ? 'settings' : t);
+// 兼容旧链接 ?tab=monitor / ?tab=verify：监控 tab 与二次验证已下线（v1.6.29），分别落到米家/设置
+const normalizeTab = (t) => (t === 'verify' ? 'settings' : t === 'monitor' ? 'mijia' : t);
 watch(() => route.query.tab, (t) => {
   t = normalizeTab(String(t || ''));
   if (t && t !== tab.value && canTab('smarthome', t)) tab.value = t;
@@ -721,81 +582,6 @@ async function saveDefaultHome() {
   }
 }
 
-// ---------- 摄像头事件凭证（截图/录像通道，v1.6.19：密码换 serviceToken，注入式） ----------
-const micamStatus = ref({ bound: false, user_id: '', injected_at: null });
-async function loadMicamStatus() {
-  try { micamStatus.value = await api.get('/micam/status'); } catch { /* 静默 */ }
-}
-async function doMicamUnbind() {
-  if (!confirm('确定清空摄像头事件凭证？清空后监控页不再显示截图/录像，可随时重新注入。')) return;
-  try {
-    await api.post('/micam/unbind', {});
-    await loadMicamStatus();
-    micamBound.value = false;
-    flashOk('已清空事件凭证');
-  } catch (e) { flashErr('清空失败：' + e.message); }
-}
-
-// ---------- 摄像头二次验证（v1.6.20 登录换凭证；v1.6.24 并入设置 tab、全站可用） ----------
-// 表单在内网/外网地址下同样操作：注入目标默认本站（当前访问地址），目标即本站时服务端直接写库。
-const vFormOpen = ref(false); // 已绑定时点「更新凭证」展开表单
-const vUser = ref(''); const vPass = ref(''); const vCap = ref(''); const vCapImg = ref('');
-const vVerifyUrl = ref(''); const vCode = ref('');
-const vBase = ref(location.origin); const vTUser = ref(''); const vTPass = ref('');
-const vBusy = ref(false); const vLogs = ref([]);
-const isLocalTarget = computed(() => {
-  const b = vBase.value.trim().replace(/\/+$/, '');
-  if (!b) return true;
-  return b === location.origin || /\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(b);
-});
-function vLog(m, c) { vLogs.value.push({ m, c }); }
-async function doVerifyLogin() {
-  if (vBusy.value) return;
-  vBusy.value = true; vLogs.value = [];
-  try {
-    if (vVerifyUrl.value) { // 安全验证阶段：提交短信/邮件验证码后直接注入
-      if (!vCode.value) throw new Error('请先打开验证页完成验证，并填写收到的验证码');
-      vLog('提交安全验证码…');
-      const r = await api.post('/micam/verify', { code: vCode.value });
-      vLog('安全验证通过，已取得凭证（userId ' + (r.user_id || '') + '）', 'ok');
-      vVerifyUrl.value = ''; vCode.value = ''; vCapImg.value = '';
-      await injectTarget();
-      return;
-    }
-    if (!vUser.value || !vPass.value) throw new Error('请填小米账号和密码');
-    vLog('① 登录小米账号（本机网络出口）…');
-    const r = await api.post('/micam/login', { user: vUser.value, pass: vPass.value, captcha: vCap.value });
-    if (r.need_captcha) {
-      vCapImg.value = r.img; vCap.value = '';
-      vLog(r.hint || '需要图片验证码：输入图中字符后再点一次按钮', 'warn');
-      return;
-    }
-    if (r.need_verify) {
-      vVerifyUrl.value = r.url; vCapImg.value = '';
-      vLog('小米要求安全验证：打开上方链接完成验证，把收到的验证码填到下面再点按钮', 'warn');
-      return;
-    }
-    vLog((r.reused ? '沿用刚登录的会话' : '登录成功') + '（userId ' + (r.user_id || '') + '），已取得凭证', 'ok');
-    vCapImg.value = '';
-    await injectTarget();
-  } catch (e) {
-    vLog(e.message, 'err');
-  } finally {
-    vBusy.value = false;
-  }
-}
-async function injectTarget() {
-  if (!vBase.value) throw new Error('请填目标工作台地址');
-  if (!isLocalTarget.value && (!vTUser.value || !vTPass.value)) throw new Error('请填目标工作台账号和密码');
-  vLog('② 注入 ' + vBase.value + ' …');
-  const r = await api.post('/micam/inject-target', { base: vBase.value, user: vTUser.value, pass: vTPass.value });
-  vLog('注入成功 ✓ 已绑定小米用户 ' + (r.user_id || ''), 'ok');
-  vLog('到「监控」tab 点刷新即可看到摄像头截图/录像。', 'ok');
-  vPass.value = ''; vTPass.value = ''; // 密码框即用即清
-  if (isLocalTarget.value) await loadMicamStatus(); // 本站注入成功即更新状态卡
-  flashOk('凭证已注入 ' + (r.base || vBase.value));
-}
-
 async function toggleSwitch(d) {
   if (!d.switch || toggling.value[d.did]) return;
   toggling.value[d.did] = true;
@@ -826,166 +612,6 @@ async function resyncSwitch(d) {
   } catch { /* 读不到就保持当前显示 */ }
 }
 
-// ---------- 监控 tab：摄像头直播（云端 HLS → 本站代理，hls.js 播放）+ 看家事件截图（v1.6.19） ----------
-const cams = ref([]); // {did,name,model,online,playlist,err,at,snap,snapTime,clipUrl,snapErr}
-const camLoading = ref(false);
-const micamBound = ref(false); // 小米事件凭证（截图/录像通道）是否已注入
-const camLiveCount = computed(() => cams.value.filter((c) => c.playlist).length);
-
-async function loadCams(fresh) {
-  if (!status.value.bound) await loadStatus();
-  if (!status.value.bound) return;
-  camLoading.value = true;
-  try {
-    if (!data.value) await loadHomes(false); // 摄像头来自设备列表（有缓存）
-    const all = [];
-    for (const h of (data.value ? data.value.homes : [])) {
-      for (const r of h.rooms) for (const d of r.devices) {
-        if (/^urn:miot-spec-v2:device:camera:/.test(d.urn || '')) all.push(d);
-      }
-    }
-    // 先铺卡片（显示获取中），再逐台取流（每台开流约 3-15 秒，取到即播）
-    const olds = new Map(cams.value.map((c) => [c.did, c]));
-    cams.value = all.map((d) => {
-      const o = olds.get(d.did) || {};
-      return { did: d.did, name: d.name, model: d.model, online: d.online, playlist: '', err: '', at: 0, snap: o.snap || '', snapTime: o.snapTime || 0, clipUrl: o.clipUrl || '', snapErr: '' };
-    });
-    await Promise.all([
-      // 直播流（逐台）
-      ...cams.value.map(async (c) => {
-        try {
-          const r = await api.get('/mihome/camera/live?did=' + encodeURIComponent(c.did) + (fresh ? '&fresh=1' : ''));
-          c.playlist = r.playlist || '';
-          c.err = r.err || '';
-          c.at = r.at;
-        } catch (e) { c.err = e.message; }
-      }),
-      // 看家事件截图（一次拉全部，与直播并行）
-      loadSnaps(),
-    ]);
-  } catch (e) {
-    flashErr(e.message);
-  } finally {
-    camLoading.value = false;
-  }
-}
-
-// 每台摄像头最近一次看家事件（截图 + 录像片段地址）；凭证未注入时静默
-async function loadSnaps() {
-  try {
-    const r = await api.get('/micam/events');
-    micamBound.value = !!r.bound;
-    const byDid = new Map((r.cams || []).map((x) => [x.did, x]));
-    for (const c of cams.value) {
-      const m = byDid.get(c.did);
-      if (!m) continue;
-      const ev = (m.events || [])[0];
-      if (ev && ev.img) {
-        c.snap = ev.img; c.snapTime = Number(ev.time) || 0; c.clipUrl = ev.clip || ''; c.snapErr = '';
-      } else {
-        c.snap = ''; c.clipUrl = ''; c.snapErr = m.err || '';
-      }
-    }
-  } catch { micamBound.value = false; /* 静默：截图是增强能力，失败不影响直播卡片 */ }
-}
-
-// 截图时间：今天显示 HH:mm，跨天显示 M-D HH:mm
-function snapTimeText(c) {
-  if (!c || !c.snapTime) return '';
-  const d = new Date(c.snapTime);
-  if (isNaN(d)) return '';
-  const p = (n) => String(n).padStart(2, '0');
-  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
-  const now = new Date();
-  return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}-${d.getDate()} ${hm}`;
-}
-
-// hls.js 懒加载（仅进入监控 tab 才下载 ~400KB）
-let HlsCtor = null;
-const camHls = new Map(); // video 元素 → Hls 实例（卸载时统一销毁）
-async function ensureHls() {
-  if (HlsCtor !== null) return HlsCtor;
-  try { HlsCtor = (await import('hls.js')).default; } catch { HlsCtor = false; }
-  return HlsCtor;
-}
-// 把 HLS 源挂到 video 元素（key=did@at：同一会话不重复挂载；Safari 走原生 HLS）
-async function mountCam(el, src, key) {
-  if (!el || !src || el.__wbCamKey === key) return;
-  destroyCam(el);
-  el.__wbCamKey = key;
-  if (el.canPlayType && el.canPlayType('application/vnd.apple.mpegurl')) {
-    el.src = src;
-    el.onerror = () => { const cb = el.__wbErr; if (cb) cb('直播流无法加载（云端转码未就绪），可点重试'); };
-    el.play().catch(() => {});
-    return;
-  }
-  const H = await ensureHls();
-  if (!H || !H.isSupported()) return;
-  const h = new H({ liveDurationInfinity: true, maxBufferLength: 8 });
-  h.loadSource(src);
-  h.attachMedia(el);
-  h.on(H.Events.ERROR, (ev, d) => { // 致命错误（多为云端转码未就绪）→ 释放并回落为说明态
-    if (!d || !d.fatal) return;
-    const cb = el.__wbErr;
-    destroyCam(el);
-    if (cb) cb('直播流无法加载（云端转码未就绪），可点重试');
-  });
-  camHls.set(el, h);
-  el.play().catch(() => {});
-}
-function destroyCam(el) {
-  if (!el) return;
-  const h = camHls.get(el);
-  if (h) { try { h.destroy(); } catch { /* 忽略 */ } camHls.delete(el); }
-  el.__wbCamKey = '';
-  el.onerror = null;
-}
-function setCamRef(el, c) {
-  if (!el) return;
-  // hls.js 致命错误（如云端转码未就绪导致播放列表拉不到）→ 回落为说明态，可重试
-  el.__wbErr = (m) => { c.playlist = ''; c.err = m; c.at = 0; };
-  if (c.playlist) mountCam(el, c.playlist, c.did + '@' + c.at);
-}
-async function retryCam(c) {
-  c.err = '';
-  try {
-    const r = await api.get('/mihome/camera/live?did=' + encodeURIComponent(c.did) + '&fresh=1');
-    c.playlist = r.playlist || '';
-    c.err = r.err || '';
-    c.at = r.at;
-  } catch (e) { c.err = e.message; }
-  loadSnaps(); // 顺带刷新截图（凭证刚注入时截图通道可能从无到有）
-}
-
-// 放大播放弹窗（弹窗内独立 video，关闭即销毁停止拉流；直播/事件录像共用 hls 挂载）
-const camModal = ref({ open: false, cam: null, mode: 'live', src: '' });
-let modalEl = null;
-function setModalRef(el) {
-  modalEl = el;
-  const m = camModal.value;
-  if (!el || !m.cam) return;
-  el.__wbErr = (msg) => {
-    if (m.mode === 'clip') { // 录像片段加载失败 → 回落为大图
-      m.src = ''; m.mode = m.cam.snap ? 'image' : m.mode;
-      flashErr('事件录像加载失败，已切换为截图');
-    } else { closeCamModal(); flashErr(msg); }
-  };
-  const key = m.mode === 'clip' ? m.cam.did + '@clip' + (m.cam.snapTime || '') : m.cam.did + '@' + m.cam.at;
-  mountCam(el, m.src, key);
-}
-function openCamModal(c) {
-  const mode = c.playlist ? 'live' : (c.clipUrl ? 'clip' : 'image');
-  camModal.value = { open: true, cam: c, mode, src: mode === 'live' ? c.playlist : (mode === 'clip' ? c.clipUrl : '') };
-}
-function closeCamModal() {
-  if (modalEl) destroyCam(modalEl);
-  modalEl = null;
-  camModal.value = { open: false, cam: null };
-}
-async function copyRtsp(c) {
-  try { await navigator.clipboard.writeText(c.rtsp || ''); flashOk('RTSP 地址已复制，可在 VLC 等播放器打开'); }
-  catch { flashErr('复制失败，请手动选择地址'); }
-}
 const numFormats = ['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'uint64', 'int64', 'float'];
 const detail = ref({ open: false, device: null, spec: null, loading: false, loadingVals: false, err: '', values: {} });
 const inputs = ref({});   // 可写属性编辑值 key: siid.piid
@@ -1155,8 +781,6 @@ onMounted(async () => {
   await loadStatus();
   if (status.value.bound && tab.value === 'mijia') loadHomes(false);
   if (status.value.bound && tab.value === 'settings') { loadPrefs(); if (!data.value) loadHomes(false); }
-  if (tab.value === 'settings') loadMicamStatus();
-  if (status.value.bound && tab.value === 'monitor') loadCams(false);
   // 回调页带 bind=ok 跳回：提示并清参数
   if (route.query.bind === 'ok') {
     router.replace({ query: { ...route.query, bind: undefined } });
@@ -1168,8 +792,6 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   stopPoll();
-  if (modalEl) destroyCam(modalEl); // 弹窗视频停止拉流
-  for (const el of [...camHls.keys()]) destroyCam(el); // 全部卡片视频释放
 });
 </script>
 
@@ -1274,68 +896,4 @@ onBeforeUnmount(() => {
 .btn.ghost { background: transparent; }
 .sh-events { margin-top: 6px; }
 
-/* 监控 tab：3 列自适应画面墙 */
-.cam-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-@media (max-width: 900px) { .cam-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px) { .cam-grid { grid-template-columns: 1fr; } }
-.cam-tile {
-  position: relative; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden;
-  background: #000; border: 1px solid var(--border, rgba(128,128,128,.25)); cursor: pointer;
-}
-.cam-tile.offline { opacity: .75; }
-.cam-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
-/* 看家事件截图（无直播流时的最近画面） */
-.cam-snap { width: 100%; height: 100%; object-fit: cover; display: block; }
-.cam-snap-time {
-  position: absolute; top: 8px; right: 8px; padding: 2px 8px; border-radius: 999px;
-  background: rgba(0,0,0,.55); color: #fff; font-size: 11px; pointer-events: none; white-space: nowrap;
-}
-.cam-empty {
-  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 8px; color: var(--muted); font-size: 12px; padding: 12px; text-align: center;
-  background: var(--bg-soft, rgba(128,128,128,.12));
-}
-/* 半透明圆圈+三角播放按钮（点击放大播放） */
-.cam-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.cam-play {
-  width: 56px; height: 56px; border-radius: 50%; background: rgba(0,0,0,.45);
-  display: flex; align-items: center; justify-content: center; transition: transform .12s, background .12s;
-}
-.cam-tile:hover .cam-play { transform: scale(1.08); background: rgba(0,0,0,.6); }
-.cam-tri {
-  width: 0; height: 0; border-top: 11px solid transparent; border-bottom: 11px solid transparent;
-  border-left: 18px solid rgba(255,255,255,.9); margin-left: 5px;
-}
-.cam-label {
-  position: absolute; left: 0; right: 0; bottom: 0; padding: 20px 10px 8px; font-size: 13px; color: #fff;
-  background: linear-gradient(transparent, rgba(0,0,0,.68)); display: flex; align-items: center; gap: 6px;
-  pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.cam-label i { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; display: inline-block; flex: none; }
-.cam-label i.on { background: #35c58f; }
-
-/* 摄像头放大播放弹窗 */
-.cam-modal {
-  background: var(--panel-bg, #fff); color: var(--text, #222); border-radius: 16px; width: min(880px, 100%);
-  max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.3);
-}
-[data-theme='dark'] .cam-modal, :root.dark .cam-modal { background: #23272e; }
-.cam-modal-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border, rgba(128,128,128,.25)); }
-.cam-modal video { width: 100%; aspect-ratio: 16/9; background: #000; display: block; }
-.cam-modal-img { width: 100%; max-height: 70vh; object-fit: contain; background: #000; display: block; }
-.cam-modal-foot { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; flex-wrap: wrap; }
-
-/* 摄像头二次验证表单（v1.6.20；v1.6.24 并入设置 tab） */
-.vf-h { margin: 18px 0 8px; font-size: 14px; }
-.vf-grid { display: grid; gap: 8px; }
-.vf-grid input { width: 100%; box-sizing: border-box; }
-.vf-cap { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-.vf-cap img { height: 46px; border-radius: 6px; border: 1px solid var(--muted); }
-.vf-cap input { flex: 1; }
-.vf-verify { margin-top: 10px; padding: 10px 12px; border-radius: 9px; background: rgba(230, 170, 60, .14); font-size: 13px; line-height: 1.7; }
-.vf-verify input { width: 100%; box-sizing: border-box; margin-top: 8px; }
-.vf-log { margin-top: 12px; font-size: 13px; line-height: 1.8; white-space: pre-wrap; }
-.vf-ok { color: var(--ok, #16a34a); }
-.vf-err { color: #dc2626; }
-.vf-warn { color: #b45309; }
 </style>

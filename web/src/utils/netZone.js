@@ -17,6 +17,6 @@ export function netZone(host) {
     if (/^f[cd]/.test(h) || h.startsWith('fe80')) return 'lan';
     return 'wan';
   }
-  // 普通域名：公网域名（如 vicp.fun 花生壳）→ 外网；域名解析到内网的场景让位于地址栏明确性
+  // 普通域名：公网域名（公网域名）→ 外网；域名解析到内网的场景让位于地址栏明确性
   return 'wan';
 }

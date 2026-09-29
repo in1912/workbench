@@ -1595,6 +1595,17 @@ function migrateClipboardAgent() {
 }
 migrateClipboardAgent();
 
+// 一次性清理（2026-09 v1.6.29）：智能家居「监控」tab 与摄像头事件凭证通道下线——
+// 删除已注入的 micam_creds 密文（凭证存在主库 settings，租户库一并兜底清理；DELETE 幂等）。
+(function cleanupMicamCreds() {
+  if (getSetting(db, 'micam_cleanup_v1', false)) return;
+  setSetting(db, 'micam_cleanup_v1', true);
+  const fix = (d) => { try { d.prepare("DELETE FROM settings WHERE key='micam_creds'").run(); } catch { /* 无 settings 表则跳过 */ } };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] 摄像头事件凭证（micam_creds）已随监控功能下线清理');
+})();
+
 function migrateTestsIntoPrivate() {
   if (getSetting(db, 'tests_move_private_v1', false)) return;
   setSetting(db, 'tests_move_private_v1', true);

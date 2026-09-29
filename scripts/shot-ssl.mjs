@@ -65,7 +65,7 @@ try {
   ck('未配置时显示引导文案', (await page.locator('.empty', { hasText: '尚未配置证书' }).count()) === 1, '');
 
   // 生成表单：CN 预填了 location.hostname（127.0.0.1 不会预填 CN，SAN 也不会填回环）
-  await page.fill('input[placeholder="localhost"]', 'wb-ui.example.com');
+  await page.fill('input[placeholder="your.domain.com"]', 'wb-ui.example.com');
   await page.fill('input[placeholder="192.168.110.105, nas.local"]', '192.168.9.9');
   await page.click('button:has-text("生成并替换证书")');
   // Settings 父页面有自己的 .msg（通勤提示等，v-show 隐藏也在 DOM）——flash 必须按文本锚定

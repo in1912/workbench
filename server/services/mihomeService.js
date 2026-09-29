@@ -713,114 +713,6 @@ async function getSpecByDid(did) {
   return getSpec(urn);
 }
 
-// ---------- 摄像头直播（HLS 云端转码 + 本站代理，v1.6.16） ----------
-// 实测（2026-09-28，生产 5 台摄像头）：带 camera-stream-for-google-home 服务的小米摄像头可经
-// 云端转码出 HLS 直播流（start-hls-stream 动作 out[0] 即 m3u8 地址）；该地址绑定「创建会话的出口
-// IP」（异网拉取 404）→ 浏览器直连不可行，由本服务代理拉流转发。alexa 服务的 image-snapshot
-// 实测返回全账号统一的占位图（md5=文件名哈希），快照方案弃用；RTSP 地址仅作 VLC 备用透传。
-const camSessions = new Map(); // did → { hlsUrl, rtspUrl, ok, err, at }
-const camSignKey = crypto.createHash('sha256').update(SECRET).update('camhls').digest(); // 签名密钥自令牌密钥派生
-
-function camSign(did, hours) {
-  const exp = Date.now() + (hours || 12) * 3600 * 1000;
-  const sig = crypto.createHmac('sha256', camSignKey).update(String(did) + '.' + exp).digest('hex').slice(0, 24);
-  return { exp, sig };
-}
-function camVerify(did, exp, sig) {
-  const e = Number(exp);
-  return Number.isFinite(e) && e > Date.now() && /^[0-9a-f]{24}$/.test(String(sig || ''))
-    && crypto.createHmac('sha256', camSignKey).update(String(did) + '.' + e).digest('hex').slice(0, 24) === sig;
-}
-
-// 开流（force=1 跳过 4 分钟会话缓存）：调 start-hls-stream 取转码地址，并在服务器侧探测就绪状态
-async function startCameraLive(did, force) {
-  const key = String(did);
-  const hit = camSessions.get(key);
-  if (!force && hit && hit.hlsUrl && Date.now() - hit.at < 4 * 60 * 1000) return hit;
-  const spec = await getSpecByDid(key);
-  let hlsUrl = '', rtspUrl = '', err = '';
-  const svG = spec.services.find((s) => s.name === 'camera-stream-for-google-home');
-  const svA = spec.services.find((s) => s.name === 'camera-stream-for-amazon-alexa');
-  if (!svG && !svA) {
-    err = '该设备型号未开放云端画面（仅部分小米摄像头支持）';
-  } else {
-    if (svG) {
-      const act = (svG.actions || []).find((a) => a.name === 'start-hls-stream');
-      if (!act) err = '该设备不支持 HLS 拉流';
-      else {
-        try {
-          const r = await callAction(key, svG.siid, act.aiid, [1]);
-          const out = (r && r.out) || [];
-          if (r && r.code === 0 && typeof out[0] === 'string' && out[0].includes('.m3u8')) hlsUrl = out[0];
-          else err = miotErrorText(r && r.code) || '取流失败';
-        } catch (e) { err = e.message; }
-      }
-    }
-    if (svA) { // RTSP 备用（浏览器播不了，给 VLC 用户复制用），失败不影响
-      const act = (svA.actions || []).find((a) => a.name === 'start-rtsp-stream');
-      if (act) { try { const r = await callAction(key, svA.siid, act.aiid, [1]); if (r && r.code === 0) rtspUrl = ((r.out || [])[0]) || ''; } catch { /* 忽略 */ } }
-    }
-  }
-  // 服务器侧探测：转码器启动有几秒延迟，最多试 3 次（间隔 3s）
-  let ok = false, probe = 0;
-  if (hlsUrl) {
-    for (let i = 0; i < 3 && !ok; i++) {
-      if (i) await new Promise((r) => setTimeout(r, 3000));
-      try { const p = await xiaomiHttp(hlsUrl, { timeoutMs: 5000 }); probe = p.status; if (p.ok) { await p.text(); ok = true; } } catch { probe = 0; }
-    }
-    if (!ok && !err) err = `云端转码未就绪（探测 HTTP ${probe}）`;
-  }
-  const sess = { hlsUrl, rtspUrl, ok, err, at: Date.now() };
-  camSessions.set(key, sess);
-  return sess;
-}
-
-// 拉播放列表（代理用；自动复用/新建会话）
-async function fetchCamPlaylist(did) {
-  const sess = await startCameraLive(did, false);
-  if (!sess.hlsUrl) throw new Error(sess.err || '无可用流地址');
-  const r = await xiaomiHttp(sess.hlsUrl, { timeoutMs: 8000 });
-  if (!r.ok) throw new Error(`云端转码未就绪（HTTP ${r.status}），请稍后重试`);
-  return { sess, body: await r.text() };
-}
-// 拉视频分片（代理用；仅放行小米流媒体域名，防 SSRF）
-async function fetchCamSegment(url) {
-  if (!/^https:\/\/[a-z0-9.-]+\.io\.mi\.com\//.test(String(url))) throw new Error('上游地址非法');
-  const r = await xiaomiHttp(String(url), { timeoutMs: 15000 });
-  if (!r.ok) throw new Error(`分片拉取失败（HTTP ${r.status}）`);
-  return Buffer.from(await r.arrayBuffer());
-}
-
-// ---------- 摄像头条目原始字段探测（诊断：找 device_list_page 里是否带云端截图/缩略图 URL） ----------
-// 背景：米家 App 首页摄像头卡片有缩略图，若该图来自本 OAuth 通道可见的接口（device_list_page 原始条目），
-// 即可免密实现「最近画面」卡片。输出一律脱敏（token/secret/key 类字段不回显），字符串截断防日志膨胀。
-function debugScrub(v, depth) {
-  if (depth > 6) return '[层级过深]';
-  if (Array.isArray(v)) return v.slice(0, 20).map((x) => debugScrub(x, depth + 1));
-  if (v && typeof v === 'object') {
-    const o = {};
-    for (const [k, val] of Object.entries(v)) o[k] = /token|secret|pass|key|credential/i.test(k) ? '[已脱敏]' : debugScrub(val, depth + 1);
-    return o;
-  }
-  if (typeof v === 'string') return v.length > 600 ? v.slice(0, 600) + '…' : v;
-  return v;
-}
-async function debugCameraRaw() {
-  const view = await getHomeView(false);
-  const camDids = [];
-  for (const h of view.homes) for (const r of h.rooms) for (const d of r.devices) {
-    if (/^urn:miot-spec-v2:device:camera:/.test(d.urn || '')) camDids.push(d.did);
-  }
-  const out = { at: new Date().toISOString(), count: camDids.length, dids: camDids, entries: [] };
-  for (let i = 0; i < camDids.length; i += 10) {
-    const r = await api('/app/v2/home/device_list_page', {
-      limit: 200, get_split_device: true, get_third_device: true, dids: camDids.slice(i, i + 10),
-    });
-    for (const d of (r && r.list) || []) out.entries.push(debugScrub(d, 0));
-  }
-  return out;
-}
-
 function status() {
   const c = readCfg();
   return {
@@ -843,6 +735,6 @@ module.exports = {
   completeBind, completeBindTokens, parseCallbackUrl, unbind, status, diagnoseNetwork, forceRefresh,
   getHomeView, getProps, setProp, callAction, getSpec, getSpecByDid, miotErrorText, getPrefs, setPrefs,
   updateCachedSwitchValue,
-  startCameraLive, camSign, camVerify, fetchCamPlaylist, fetchCamSegment, debugCameraRaw, rawApiDebug,
+  rawApiDebug,
   _internals: { readCfg, writeCfg, getToken, apiHost, normalizeSpec, detectSwitch, parseHomes, xiaomiHttp, dohResolve, canonDid, isEnvSensor, splitSwitchPoint },
 };

@@ -326,7 +326,7 @@ router.post('/dep/ai-analysis', async (req, res) => {
     } catch (e) { /* 档案 JSON 异常不影响返回 */ }
     res.json({ ok: true, text });
   } catch (e) {
-    res.status(502).json({ error: 'AI 调用失败：' + (e.message || '未知错误') });
+    res.status(503).json({ error: 'AI 调用失败：' + (e.message || '未知错误') });
   }
 });
 

@@ -173,7 +173,7 @@ try {
   ck('H5 识别为 workbench 模式', h5mode === 'workbench', String(h5mode));
 
   // 前缀保存
-  const pfxInput = page.locator('input[placeholder*="vicp.fun"]');
+  const pfxInput = page.locator('input[placeholder*="your.domain.com"]');
   await pfxInput.fill('https://e2e.example.com');
   const dbgVal = await pfxInput.inputValue();
   console.log('  [dbg] fill 后输入框值:', dbgVal);

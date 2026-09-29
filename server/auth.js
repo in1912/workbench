@@ -78,7 +78,7 @@ function pageForPath(p) {
   if (p.startsWith('/monitor')) return 'tools'; // Computer monitoring (v1.3.5): Tools page last tab, bound to tools page permission (otherwise any logged-in user could read screenshots)
   // 智能家居（v1.6.8）：米家设备总览/属性读写/能力描述为页内共享；
   // /mihome/callback 在 index.js EXEMPT 免登录名单里（OAuth 回跳无登录态），不经过这里
-  if (p.startsWith('/mihome') || p.startsWith('/micam')) return 'smarthome'; // v1.6.19：摄像头事件凭证/截图/录像代理
+  if (p.startsWith('/mihome')) return 'smarthome';
   if (p.startsWith('/business') || p.startsWith('/business/skills')) return 'business';
   if (p.startsWith('/ai')) return 'ai';
   if (p.startsWith('/pushes') || p.startsWith('/schedules')) return 'business'; // 原「AI 推送」页已并入业务系统页
@@ -187,13 +187,11 @@ const TAB_PATHS = {
     ['assign', ['/pets/assign', '/pets/members']],
   ],
   // 智能家居（v1.6.8）：米家总览/控制整页共享；绑定与解绑归「设置」tab
-  // v1.6.16 增「监控」「参数翻译」tab：直播取流/词典/详情页参数查询均为页内共享
+  // v1.6.29：移除「监控」tab 与摄像头事件凭证通道（micam 路由已删，历史 allowed_tabs 里的 monitor 键无害）
   smarthome: [
     ['mijia', []],
-    ['monitor', []],
     ['terms', []],
-    // v1.6.19：事件凭证注入/清空归设置；v1.6.24：二次验证登录表单并入设置 tab（原独立 tab 移除），全站可用
-    ['settings', ['/mihome/bind', '/mihome/unbind', '/micam/inject', '/micam/unbind', '/micam/login', '/micam/verify', '/micam/inject-target']],
+    ['settings', ['/mihome/bind', '/mihome/unbind']],
   ],
 };
 

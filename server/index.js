@@ -75,8 +75,6 @@ const EXEMPT = ['/auth/login', '/health', '/tile', '/map-static', '/system-info'
   '/clipboard/agent-register', '/clipboard/agent-push', // 剪贴板采集代理（key+uid 即凭证：登记/推送，v1.6.2）
   '/vibe/client-download', '/vibe/client-register', '/vibe/job', // 录音转写客户端（key 即凭证：引擎下发/登记回连/拉取模式领任务回传结果）
   '/mihome/callback', // 米家 OAuth 回跳（小米浏览器重定向落地，无工作台登录态；只认 state 会话 + 一次性 code）
-  '/mihome/cam/hls', // 摄像头 HLS 直播代理（hls.js 拉流不带登录头 → 限时 HMAC 签名即凭证，v1.6.16）
-  '/micam/img', '/micam/clip', // 摄像头事件截图/录像代理（<img>/hls.js 同理，签名即凭证，v1.6.19）
   '/pets/desktop']; // 桌面宠物（key 即凭证：state/frame/action）
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();

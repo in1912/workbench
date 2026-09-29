@@ -1,14 +1,19 @@
 // 生产部署脚本：node scripts/deploy-package.mjs <升级包.zip路径> [期望版本]
 // 流程：登录 → 上传 /api/upgrade/apply（容器自动重启）→ 轮询 /api/system-info 到版本一致。
-// 凭证可用环境变量 WB_URL / WB_USER / WB_PASS 覆盖默认值。
+// 目标地址与账号密码一律走环境变量（不写默认值，避免仓库泄漏部署目标）：
+//   WB_URL=https://你的域名 WB_USER=账号 WB_PASS=密码 node scripts/deploy-package.mjs <zip> [版本]
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
 
-const BASE = process.env.WB_URL || 'http://localhost:3000'; // 2026-09-18 起 Cloudflare Tunnel 新域名（旧 vicp.fun 已失效）
-const USER = process.env.WB_USER || 'admin';
-const PASS = process.env.WB_PASS || 'admin123';
+const BASE = process.env.WB_URL || '';
+const USER = process.env.WB_USER || '';
+const PASS = process.env.WB_PASS || '';
+if (!BASE || !USER || !PASS) {
+  console.error('缺少 WB_URL / WB_USER / WB_PASS 环境变量（目标工作台地址与登录凭证）');
+  process.exit(1);
+}
 
 const zipPath = process.argv[2];
 const wantVer = process.argv[3] || '';

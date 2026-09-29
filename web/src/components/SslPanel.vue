@@ -44,7 +44,7 @@
       <h3>🛠 生成新签名（自助签发）</h3>
       <div class="muted" style="font-size:12.5px; margin-bottom:10px">在这里生成即可，无需 openssl 命令行。生成会<b>立即替换</b>当前证书文件（旧的自动备份到 ssl/backup-时间戳/），重启服务后生效。有效期上限 {{ st.max_days || 825 }} 天（Chrome/苹果对自签名证书的信任上限）。</div>
       <div class="form-row"><label>通用名称 CN（主域名/主机名）</label><input v-model="gen.cn" placeholder="your.domain.com" /></div>
-      <div class="form-row"><label>附加域名 / IP（逗号分隔，自动分类进 SAN）</label><input v-model="gen.san" :placeholder="`192.168.110.105, nas.local`" /></div>
+      <div class="form-row"><label>附加域名 / IP（逗号分隔，自动分类进 SAN）</label><input v-model="gen.san" :placeholder="`192.168.1.10, nas.local`" /></div>
       <div class="row">
         <div class="form-row" style="flex:1"><label>有效天数（1-{{ st.max_days || 825 }}）</label><input v-model.number="gen.days" type="number" min="1" :max="st.max_days || 825" /></div>
         <div class="form-row" style="flex:1"><label>组织名（可选）</label><input v-model="gen.org" placeholder="Personal Workbench" /></div>
@@ -109,7 +109,7 @@ async function load() {
 }
 onMounted(async () => {
   await load();
-  // CN 预填当前访问的主机名（vicp 域名或局域网 IP），SAN 预填非回环 IP
+  // CN 预填当前访问的主机名（公网域名或局域网 IP），SAN 预填非回环 IP
   if (!gen.value.cn) {
     const h = location.hostname;
     gen.value.cn = h && h !== 'localhost' && h !== '127.0.0.1' ? h : '';

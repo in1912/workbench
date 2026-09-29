@@ -48,13 +48,13 @@ try {
   const cfg = page.locator('.card:has(h3:has-text("地址配置"))');
   ck('管理员看到地址配置卡', (await cfg.count()) === 1);
   ck('外网+内网两个配置项', await cfg.locator('input').count() === 2);
-  await cfg.locator('input').first().fill('https://e2e-test.vicp.fun');
+  await cfg.locator('input').first().fill('https://e2-test.example.com');
   await cfg.locator('button:has-text("保存")').first().click();
   await page.waitForTimeout(600);
   const wan1 = (await page.locator('.addr-row').nth(1).locator('.addr-text').textContent()).trim();
-  ck('保存外网地址后分享区立即显示', wan1 === 'https://e2e-test.vicp.fun', wan1);
+  ck('保存外网地址后分享区立即显示', wan1 === 'https://e2-test.example.com', wan1);
   const saved = db.prepare("SELECT value FROM settings WHERE key='external_base_url'").get();
-  ck('external_base_url 已落库（工作台 settings 值为 JSON 编码存储）', saved && (saved.value === '"https://e2e-test.vicp.fun"' || saved.value === 'https://e2e-test.vicp.fun'), JSON.stringify(saved));
+  ck('external_base_url 已落库（工作台 settings 值为 JSON 编码存储）', saved && (saved.value === '"https://e2-test.example.com"' || saved.value === 'https://e2-test.example.com'), JSON.stringify(saved));
   // 还原：清空
   await cfg.locator('input').first().fill('');
   await cfg.locator('button:has-text("保存")').first().click();
@@ -100,7 +100,7 @@ try {
   if (fail) process.exitCode = 1;
 } finally {
   try {
-    db.prepare("DELETE FROM settings WHERE key='external_base_url' AND value='https://e2e-test.vicp.fun'").run();
+    db.prepare("DELETE FROM settings WHERE key='external_base_url' AND value='https://e2-test.example.com'").run();
   } catch { /* 不在就算了 */ }
   db.prepare('DELETE FROM sessions WHERE token IN (?,?)').run(tA, tU);
   db.prepare("DELETE FROM users WHERE username='e2e_multi_u'").run();
