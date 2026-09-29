@@ -4,6 +4,7 @@
     <div class="tabs">
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
       <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">参数翻译</button>
+      <button v-if="canTab('smarthome','cclight')" :class="{active: tab==='cclight'}" @click="switchTab('cclight')">Agent红绿灯</button>
       <button v-if="canTab('smarthome','settings')" :class="{active: tab==='settings'}" @click="switchTab('settings')">设置</button>
     </div>
 
@@ -86,6 +87,88 @@
           </div>
         </div>
         <div v-if="!termGroups.length" style="color:var(--muted);text-align:center;padding:24px">没有匹配的词条</div>
+      </div>
+    </template>
+
+    <!-- ==================== Agent红绿灯 tab（v1.8.1）==================== -->
+    <template v-else-if="tab==='cclight'">
+      <div class="card">
+        <h3 style="margin:0 0 8px">Agent红绿灯 — Claude Code 状态指示灯</h3>
+        <div class="muted" style="font-size:13px; line-height:1.8; margin-bottom:10px">
+          ESP32-C3 SuperMini 开发板 + 三色红绿灯模块。Claude Code 干什么，灯就显示什么：<b>全程蓝牙（BLE）通讯</b>，
+          USB 只在刷固件时用一次，之后板子插任意 USB 电源即可，电脑端守护进程自动扫描连接（蓝牙名 <b>Agent light</b>）。<br />
+          链路：claude 钩子 → send.js → UDP（本机）→ daemon.py → 蓝牙 → 板子。板子断电重启会自动重连并续上最后灯态。
+        </div>
+        <table class="cc-table">
+          <thead><tr><th style="width:150px">灯效</th><th>含义 / 触发时机</th></tr></thead>
+          <tbody>
+            <tr><td>🎬 轮播演示</td><td>会话开启：自检闪红→黄→绿各一次，然后轮播 7 种灯效</td></tr>
+            <tr><td>🔵➡️ 连贯跑马灯</td><td>提交提示词后：AI 正在分析（thinking）</td></tr>
+            <tr><td>🌊 柔和慢速跑马灯</td><td>工具执行完回到生成：AI 正在输出（ai）</td></tr>
+            <tr><td>🟡 黄灯慢闪</td><td>正在执行工具 / 命令（busy）</td></tr>
+            <tr><td>🟢 绿灯常亮</td><td>任务完成（success）</td></tr>
+            <tr><td>🔴 红灯快闪</td><td>命令 / 工具执行失败（error）</td></tr>
+            <tr><td>🚨 红黄交替警灯</td><td>Claude 等待权限确认（alarm）</td></tr>
+            <tr><td>🚦 红绿灯循环</td><td>手动演示模式（traffic）：红3秒→绿3秒→黄1秒</td></tr>
+            <tr><td>⚫ 全灭</td><td>会话结束，或看门狗超时自动熄灭（busy 卡 30 分钟等）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>① 蓝牙连接电脑（日常使用流程，装好一次即可）</h3>
+        <ol class="cc-steps">
+          <li>电脑要求：带蓝牙适配器（支持 BLE）；已装 <b>Python 3.12+</b> 与 <b>Node.js</b>（钩子发送器用）</li>
+          <li>装依赖（cmd 里执行一次）：<code>pip install bleak</code></li>
+          <li>板子通电：任意 USB 充电头 / 充电宝，不需要连电脑</li>
+          <li>把下方「文件下载」的文件下载到同一个文件夹（或直接「打包下载」）</li>
+          <li>双击 <code>start-daemon.cmd</code> → 文件夹里 daemon.log 出现 <code>BLE connected</code> 与
+            <code>board: Agent light 1.1 ...</code> 即连接成功（守护进程需常驻，开机自启命令见 README）</li>
+          <li>安装钩子：<code>node install-hooks.js</code>（自动备份 ~/.claude/settings.json，卸载加 --remove）</li>
+          <li>新开一个 claude 会话 → 灯自动跟随状态；手动验证：<code>node send.js traffic</code></li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h3>② 刷机步骤（首次使用 / 更换板子，需 USB 线）</h3>
+        <ol class="cc-steps">
+          <li>USB 连电脑 → 设备管理器出现「USB 串行设备 (COMx)」，记住这个 COM 号</li>
+          <li>装工具：<code>pip install esptool mpremote</code></li>
+          <li>擦除并刷入 MicroPython 固件（下载区的 .bin）：<br />
+            <code>python -m esptool --chip esp32c3 --port COMx erase_flash</code><br />
+            <code>python -m esptool --chip esp32c3 --port COMx --baud 921600 write_flash 0x0 ESP32_GENERIC_C3-20260824-v1.29.0.bin</code></li>
+          <li>部署灯效程序并重启：<code>python -m mpremote connect COMx cp main.py :main.py</code>，然后按一下板上 RST</li>
+          <li>成功标志：自检红→黄→绿各闪一次 → 自动进入轮播演示</li>
+        </ol>
+        <div class="muted" style="font-size:12.5px; line-height:1.8">
+          按键时机：esptool 反复打印 <code>Connecting...</code> 时 = <b>按住 BOOT → 点一下 RST → 松开 BOOT</b> 进下载模式；刷完没反应 = 按一下 RST。<br />
+          接线：红=GPIO4、黄=GPIO3、绿=GPIO2、模块公共端→GND（接 3.3V 也可以，固件上电自动识别共阴/共阳）。
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>③ 文件下载</h3>
+        <div v-if="!ccFiles.length" class="muted" style="padding:8px 0">加载中…</div>
+        <div v-for="f in ccFiles" :key="f.name" class="cc-file">
+          <div class="grow" style="min-width:0">
+            <div class="t"><b>{{ f.name }}</b> <span class="muted" style="font-size:12px">{{ fmtCcSize(f.size) }}</span></div>
+            <div class="d muted">{{ f.desc }}</div>
+          </div>
+          <button class="small" style="flex-shrink:0" :disabled="f.missing" @click="ccDl(f.name)">下载</button>
+        </div>
+        <div style="margin-top:12px">
+          <button class="primary" @click="ccDlPack">📦 打包下载全部（cc-light.zip）</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>④ 参考文档</h3>
+        <ul class="cc-refs">
+          <li><a class="link" href="https://www.nologo.tech/product/esp32/esp32c3/esp32c3supermini/esp32C3SuperMini.html" target="_blank" rel="noopener">ESP32-C3 SuperMini 产品页（开发板介绍 / 引脚图）</a></li>
+          <li><a class="link" href="https://micropython.org/download/ESP32_GENERIC_C3/" target="_blank" rel="noopener">MicroPython 固件下载页（ESP32_GENERIC_C3）</a></li>
+          <li><a class="link" href="https://pypi.org/project/bleak/" target="_blank" rel="noopener">bleak — Python 蓝牙（BLE）客户端库</a></li>
+          <li>本机随板资料（引脚图 / 原理图 / 使用手册 / 疑难解答）：<code>D:\CC\ESP32\资料</code></li>
+        </ul>
       </div>
     </template>
 
@@ -330,6 +413,7 @@ function switchTab(t) {
     loadPrefs();
     if (!data.value) loadHomes(false); // 默认家庭下拉需要家庭列表（服务端 10s 缓存）
   }
+  if (t === 'cclight') loadCcFiles();
 }
 // 兼容旧链接 ?tab=monitor / ?tab=verify：监控 tab 与二次验证已下线（v1.6.29），分别落到米家/设置
 const normalizeTab = (t) => (t === 'verify' ? 'settings' : t === 'monitor' ? 'mijia' : t);
@@ -341,6 +425,18 @@ if (route.query.tab) {
   const t0 = normalizeTab(String(route.query.tab));
   if (canTab('smarthome', t0)) tab.value = t0;
 }
+
+// ---------- Agent红绿灯（v1.8.1）：下载区文件清单 ----------
+const ccFiles = ref([]);
+async function loadCcFiles() {
+  if (ccFiles.value.length) return;
+  try { ccFiles.value = (await api.get('/cclight/files')).files || []; }
+  catch { ccFiles.value = []; }
+}
+const fmtCcSize = (n) => (!n ? '' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+function ccDl(name) { api.download(`/cclight/file/${encodeURIComponent(name)}`, name).catch(() => {}); }
+function ccDlPack() { api.download('/cclight/package', 'cc-light.zip').catch(() => {}); }
+if (tab.value === 'cclight') loadCcFiles();
 
 // ---------- 消息 ----------
 const err = ref('');
@@ -895,5 +991,16 @@ onBeforeUnmount(() => {
 .btn.danger { border-color: #d64545; color: #d64545; }
 .btn.ghost { background: transparent; }
 .sh-events { margin-top: 6px; }
+
+/* Agent红绿灯 tab（v1.8.1）：灯效表 / 步骤 / 下载清单 */
+.cc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cc-table th, .cc-table td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; line-height: 1.6; }
+.cc-table th { background: var(--bg2); white-space: nowrap; }
+.cc-steps { margin: 0; padding-left: 20px; line-height: 2; font-size: 13.5px; }
+.cc-steps code, .cc-refs code { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; word-break: break-all; }
+.cc-file { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.cc-file .t { font-size: 13.5px; }
+.cc-file .d { font-size: 12.5px; margin-top: 2px; }
+.cc-refs { margin: 0; padding-left: 20px; line-height: 2.1; font-size: 13.5px; }
 
 </style>

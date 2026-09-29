@@ -88,6 +88,8 @@ export const TAB_DEFS = {
   smarthome: [
     { key: 'mijia', label: '米家' },
     { key: 'terms', label: '参数翻译' },
+    // Agent红绿灯（v1.8.1）：ESP32-C3 三色灯 = Claude Code 状态指示（使用说明 + 刷机 + 文件下载）
+    { key: 'cclight', label: 'Agent红绿灯' },
     { key: 'settings', label: '设置' },
   ],
 };

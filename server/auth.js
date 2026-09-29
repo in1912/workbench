@@ -79,6 +79,8 @@ function pageForPath(p) {
   // 智能家居（v1.6.8）：米家设备总览/属性读写/能力描述为页内共享；
   // /mihome/callback 在 index.js EXEMPT 免登录名单里（OAuth 回跳无登录态），不经过这里
   if (p.startsWith('/mihome')) return 'smarthome';
+  // Agent红绿灯（CC-LIGHT）说明与程序下载归智能家居页 cclight tab（v1.8.1）
+  if (p.startsWith('/cclight')) return 'smarthome';
   // 业务系统改名「推送任务」并入效率工具页（2026-09 v1.7.0）
   if (p.startsWith('/business')) return 'tools';
   if (p.startsWith('/ai')) return 'ai';
@@ -197,6 +199,7 @@ const TAB_PATHS = {
   smarthome: [
     ['mijia', []],
     ['terms', []],
+    ['cclight', ['/cclight']],
     ['settings', ['/mihome/bind', '/mihome/unbind']],
   ],
 };

@@ -22,6 +22,7 @@ const wishRoutes = require('./routes/wishRoutes');
 const sslRoutes = require('./routes/sslRoutes');
 const monitorRoutes = require('./routes/monitorRoutes');
 const mihomeRoutes = require('./routes/mihomeRoutes');
+const ccLightRoutes = require('./routes/ccLightRoutes');
 const authRoutes = require('./routes/authRoutes');
 const scheduler = require('./scheduler');
 const dingtalkStream = require('./services/dingtalkStreamService');
@@ -100,6 +101,7 @@ app.use('/api', vibeRoutes);
 app.use('/api', wishRoutes);
 app.use('/api', monitorRoutes);
 app.use('/api', mihomeRoutes);
+app.use('/api', ccLightRoutes);
 app.use('/api/ssl', sslRoutes);
 
 // 健康检查（本地直连探测端点：公网页面要跨源 fetch 本地地址的 /api/health 判断可达性，放行跨源读取）
