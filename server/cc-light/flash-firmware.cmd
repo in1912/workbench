@@ -17,7 +17,7 @@ echo.
 rem ---- 1. find python ----
 set "PY="
 where python >nul 2>nul && for /f "delims=" %%i in ('where python') do set "PY=%%i"
-if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PY for %%v in (313 312 311 310 39) do if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python%%v\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python%%v\python.exe"
 if not defined PY (
   echo [X] python not found. Install Python 3.9+ (64-bit) first, then run this again.
   pause & exit /b 1

@@ -47,7 +47,7 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = Claude Code 工作状态室外灯�
 2. 电脑上守护进程在跑（见下方"开机自启"）
 3. 正常使用 claude CLI，灯自动跟随状态 —— 新开的 claude 会话才会加载钩子
 
-手动控制：`node D:\CC\ESP32\light\send.js <模式名>`
+手动控制：`node <cc-light文件夹>\send.js <模式名>`（all=三色全亮 / demo=轮播 / traffic=红绿灯循环 / off=熄灭）
 
 ## 一键安装 / 卸载（推荐）
 
@@ -72,7 +72,7 @@ schtasks /Run /TN "CC-Light-Daemon"
 **一键刷机（推荐）**：USB 数据线连板子，双击 `flash-firmware.cmd`——自动装 esptool/mpremote（有 `wheels/` 时离线装）、列出串口、输 COM 号、确认后自动擦除→刷固件→传 main.py→重启。只改 main.py 不动固件时，可单跑上面两条 mpremote 命令。
 
 ```bash
-# Python 3.12: C:\Users\W\AppData\Local\Programs\Python\Python312\python.exe
+# 假设 python 在 PATH 中; COM3 换成实际串口号
 python -m mpremote connect COM3 cp main.py :main.py
 python -m mpremote connect COM3 exec 'import machine; machine.reset()'
 ```

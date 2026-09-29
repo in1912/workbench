@@ -16,9 +16,7 @@ echo.
 rem ---- 1. find pythonw ----
 set "PYW="
 where pythonw >nul 2>nul && for /f "delims=" %%i in ('where pythonw') do set "PYW=%%i"
-if not defined PYW (
-  if exist "C:\Users\W\AppData\Local\Programs\Python\Python312\pythonw.exe" set "PYW=C:\Users\W\AppData\Local\Programs\Python\Python312\pythonw.exe"
-)
+if not defined PYW for %%v in (313 312 311 310 39) do if not defined PYW if exist "%LOCALAPPDATA%\Programs\Python\Python%%v\pythonw.exe" set "PYW=%LOCALAPPDATA%\Programs\Python\Python%%v\pythonw.exe"
 if not defined PYW (
   echo [X] pythonw not found. Install Python 3.9+ (64-bit) first, then run this again.
   pause & exit /b 1
