@@ -43,9 +43,9 @@ router.use(express.json());
 // ---------- 系统信息（免登录：登录页/标题需要显示系统名称；系统键永在主库） ----------
 router.get('/system-info', (req, res) => {
   res.json({
-    name: getSetting('system_name', '完全能工作台'),
+    name: getSetting('system_name', '全能工作台'),
     name_en: getSetting('system_name_en', 'Workbench'),
-    version: getSetting('current_version', '') || 'v1.6.3',
+    version: getSetting('current_version', '') || 'v1.8.0',
   });
 });
 // 保存系统名称（管理员：系统级配置全员可见）
@@ -261,11 +261,16 @@ router.post('/emails/:id/move', (req, res) => {
   }
   res.json({ ok: true });
 });
-// 发送邮件（SMTP）
-router.post('/emails/send', async (req, res) => {
+// 发送邮件（SMTP；multipart 可带附件，v1.7.1——前端 FormData，字段名 attachments，单个 ≤20MB、最多 10 个）
+router.post('/emails/send', upload.array('attachments', 10), async (req, res) => {
   try {
     const { to, cc, subject, text, draftId, accountId } = req.body || {};
-    const r = await emailService.sendMail(req.tdb, { to, cc, subject, text, accountId });
+    const attachments = (req.files || []).map((f) => ({
+      filename: fixMojibakeName(f.originalname),
+      contentType: f.mimetype,
+      buf: f.buffer,
+    }));
+    const r = await emailService.sendMail(req.tdb, { to, cc, subject, text, accountId, attachments });
     if (draftId) req.tdb.prepare('DELETE FROM emails WHERE id=? AND folder=?').run(Number(draftId), 'draft');
     res.json(r);
   } catch (e) {

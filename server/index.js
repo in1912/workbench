@@ -4,7 +4,7 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const express = require('express');
-const { db, onImported, getTenantDb, dataDir, getSetting } = require('./db');
+const { onImported, getTenantDb, dataDir } = require('./db');
 const ipBan = require('./services/ipBanService');
 const auth = require('./auth');
 const coreRoutes = require('./routes/core');
@@ -18,9 +18,7 @@ const vstudyRoutes = require('./routes/vstudyRoutes');
 const pianoRoutes = require('./routes/pianoRoutes');
 const vibeRoutes = require('./routes/vibeRoutes');
 const wishRoutes = require('./routes/wishRoutes');
-const mbtiRoutes = require('./routes/mbtiRoutes');
-const depRoutes = require('./routes/depRoutes');
-const proRoutes = require('./routes/proRoutes');
+// 三大测试中心（mbti/dep/pro）v1.8.0 已随「私有项目」页整体移除，迁至独立项目 Private_Mini
 const sslRoutes = require('./routes/sslRoutes');
 const monitorRoutes = require('./routes/monitorRoutes');
 const mihomeRoutes = require('./routes/mihomeRoutes');
@@ -64,13 +62,9 @@ app.use((req, res, next) => {
 
 // 全局认证：除登录/健康检查外，所有 /api 接口都需要登录；并校验页面权限
 // 注意：req.path 在挂载于 /api 的中间件中是相对路径（如 /auth/login、/health）
-// 匹配规则：全等，或 req.path 以 条目+/ 开头（支持 /mbti/public/<动态档案ID> 这类免登录前缀）
-// /mbti 写入口也免登录（v1.2.25）：H5 测试者多用手机直接打开、未登录工作台，档案号(uid)即写入凭证；
-// 管理端点(列表/授权/删除/配置)不在名单内，且路由内另有 adminOnly 双保险
+// 匹配规则：全等，或 req.path 以 条目+/ 开头
+// （v1.8.0：mbti/dep/pro 测试中心免登录前缀已随「私有项目」页移除，迁至独立项目 Private_Mini）
 const EXEMPT = ['/auth/login', '/health', '/tile', '/map-static', '/system-info', '/dingtalk/bind/callback', '/auth/dingtalk-info', '/auth/dingtalk/login',
-  '/mbti/public', '/mbti/records', '/mbti/user-info', '/mbti/ai-auth', '/mbti/ai-analysis', '/mbti/gate',
-  '/dep/public', '/dep/records', '/dep/user-info', '/dep/ai-auth', '/dep/ai-analysis', '/dep/gate',
-  '/pro/public', '/pro/records', '/pro/user-info', '/pro/ai-auth', '/pro/ai-analysis', '/pro/gate',
   '/monitor/agent/config', '/monitor/agent/shot',
   '/clipboard/agent-register', '/clipboard/agent-push', // 剪贴板采集代理（key+uid 即凭证：登记/推送，v1.6.2）
   '/vibe/client-download', '/vibe/client-register', '/vibe/job', // 录音转写客户端（key 即凭证：引擎下发/登记回连/拉取模式领任务回传结果）
@@ -104,9 +98,6 @@ app.use('/api', vstudyRoutes);
 app.use('/api', pianoRoutes);
 app.use('/api', vibeRoutes);
 app.use('/api', wishRoutes);
-app.use('/api', mbtiRoutes);
-app.use('/api', depRoutes);
-app.use('/api', proRoutes);
 app.use('/api', monitorRoutes);
 app.use('/api', mihomeRoutes);
 app.use('/api/ssl', sslRoutes);
@@ -115,16 +106,6 @@ app.use('/api/ssl', sslRoutes);
 app.get('/api/health', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.json({ ok: true, time: new Date().toISOString() });
-});
-
-// 心理测试三中心对外开关（v1.3.2）：关闭后 H5 静态页（含免登录分享链接）对所有人 403；
-// 免登录 API 的同名校验在各中心路由内兜底（防绕过静态直打接口）。开关在「效率工具」各测试 tab。
-app.use((req, res, next) => {
-  const m = req.path.match(/^\/(mbti|dep|pro)(?:\/|$)/);
-  if (m && String(getSetting(db, m[1] + '_enabled', '1') || '1') === '0') {
-    return res.status(403).type('text/html').send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:40px;text-align:center;color:#555"><h2>🚫 测试已停用</h2><p>该测试中心当前未对外开放，请联系管理员开启。</p></body>');
-  }
-  next();
 });
 
 // 托管前端构建产物：web/dist 下可能累积多个时间戳子目录，每次请求时解析最新的（重建前端后无需重启服务）

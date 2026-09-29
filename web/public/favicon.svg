@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 261.76 226.69">
+  <!-- 全能工作台 favicon：Vue 官方标志的单色版（内外双 V 以 evenodd 镂空，跟随明暗标签栏均可辨） -->
+  <style>
+    @media (prefers-color-scheme: dark) { .v { fill: #4fc08d; } }
+  </style>
+  <path class="v" fill="#35495e" fill-rule="evenodd" d="M161.096.001l-30.225 52.351L100.647.001H-.005l130.877 226.688L261.749.001zM161.096.001l-30.225 52.351L100.647.001H52.346l78.526 136.01L209.398.001z"/>
+</svg>

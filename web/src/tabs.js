@@ -43,13 +43,7 @@ export const TAB_DEFS = {
   ],
   // 业务系统改名「推送任务」并入效率工具（2026-09 v1.7.0）；tab 键不变（sys/skill/push/config）
   // 个人账务（原独立页）→ family 页 tab；此处不再有独立 business/pay 页定义
-  // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从「效率工具」页移入
-  // H5 分别嵌 /dep/index.html、/pro/index.html、/mbti/index.html；管理列表与分享前缀配置在各 tab
-  private: [
-    { key: 'dep', label: '抑郁测试' },
-    { key: 'pro', label: '心理测试' },
-    { key: 'mbti', label: '职业测试' },
-  ],
+  // v1.8.0：「私有项目」页（dep/pro/mbti 三大测试中心）整体移除，迁至独立项目 Private_Mini
   tools: [
     // 智作平台（文案库）排第一（2026-09 v1.6.2）：iframe 嵌入同源 /zhizu/，自带登录与角色体系
     { key: 'zhizu', label: '智作平台' },

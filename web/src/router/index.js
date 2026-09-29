@@ -11,8 +11,8 @@ const routes = [
   { path: '/family', component: () => import('../views/Family.vue'), meta: { title: '家庭管理', page: 'family' } },
   { path: '/learning', component: () => import('../views/Learning.vue'), meta: { title: '学习', page: 'learning' } },
   { path: '/tools', component: () => import('../views/Tools.vue'), meta: { title: '效率工具', page: 'tools' } },
-  // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从效率工具移入；旧地址 /tools?tab=dep 等回落到本页
-  { path: '/private', component: () => import('../views/Private.vue'), meta: { title: '私有项目', page: 'private' } },
+  // 「私有项目」页 v1.8.0 整体移除（三大测试中心迁至独立项目 Private_Mini）；旧地址回落首页
+  { path: '/private', redirect: '/' },
   // v1.7.0 模块重组：业务系统(→效率工具·推送任务)/文件存档/全局搜索/个人账务/用户管理
   // 不再是独立页面，旧地址带 tab 参数重定向到新位置
   { path: '/business', redirect: (to) => ({ path: '/tools', query: { ...to.query, tab: 'business' } }) },

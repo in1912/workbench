@@ -52,7 +52,9 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'private', 'ai', 'pets', 'smarthome', 'settings'];
+const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'pets', 'smarthome', 'settings'];
+// v1.8.0：「私有项目」页（mbti/dep/pro 三大测试中心）已整体移除，迁至独立项目 Private_Mini；
+// 历史 allowed_pages/allowed_tabs 里残留的 'private' 键无害（不再有页面/接口映射到它）
 
 function pageForPath(p) {
   if (p.startsWith('/overview')) return 'dashboard';
@@ -72,10 +74,7 @@ function pageForPath(p) {
   if (p.startsWith('/tts')) return null;
   if (p.startsWith('/vstudy')) return 'learning'; // 视频教学（目录/播放/记录/设置/学时流水）归学习页
   if (p.startsWith('/clipboard') || p.startsWith('/links')) return 'tools';
-  // 三大测试中心移入新页「私有项目」（2026-09 v1.6.2；免登录的 /xxx/public/* 在 EXEMPT，不经过这里）
-  if (p.startsWith('/mbti')) return 'private'; // 职业测试（MBTI H5 同步/管理）
-  if (p.startsWith('/dep')) return 'private'; // 抑郁测试中心（/api/dep/*）
-  if (p.startsWith('/pro')) return 'private'; // 专业心理测试中心（/api/pro/*）
+  // mbti/dep/pro 测试中心接口 v1.8.0 已随「私有项目」页卸载（迁至独立项目 Private_Mini），不再映射
   if (p.startsWith('/monitor')) return 'tools'; // Computer monitoring (v1.3.5): Tools page last tab, bound to tools page permission (otherwise any logged-in user could read screenshots)
   // 智能家居（v1.6.8）：米家设备总览/属性读写/能力描述为页内共享；
   // /mihome/callback 在 index.js EXEMPT 免登录名单里（OAuth 回跳无登录态），不经过这里
@@ -152,13 +151,6 @@ const TAB_PATHS = {
     ['wish', ['=/wish/checkin', '=/wish/products']],
     // 心愿卡设置（上传/改/删产品）：受限，独立于 wish tab
     ['wishset', ['/wish/manage']],
-  ],
-  // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从「效率工具」页移入
-  // 三个中心接口同构：档案同步 / 分享前缀 / 管理列表（免登录的 /xxx/public/:id 不经过权限校验）
-  private: [
-    ['dep', ['/dep/records', '/dep/users', '/dep/config']],
-    ['pro', ['/pro/records', '/pro/users', '/pro/config']],
-    ['mbti', ['/mbti/records', '/mbti/users', '/mbti/config']],
   ],
   tools: [
     ['clip', ['/clipboard']],

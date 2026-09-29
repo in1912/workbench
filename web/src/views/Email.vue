@@ -13,28 +13,32 @@
       </template>
       <button v-if="canTab('email','contacts')" :class="{active: tab==='contacts'}" @click="openContacts">通讯录</button>
       <button v-if="canTab('email','esettings')" :class="{active: tab==='esettings'}" @click="openSettings">邮箱设置</button>
-      <button v-if="tab!=='contacts' && tab!=='esettings' && canTab('email','mail')" class="primary" style="margin-left:auto" @click="openCompose()">✉ 写邮件</button>
     </div>
 
     <!-- ============ 邮箱账号视图：文件夹 + 列表 ============ -->
     <template v-if="tab==='mail'">
-      <!-- 文件夹行：全部操作按钮统一在本行尾部（v1.7.0 任务4） -->
+      <!-- 文件夹行（v1.8.0）：文件夹 tab 靠左；全部操作按钮锁定固定在标题行最右端（不换行、不随内容漂移）。
+           写邮件按钮放进各邮箱 tab 内：在哪个邮箱的 tab 里点，就用哪个邮箱发件 -->
       <div class="folder-bar">
-        <button :class="{on: folder==='inbox'}" @click="goFolder('inbox')">收件箱<span v-if="counts.inbox" class="fb-n">{{ counts.inbox }}</span></button>
-        <button :class="{on: folder==='sent'}" @click="goFolder('sent')">发件箱</button>
-        <button :class="{on: folder==='draft'}" @click="goFolder('draft')">草稿箱</button>
-        <button :class="{on: folder==='trash'}" @click="goFolder('trash')">垃圾箱</button>
-        <span class="grow"></span>
-        <button v-if="folder==='inbox'" class="act" :disabled="loading" @click="fetchMail">{{ loading ? '拉取中...' : '拉取新邮件' }}</button>
-        <button v-if="folder==='inbox'" class="act" :disabled="loading" @click="refetchAtts">补拉附件</button>
-        <button v-if="folder==='trash'" class="act danger" @click="purgeAll">清空垃圾箱</button>
-        <input v-model="searchQ" :placeholder="folder==='sent' || folder==='draft' ? '搜索（主题/收件人/正文）...' : '搜索（主题/发件人/正文）...'" class="fb-search" @keyup.enter="doSearch" />
-        <button class="act" @click="doSearch">搜索</button>
-        <template v-if="folder!=='draft'">
-          <label class="fb-all"><input type="checkbox" :checked="allChecked" @change="toggleAll" /> 全选</label>
-          <button v-if="folder==='inbox'" class="act" :disabled="!selected.size" @click="batchSeen">已读{{ selected.size ? `(${selected.size})` : '' }}</button>
-          <button class="act danger" :disabled="!selected.size" @click="batchDelete">{{ folder==='trash' ? '彻底删除' : '删除' }}{{ selected.size ? `(${selected.size})` : '' }}</button>
-        </template>
+        <div class="fb-tabs">
+          <button :class="{on: folder==='inbox'}" @click="goFolder('inbox')">收件箱<span v-if="counts.inbox" class="fb-n">{{ counts.inbox }}</span></button>
+          <button :class="{on: folder==='sent'}" @click="goFolder('sent')">发件箱</button>
+          <button :class="{on: folder==='draft'}" @click="goFolder('draft')">草稿箱</button>
+          <button :class="{on: folder==='trash'}" @click="goFolder('trash')">垃圾箱</button>
+        </div>
+        <div class="fb-acts">
+          <button class="act fb-compose" @click="openCompose()">✉ 写邮件</button>
+          <button v-if="folder==='inbox'" class="act" :disabled="loading" @click="fetchMail">{{ loading ? '拉取中...' : '拉取新邮件' }}</button>
+          <button v-if="folder==='inbox'" class="act" :disabled="loading" @click="refetchAtts">补拉附件</button>
+          <button v-if="folder==='trash'" class="act danger" @click="purgeAll">清空垃圾箱</button>
+          <input v-model="searchQ" :placeholder="folder==='sent' || folder==='draft' ? '搜索（主题/收件人/正文）...' : '搜索（主题/发件人/正文）...'" class="fb-search" @keyup.enter="doSearch" />
+          <button class="act" @click="doSearch">搜索</button>
+          <template v-if="folder!=='draft'">
+            <label class="fb-all"><input type="checkbox" :checked="allChecked" @change="toggleAll" /> 全选</label>
+            <button v-if="folder==='inbox'" class="act" :disabled="!selected.size" @click="batchSeen">已读{{ selected.size ? `(${selected.size})` : '' }}</button>
+            <button class="act danger" :disabled="!selected.size" @click="batchDelete">{{ folder==='trash' ? '彻底删除' : '删除' }}{{ selected.size ? `(${selected.size})` : '' }}</button>
+          </template>
+        </div>
       </div>
 
       <div class="card">
@@ -71,7 +75,7 @@
               <div class="muted" style="font-size:12px; margin-bottom:4px">附件（{{ attsOf(m).length }} 个{{ attachDir ? '' : '，未配置存储目录，仅登记' }}）</div>
               <div v-for="(a, i) in attsOf(m)" :key="i" style="font-size:12.5px; margin-bottom:2px">
                 <a v-if="a.stored" class="link" style="cursor:pointer" @click.prevent="dlAtt(m, i)">{{ a.filename }}</a>
-                <span v-else class="muted">{{ a.filename }}（未落盘）</span>
+                <span v-else class="muted">{{ a.filename }}{{ folder === 'inbox' ? '（未落盘）' : '' }}</span>
                 <span class="muted"> · {{ fmtSize(a.size) }}</span>
               </div>
             </div>
@@ -224,15 +228,18 @@
       </div>
     </div>
 
-    <!-- ============ 写信弹窗 ============ -->
+    <!-- ============ 写信弹窗（v1.8.0：放大版 + 附件上传 + 直显发件地址） ============ -->
     <div v-if="compose.show" class="modal-backdrop" @click.self="compose.show = false">
-      <div class="modal" style="width:min(640px, 94vw)">
+      <div class="modal compose-modal">
         <h3>{{ compose.draftId ? '编辑草稿' : '写邮件' }}</h3>
-        <div class="form-row" v-if="smtpAccounts.length > 1">
+        <div class="form-row">
           <label>发件账号</label>
-          <select v-model="compose.accountId">
-            <option v-for="a in smtpAccounts" :key="a.id" :value="a.id">{{ a.label }}（{{ a.smtp_user }}）</option>
-          </select>
+          <div class="row" style="flex-wrap:wrap; gap:8px; align-items:center">
+            <select v-model="compose.accountId" style="max-width:320px">
+              <option v-for="a in smtpAccounts" :key="a.id" :value="a.id">{{ a.label }}（{{ a.smtp_user }}）</option>
+            </select>
+            <span class="muted" style="font-size:12.5px">发件地址：{{ composeFrom }}</span>
+          </div>
         </div>
         <div class="form-row">
           <label>收件人（多个用逗号分隔）</label>
@@ -251,7 +258,20 @@
         <div class="form-row"><label>主题</label><input v-model="compose.subject" placeholder="邮件主题" /></div>
         <div class="form-row">
           <label>正文（发送时自动附加该账号配置的签名）</label>
-          <textarea v-model="compose.text" rows="9" placeholder="正文内容..."></textarea>
+          <textarea v-model="compose.text" rows="14" placeholder="正文内容..."></textarea>
+        </div>
+        <div class="form-row">
+          <label>附件（可选，最多 10 个、合计 ≤20MB）</label>
+          <div class="row" style="flex-wrap:wrap; gap:8px; align-items:center">
+            <label class="att-pick">
+              <input type="file" multiple style="display:none" @change="onPickFiles" />
+              📎 添加附件
+            </label>
+            <span v-for="(f, i) in compose.files" :key="i" class="att-chip" :title="f.name">
+              {{ f.name }} <span class="muted" style="font-size:11px">{{ fmtSize(f.size) }}</span>
+              <a class="link" style="cursor:pointer; margin-left:4px" @click="compose.files.splice(i, 1)">✕</a>
+            </span>
+          </div>
         </div>
         <div class="row" style="justify-content:flex-end; gap:8px; margin-top:12px">
           <button class="small" @click="compose.show = false">取消</button>
@@ -309,7 +329,7 @@ const contacts = ref([]);
 const ct = ref({ name: '', email: '', remark: '' });
 const ctSearch = ref('');
 
-const compose = ref({ show: false, draftId: 0, accountId: 0, to: '', cc: '', subject: '', text: '' });
+const compose = ref({ show: false, draftId: 0, accountId: 0, to: '', cc: '', subject: '', text: '', files: [] });
 const picker = ref({ show: false, field: 'to' });
 const accModal = ref({ show: false, id: 0, label: '', imap_host: '', imap_port: 993, imap_user: '', imap_pass: '', use_tls: true, smtp_host: '', smtp_port: 465, smtp_user: '', smtp_pass: '', smtp_tls: true, smtp_from_name: '', signature: '', refresh_minutes: 20, trash_keep_days: 30, has_imap_pass: false, has_smtp_pass: false });
 const notify = ref({ popup: true, sound: false });
@@ -322,6 +342,12 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.v
 const folderName = computed(() => ({ inbox: '收件箱', sent: '发件箱', draft: '草稿箱', trash: '垃圾箱' })[folder.value]);
 const allChecked = computed(() => mails.value.length > 0 && mails.value.every((m) => selected.value.has(m.id)));
 const smtpAccounts = computed(() => accounts.value.filter((a) => a.smtp_host && a.smtp_user));
+// 写信弹窗直显的发件地址（v1.8.0 任务7：默认显示当前邮箱的发件地址）
+const composeFrom = computed(() => {
+  const a = smtpAccounts.value.find((x) => x.id === compose.value.accountId);
+  if (!a) return '（该账号未配置 SMTP，请到「邮箱设置」补全发件服务器）';
+  return a.smtp_from_name ? `${a.smtp_from_name} <${a.smtp_user}>` : a.smtp_user;
+});
 
 function flash(text, type = 'ok') { msg.value = text; msgType.value = type; setTimeout(() => (msg.value = ''), 4000); }
 
@@ -475,11 +501,18 @@ async function purgeAll() {
 }
 
 // ---------- 写信 ----------
+// 发件账号解析（v1.8.0 任务6/7）：默认 = 当前所在邮箱 tab 的账号（写邮件按钮就在该 tab 内），
+// 该账号没配 SMTP 时回落到第一个可发件账号；全部没配则 0（弹窗里显示未配置提示）
+function resolveAccountId() {
+  if (acc.value && smtpAccounts.value.some((a) => a.id === acc.value)) return acc.value;
+  return smtpAccounts.value[0] ? smtpAccounts.value[0].id : 0;
+}
 function openCompose(draft) {
+  const aid = resolveAccountId();
   if (draft) {
-    compose.value = { show: true, draftId: draft.id, accountId: acc.value, to: draft.to_addr || '', cc: '', subject: draft.subject || '', text: draft.body || '' };
+    compose.value = { show: true, draftId: draft.id, accountId: aid, to: draft.to_addr || '', cc: '', subject: draft.subject || '', text: draft.body || '', files: [] };
   } else {
-    compose.value = { show: true, draftId: 0, accountId: acc.value, to: '', cc: '', subject: '', text: '' };
+    compose.value = { show: true, draftId: 0, accountId: aid, to: '', cc: '', subject: '', text: '', files: [] };
   }
 }
 function mailTo(c) {
@@ -493,12 +526,24 @@ function applyPick(c) {
   compose.value[picker.value.field] = cur ? cur + ', ' + c.email : c.email;
   picker.value.show = false;
 }
+// 附件选择（v1.8.0 任务7）：多选、最多 10 个；同名直接并列（发送时按文件本体为准）
+function onPickFiles(e) {
+  const picked = [...(e.target.files || [])];
+  e.target.value = '';
+  const room = 10 - compose.value.files.length;
+  if (picked.length > room) { flash(`最多 10 个附件，只添加了前 ${Math.max(room, 0)} 个`, 'err'); }
+  for (const f of picked.slice(0, Math.max(room, 0))) compose.value.files.push(f);
+}
 async function send() {
   const c = compose.value;
   if (!c.to.trim()) { flash('请填写收件人', 'err'); return; }
+  if (!smtpAccounts.value.length) { flash('当前没有配置了 SMTP 的邮箱账号，请先到「邮箱设置」填写发件服务器', 'err'); return; }
   sending.value = true;
   try {
-    await api.post('/emails/send', { to: c.to, cc: c.cc, subject: c.subject, text: c.text, draftId: c.draftId || undefined, accountId: c.accountId || acc.value || undefined });
+    // multipart 发送（v1.8.0）：正文/主题等是表单字段，附件是文件字段
+    await api.upload('/emails/send',
+      { to: c.to, cc: c.cc, subject: c.subject, text: c.text, accountId: c.accountId || undefined, draftId: c.draftId || undefined },
+      c.files.map((f) => ({ name: 'attachments', file: f })));
     flash('发送成功 ✓');
     compose.value.show = false;
     folder.value = 'sent';
@@ -511,7 +556,7 @@ async function saveDraft() {
   const c = compose.value;
   try {
     await api.post('/emails/draft', { id: c.draftId || undefined, to: c.to, cc: c.cc, subject: c.subject, text: c.text, accountId: c.accountId || acc.value || undefined });
-    flash('草稿已保存');
+    flash(c.files.length ? '草稿已保存（附件不随草稿保存，发送时才上传）' : '草稿已保存');
     compose.value.show = false;
   } catch (e) { flash('保存草稿失败：' + e.message, 'err'); }
 }
@@ -687,16 +732,32 @@ onMounted(async () => {
 
 <style scoped>
 .page-select { padding: 4px 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); border-radius: 6px; font-size: 13px; }
-/* 文件夹行：tab + 操作按钮统一排在行尾（v1.7.0） */
-.folder-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.folder-bar > button { padding: 5px 12px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; font-size: 13.5px; }
-.folder-bar > button.on { background: rgba(79, 124, 247, .14); border-color: rgba(79, 124, 247, .4); font-weight: 600; }
-.folder-bar > button.act { border: 1px solid var(--border); background: var(--bg2); font-size: 12.5px; padding: 4px 10px; }
-.folder-bar > button.act:disabled { opacity: .5; cursor: not-allowed; }
-.folder-bar > button.danger { color: #e05454; border-color: rgba(224, 84, 84, .45); }
+/* 文件夹行（v1.8.0 任务5）：tab 组靠左；操作按钮组 margin-left:auto 锁定在标题行最右端——
+   整行不换行（按钮不会掉到第二行），窄屏时两组各自横向滚动，按钮始终贴行尾固定不漂移 */
+.folder-bar { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; margin-bottom: 12px; min-width: 0; }
+.fb-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; flex-shrink: 1; }
+.fb-tabs::-webkit-scrollbar { display: none; }
+.fb-tabs > button { padding: 5px 12px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; font-size: 13.5px; white-space: nowrap; }
+.fb-tabs > button.on { background: rgba(79, 124, 247, .14); border-color: rgba(79, 124, 247, .4); font-weight: 600; }
+.fb-acts { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; flex-shrink: 0; max-width: 78vw; overflow-x: auto; scrollbar-width: none; }
+.fb-acts::-webkit-scrollbar { display: none; }
+.folder-bar button.act { border: 1px solid var(--border); background: var(--bg2); font-size: 12.5px; padding: 4px 10px; white-space: nowrap; flex-shrink: 0; }
+.folder-bar button.act:disabled { opacity: .5; cursor: not-allowed; }
+.folder-bar button.danger { color: #e05454; border-color: rgba(224, 84, 84, .45); }
+/* 写邮件（操作组第一个按钮，主色底突出；在哪个邮箱 tab 里点就用哪个邮箱发） */
+.folder-bar button.fb-compose { background: rgba(79, 124, 247, .9); border-color: transparent; color: #fff; font-weight: 600; }
+.folder-bar button.fb-compose:hover { background: rgba(79, 124, 247, 1); }
 .fb-n { background: rgba(79, 124, 247, .16); border-radius: 8px; padding: 0 7px; margin-left: 5px; font-size: 11.5px; }
-.fb-search { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; font-size: 13px; width: 220px; max-width: 40vw; }
-.fb-all { display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.fb-search { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; font-size: 13px; width: 200px; flex-shrink: 0; }
+.fb-all { display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+/* 写信弹窗（v1.8.0 任务7）：放大版——宽 880px、正文加高，附件选择与已选清单内嵌 */
+.compose-modal { width: min(880px, 96vw); max-height: 92vh; overflow-y: auto; }
+.compose-modal textarea { min-height: 260px; font-size: 14px; line-height: 1.65; }
+.att-pick { display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px; border-radius: 8px; cursor: pointer;
+  border: 1px dashed var(--border); color: var(--text); font-size: 12.5px; white-space: nowrap; }
+.att-pick:hover { border-color: rgba(79, 124, 247, .55); background: rgba(79, 124, 247, .08); }
+.att-chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 8px; font-size: 12.5px;
+  border: 1px solid var(--border); background: var(--bg2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 两列列表：第一列发件人姓名（固定宽），第二列主题 */
 .mail-row { gap: 10px; }
 .mail-from { width: 110px; flex-shrink: 0; font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

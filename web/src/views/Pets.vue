@@ -216,10 +216,11 @@
                 <input v-model.number="cfgForm.affection[k]" type="number" step="0.01" :disabled="!isAdmin" style="width:90px">
               </label>
             </div>
-            <!-- v1.7.0：管理员页面隐藏他人归属的宠物（只看自己创建/被分配的，避免全员宠物混在一起） -->
+            <!-- v1.7.1：宠物可见性统一只认「宠物分配」名单，管理员默认也只看自己创建/被分配的；
+                 此开关仅在需要代管全家宠物时打开 -->
             <label v-if="isAdmin" class="row small" style="gap:6px; margin-top:12px; cursor:pointer; align-items:center">
-              <input v-model="cfgForm.admin_hide_others" type="checkbox" style="width:auto" />
-              管理员只看自己的宠物（隐藏他人创建/分配给别人的宠物，我的页面不再混入全家的宠物）
+              <input v-model="cfgForm.admin_show_all" type="checkbox" style="width:auto" />
+              管理员显示全部宠物（默认关闭：谁在「宠物分配」里被勾选，谁页面上才显示该宠物）
             </label>
             <button v-if="isAdmin" class="primary small" style="margin-top:10px" :disabled="saving" @click="saveConfig">{{ saving ? '保存中…' : '保存参数' }}</button>
           </template>
@@ -560,7 +561,7 @@ function openSettings() {
   const c = config.value;
   for (const f of CFG_FIELDS) cfgForm[f.key] = c[f.key];
   cfgForm.affection = { ...(c.affection || {}) };
-  cfgForm.admin_hide_others = !!c.admin_hide_others; // v1.7.0 管理员隐藏他人宠物
+  cfgForm.admin_show_all = !!c.admin_show_all; // v1.7.1 管理员例外显示全部宠物（默认关=只看分配表里有的）
 }
 async function saveConfig() {
   saving.value = true;

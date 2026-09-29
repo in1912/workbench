@@ -62,7 +62,33 @@ export const api = {
   del: (url) => request('DELETE', url),
   download,
   blob: postBlob,
+  upload,
 };
+
+// 带登录令牌的 multipart 上传（fields 普通字段 + files: [{name, file}] 文件字段）。
+// FormData 由浏览器自动设 Content-Type/boundary，这里不能再手工指定 JSON 头。
+async function upload(url, fields = {}, files = []) {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== undefined && v !== null && v !== '') fd.append(k, v);
+  }
+  for (const f of files) fd.append(f.name, f.file, f.file.name);
+  const res = await fetch(base + url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: fd,
+    signal: AbortSignal.timeout(300000),
+  });
+  if (res.status === 401) {
+    localStorage.removeItem('wb_token');
+    localStorage.removeItem('wb_user');
+    if (!location.hash.includes('/login')) location.hash = '#/login';
+    throw new Error('登录已过期，请重新登录');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `上传失败 (${res.status})`);
+  return data;
+}
 
 // 带登录令牌取二进制（语音合成返回 audio/wav）。
 // 超时放宽到 5 分钟：首次合成可能包含引擎冷启动 + 首次模型加载。

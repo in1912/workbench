@@ -596,7 +596,22 @@ async function smtpConnect(cfg) {
   }
 }
 
-function buildMime({ from, fromName, to, cc, subject, text, signature }) {
+// 附件名编码：ASCII 直接放 filename=；中文等非 ASCII 用 RFC 2231 续段（filename*=UTF-8''…），
+// 同时给老客户端一个 ASCII 兜底名（取扩展名拼接），两边都能正确显示
+function attNameHeaders(name) {
+  const n = String(name || 'attachment').replace(/[\r\n"]/g, '');
+  const ext = (n.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0];
+  const ascii = /^[\x20-\x7e]+$/.test(n) ? n : `attachment${ext}`;
+  const ct = `Content-Type: application/octet-stream`;
+  return {
+    type: /^[\x20-\x7e]+$/.test(n) ? `${ct}; name="${n}"` : `${ct}; name*=UTF-8''${encodeURIComponent(n)}`,
+    disp: /^[\x20-\x7e]+$/.test(n)
+      ? `Content-Disposition: attachment; filename="${n}"`
+      : `Content-Disposition: attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(n)}`,
+  };
+}
+
+function buildMime({ from, fromName, to, cc, subject, text, signature, attachments }) {
   const boundary = '----wb_' + crypto.randomBytes(8).toString('hex');
   const dateStr = new Date().toUTCString();
   const msgId = `<${Date.now()}.${crypto.randomBytes(6).toString('hex')}@workbench>`;
@@ -618,20 +633,36 @@ function buildMime({ from, fromName, to, cc, subject, text, signature }) {
     '',
     b64(fullText).replace(/(.{76})/g, '$1\r\n'),
     '',
-    `--${boundary}--`,
-    '',
   ];
+  // 附件段（v1.7.1 写信支持上传附件）：每段独立 base64 编码、按 76 列折行（RFC 2045）
+  for (const a of Array.isArray(attachments) ? attachments : []) {
+    if (!a || !a.buf || !a.buf.length) continue;
+    const h = attNameHeaders(a.filename);
+    lines.push(
+      `--${boundary}`,
+      h.type,
+      'Content-Transfer-Encoding: base64',
+      h.disp,
+      '',
+      a.buf.toString('base64').replace(/(.{76})/g, '$1\r\n'),
+      '',
+    );
+  }
+  lines.push(`--${boundary}--`, '');
   return lines.join('\r\n');
 }
 
-async function sendMail(d, { to, cc, subject, text, accountId }) {
+async function sendMail(d, { to, cc, subject, text, accountId, attachments }) {
   const cfg = getAccount(d, Number(accountId) || 1) || {};
   if (!cfg.smtp_host || !cfg.smtp_user || !cfg.smtp_pass) {
     throw new Error('SMTP 尚未配置，请先在「邮箱设置」里填写发件服务器');
   }
   if (!to || !to.trim()) throw new Error('收件人不能为空');
+  const atts = (Array.isArray(attachments) ? attachments : []).filter((a) => a && a.buf && a.buf.length);
+  const total = atts.reduce((s, a) => s + a.buf.length, 0);
+  if (total > 20 * 1024 * 1024) throw new Error('附件总大小超过 20MB 上限');
   const fromName = cfg.smtp_from_name || cfg.imap_user || cfg.smtp_user;
-  const body = buildMime({ from: cfg.smtp_user, fromName, to, cc, subject, text, signature: cfg.signature || '' });
+  const body = buildMime({ from: cfg.smtp_user, fromName, to, cc, subject, text, signature: cfg.signature || '', attachments: atts });
   const { c } = await smtpConnect(cfg);
   try {
     await c.cmd(`MAIL FROM:<${cfg.smtp_user}>`);
@@ -642,9 +673,10 @@ async function sendMail(d, { to, cc, subject, text, accountId }) {
     const safe = body.replace(/(^|\r?\n)\./g, '$1..');
     await c.cmd(safe + '\r\n.');
     await c.cmd('QUIT');
-    // 存入发件箱（归属发件账号）
-    d.prepare(`INSERT INTO emails(account_id,uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(?,NULL,?,?,?,?,1,?,'sent')`)
-      .run(cfg.id || 1, subject || '', cfg.smtp_user, to, new Date().toISOString(), body);
+    // 存入发件箱（归属发件账号；附件登记文件名/大小，列表可显示「附件 N」标签）
+    const attMeta = atts.map((a) => ({ filename: a.filename, size: a.buf.length }));
+    d.prepare(`INSERT INTO emails(account_id,uid,subject,from_addr,to_addr,date,seen,body,attachments,folder) VALUES(?,NULL,?,?,?,?,1,?,?,'sent')`)
+      .run(cfg.id || 1, subject || '', cfg.smtp_user, to, new Date().toISOString(), body, JSON.stringify(attMeta));
     return { ok: true };
   } finally {
     c.close();
