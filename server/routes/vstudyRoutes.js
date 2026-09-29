@@ -99,6 +99,15 @@ router.get('/vstudy/tree', (req, res) => {
   res.json({ dir: String(req.query.dir || ''), entries });
 });
 
+// ---------- 外部播放器联动注册脚本（potplayer:// vlc:// 协议，写 HKCU 免管理员） ----------
+// 页面「PotPlayer / VLC 播放」按钮首次使用前下载双击：自动探测已装播放器并注册协议，
+// 之后点按钮浏览器即调起本地播放器直接播服务器直链（?token= 鉴权 + Range 均已支持）。
+router.get('/vstudy/extplayer', (req, res) => {
+  const p = path.join(__dirname, '..', 'vstudy-extplayer.cmd');
+  if (!fs.existsSync(p)) return res.status(404).json({ error: '脚本缺失' });
+  res.download(p, 'register-external-player.cmd');
+});
+
 // ---------- 文件流（视频拖动条/FLV 依赖 HTTP Range，必须实现 206 分段） ----------
 // 本地直连：页面源（公网域名）与文件源（局域网地址）不同源——媒体元素加载不受限，
 // 但 flv.js（fetch+Range）与文档解析（fetch+Authorization）跨源读取需要 CORS 放行。

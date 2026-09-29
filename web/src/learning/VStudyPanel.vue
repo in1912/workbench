@@ -101,6 +101,13 @@
               <button class="small" @click="closeMedia">✕ 关闭</button>
             </div>
             <video v-show="curMedia" ref="videoEl" controls controlslist="nodownload" preload="auto" @timeupdate="onTimeUpdate" @play="onPlayStart" @pause="flushMedia" @ended="onEnded"></video>
+            <!-- 外部播放器调起（v1.8.7）：浏览器 <video> 解不动 HEVC 10bit/4K，交给本地播放器硬解 -->
+            <div v-if="curMedia" class="ext-row">
+              <button class="small" @click="openExternal('potplayer')">▶ PotPlayer 播放</button>
+              <button class="small" @click="openExternal('vlc')">▶ VLC 播放</button>
+              <button class="small" @click="copyMediaUrl">🔗 复制直链</button>
+              <span class="muted ext-tip">HEVC / 10bit / 4K 请用外部播放器（浏览器解不动）；首次使用先<a href="#" @click.prevent="dlExtSetup">⬇ 安装联动脚本</a>（自动识别已装的播放器，免管理员）</span>
+            </div>
             <div v-if="!curMedia" class="ph">🎞 视频播放区（mp4 · flv）／ 🎵 音频（mp3）<br><span style="font-size:12px">在左侧目录点击媒体文件开始播放</span></div>
           </div>
 
@@ -331,6 +338,19 @@ function closeMedia() {
   attnCancel();
   attnArmed = false;
 }
+// 外部播放器调起（v1.8.7）：浏览器 <video> 解不动 HEVC 10bit/4K，potplayer:// vlc:// 协议交给本地播放器硬解
+function openExternal(proto) {
+  if (!curMedia.value) return;
+  try { flushMedia(); if (videoEl.value) videoEl.value.pause(); } catch { /* 忽略暂停失败 */ }
+  window.location.href = proto + ':' + fileUrl(curMedia.value.rel);
+}
+async function copyMediaUrl() {
+  if (!curMedia.value) return;
+  const url = fileUrl(curMedia.value.rel);
+  try { await navigator.clipboard.writeText(url); alert('直链已复制，可在 PotPlayer/VLC「打开网络串流」中粘贴'); }
+  catch { prompt('复制以下直链：', url); }
+}
+function dlExtSetup() { api.download('/vstudy/extplayer', 'register-external-player.cmd').catch(() => {}); }
 function onTimeUpdate() {
   const v = videoEl.value;
   if (!v || !track || !curMedia.value) return;
@@ -546,6 +566,10 @@ onBeforeUnmount(() => {
 .zone-head { display: flex; align-items: center; gap: 10px; font-size: 13.5px; margin-bottom: 8px; }
 .zone-head .grow { flex: 1; }
 .player-zone video { width: 100%; max-height: 46vh; background: #000; border-radius: 8px; }
+/* 外部播放器按钮行（v1.8.7）：HEVC 10bit/4K 交给本地播放器 */
+.ext-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0 2px; }
+.ext-row .ext-tip { font-size: 12px; }
+.ext-tip a { color: var(--accent); }
 .doc-zone { flex: 1; min-height: 220px; }
 .ph { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text3); font-size: 14px; min-height: 160px; text-align: center; }
 .ph.err { color: var(--red); white-space: pre-wrap; }
