@@ -20,18 +20,22 @@ if not defined PYW (
   if exist "C:\Users\W\AppData\Local\Programs\Python\Python312\pythonw.exe" set "PYW=C:\Users\W\AppData\Local\Programs\Python\Python312\pythonw.exe"
 )
 if not defined PYW (
-  echo [X] pythonw not found. Install Python 3.12+ first, then run this again.
+  echo [X] pythonw not found. Install Python 3.9+ (64-bit) first, then run this again.
   pause & exit /b 1
 )
 echo [1/5] Python found: %PYW%
 
-rem ---- 2. bleak dependency (check with console python) ----
+rem ---- 2. bleak dependency (offline wheels first, network fallback) ----
 set "PY=%PYW:pythonw.exe=python.exe%"
 "%PY%" -c "import bleak" >nul 2>nul
 if errorlevel 1 (
   echo [2/5] Installing bleak ...
-  "%PY%" -m pip install -q bleak
-  "%PY%" -c "import bleak" >nul 2>nul || (echo [X] bleak install failed, check network. & pause & exit /b 1)
+  if exist "wheels\*.whl" "%PY%" -m pip install -q --no-index --find-links wheels bleak 2>nul
+  "%PY%" -c "import bleak" >nul 2>nul
+  if errorlevel 1 (
+    "%PY%" -m pip install -q bleak
+    "%PY%" -c "import bleak" >nul 2>nul || (echo [X] bleak install failed, check network. & pause & exit /b 1)
+  )
 ) else (
   echo [2/5] bleak OK
 )

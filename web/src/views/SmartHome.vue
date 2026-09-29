@@ -124,7 +124,7 @@
       <div class="card">
         <h3>① 蓝牙连接电脑（日常使用流程，装好一次即可）</h3>
         <ol class="cc-steps">
-          <li>电脑要求：带蓝牙适配器（支持 BLE）；已装 <b>Python 3.12+</b>；装了 <b>Node.js</b> 还可以联动 Claude Code 钩子</li>
+          <li>电脑要求：带蓝牙适配器（支持 BLE）；已装 <b>Python 3.9+（64 位，推荐 3.12）</b>；<b>Node.js 不用单独装</b>——用 Claude Code CLI 就已自带（它本身跑在 Node 上）</li>
           <li>板子通电：任意 USB 充电头 / 充电宝，不需要连电脑</li>
           <li>点下方「打包下载」并解压（单独下载文件的话，把所有文件放同一个文件夹）</li>
           <li>双击 <code>cc-light-install.cmd</code> 一键安装：自动找 Python → 缺 bleak 自动装 → 注册开机自启（任务名
@@ -140,17 +140,16 @@
       </div>
 
       <div class="card">
-        <h3>② 刷机步骤（首次使用 / 更换板子，需 USB 线）</h3>
+        <h3>② 刷机步骤（首次使用 / 更换板子，需 USB 数据线）</h3>
         <ol class="cc-steps">
-          <li>USB 连电脑 → 设备管理器出现「USB 串行设备 (COMx)」，记住这个 COM 号</li>
-          <li>装工具：<code>pip install esptool mpremote</code></li>
-          <li>擦除并刷入 MicroPython 固件（下载区的 .bin）：<br />
-            <code>python -m esptool --chip esp32c3 --port COMx erase_flash</code><br />
-            <code>python -m esptool --chip esp32c3 --port COMx --baud 921600 write_flash 0x0 ESP32_GENERIC_C3-20260824-v1.29.0.bin</code></li>
-          <li>部署灯效程序并重启：<code>python -m mpremote connect COMx cp main.py :main.py</code>，然后按一下板上 RST</li>
-          <li>成功标志：自检红→黄→绿各闪一次 → 自动进入轮播演示</li>
+          <li>USB <b>数据线</b>连电脑（充电线不行）→ 设备管理器出现「USB 串行设备 (COMx)」，记住这个 COM 号</li>
+          <li>双击 <code>flash-firmware.cmd</code> 一键刷机：自动装 esptool / mpremote（<b>打包下载已附带离线安装包 wheels，没网也能装</b>）→ 输入 COM 号 → 确认后自动 擦除 → 刷 MicroPython 固件 → 上传 main.py → 重启板子</li>
+          <li>成功标志：自检红→黄→绿各闪一次 → 自动进入轮播演示；之后拔掉数据线换任意 USB 电源即可</li>
         </ol>
         <div class="muted" style="font-size:12.5px; line-height:1.8">
+          手动方式：<code>pip install esptool mpremote</code> 后执行 <code>python -m esptool --chip esp32c3 --port COMx erase_flash</code>、
+          <code>python -m esptool --chip esp32c3 --port COMx --baud 921600 write_flash 0x0 ESP32_GENERIC_C3-20260824-v1.29.0.bin</code>、
+          <code>python -m mpremote connect COMx cp main.py :main.py</code>，再按一下 RST。<br />
           按键时机：esptool 反复打印 <code>Connecting...</code> 时 = <b>按住 BOOT → 点一下 RST → 松开 BOOT</b> 进下载模式；刷完没反应 = 按一下 RST。<br />
           接线：红=GPIO4、黄=GPIO3、绿=GPIO2、模块公共端→GND（接 3.3V 也可以，固件上电自动识别共阴/共阳）。
         </div>
@@ -171,7 +170,7 @@
           <button class="primary" @click="ccDl('cc-light-uninstall.cmd')">⬇ 下载卸载脚本</button>
         </div>
         <div style="margin-top:8px">
-          <button class="primary" @click="ccDlPack">📦 打包下载全部（cc-light.zip，推荐——含安装/卸载脚本）</button>
+          <button class="primary" @click="ccDlPack">📦 打包下载全部（cc-light.zip 约 10MB，推荐——含安装/卸载/刷机脚本 + 刷机工具离线安装包）</button>
         </div>
         <div class="muted" style="font-size:12.5px; margin-top:8px">
           安装 / 卸载脚本必须与 daemon.py 等文件放同一文件夹（打包下载解压后即满足，直接双击 cc-light-install.cmd）。

@@ -33,8 +33,10 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = Claude Code 工作状态室外灯�
 | `main.py` | 板上固件（MicroPython）：灯效引擎 + BLE 蓝牙服务(广播名 Agent light) |
 | `daemon.py` | 电脑端守护进程：BLE 连接板子 + 监听 UDP 127.0.0.1:7878 + 断线重连 + 看门狗 |
 | `send.js` | 命令发送器：Claude Code 钩子入口（也可手动 `node send.js traffic` 测试） |
+| `flash-firmware.cmd` | 一键刷机：装 esptool/mpremote（优先 wheels 离线装）→ 输 COM 号 → 擦除 → 刷固件 → 传 main.py → 重启 |
 | `install-hooks.js` | 把钩子合并进 `~/.claude/settings.json`（自动备份；`--remove` 卸载） |
 | `start-daemon.cmd` | 守护进程手动启动（双击） |
+| `wheels/` | esptool + mpremote + bleak 全依赖离线 wheel 包（刷机/安装脚本优先用它，没网也能装；仅随打包 zip 附带） |
 | `ESP32_GENERIC_C3-*.bin` | MicroPython 固件备份 |
 | `daemon.log` / `status.json` | 运行日志与当前状态（connected/mode/fw） |
 
@@ -48,7 +50,7 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = Claude Code 工作状态室外灯�
 
 ## 一键安装 / 卸载（推荐）
 
-- **安装**：`cc-light-install.cmd` 与 daemon.py 等文件放同一文件夹（打包下载解压后即满足），双击——自动找 Python、缺 bleak 自动装、注册开机自启任务 `CC-Light-Daemon`、立即启动守护进程；装了 Node.js 会询问是否同时安装 Claude Code 钩子；最后自动读 daemon.log 验证并显示连接结果
+- **安装**：`cc-light-install.cmd` 与 daemon.py 等文件放同一文件夹（打包下载解压后即满足），双击——自动找 Python（3.9+ 64 位）、缺 bleak 自动装（有 `wheels/` 时离线装）、注册开机自启任务 `CC-Light-Daemon`、立即启动守护进程；装了 Node.js 会询问是否同时安装 Claude Code 钩子；最后自动读 daemon.log 验证并显示连接结果。Node.js 无需单独安装——用 Claude Code CLI 的机器已自带
 - **卸载**：双击 `cc-light-uninstall.cmd`——先发熄灯命令、停守护进程、删自启任务、卸载 Claude Code 钩子；文件夹随后手动删除即可（板上固件保留，以后想用再跑安装脚本）
 
 ## 开机自启（可选，二选一）
@@ -65,6 +67,8 @@ schtasks /Run /TN "CC-Light-Daemon"
 **方式 B：启动文件夹** —— `Win+R` 输入 `shell:startup`，把 `start-daemon.cmd` 的快捷方式放进去。
 
 ## 刷机/更新固件（很少需要）
+
+**一键刷机（推荐）**：USB 数据线连板子，双击 `flash-firmware.cmd`——自动装 esptool/mpremote（有 `wheels/` 时离线装）、列出串口、输 COM 号、确认后自动擦除→刷固件→传 main.py→重启。只改 main.py 不动固件时，可单跑上面两条 mpremote 命令。
 
 ```bash
 # Python 3.12: C:\Users\W\AppData\Local\Programs\Python\Python312\python.exe
