@@ -1,6 +1,6 @@
 // CC-LIGHT 指示灯命令发送器 (Claude Code hooks 入口, 兼手动测试)
 // 用法:
-//   node send.js <mode>       直接指定模式 (demo/thinking/ai/busy/success/error/alarm/traffic/off)
+//   node send.js <mode>       直接指定模式 (demo/thinking/ai/busy/success/error/alarm/traffic/all/off)
 //   node send.js post         PostToolUse: 读 stdin 钩子 JSON → 命令失败=error, 否则=ai
 //   node send.js notify       Notification: 读 stdin JSON → 涉及权限确认=alarm
 // 说明: 只发 UDP 给本机守护进程(daemon.py), 不等回复, 快进快出, 不阻塞工具调用。
@@ -59,7 +59,7 @@ if (arg === 'post') {
     if (m) fire(m);
     else process.exit(0);
   });
-} else if (/^(demo|thinking|ai|busy|success|error|alarm|traffic|off)$/.test(arg)) {
+} else if (/^(demo|thinking|ai|busy|success|error|alarm|traffic|all|off)$/.test(arg)) {
   fire(arg);
 } else {
   process.exit(0);

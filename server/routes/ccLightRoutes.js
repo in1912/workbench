@@ -11,9 +11,9 @@ const DIR = path.join(__dirname, '..', 'cc-light');
 
 // 下载区展示顺序 + 说明（与前端 tab 的下载清单一致）
 const FILES = [
-  { name: 'main.py', desc: '板上固件（MicroPython）：9 种灯效 + BLE 蓝牙服务 + 极性自动检测' },
+  { name: 'main.py', desc: '板上固件（MicroPython）：10 种灯效（含三色全亮 all）+ BLE 蓝牙服务 + 极性自动检测' },
   { name: 'daemon.py', desc: '电脑守护进程：BLE 连接板子 + UDP 命令接收 + 断线重连 + 看门狗' },
-  { name: 'send.js', desc: '命令发送器：Claude Code 钩子入口（也可手动 node send.js traffic 测试）' },
+  { name: 'send.js', desc: '命令发送器：Claude Code 钩子入口（也可手动 node send.js all / traffic 测试）' },
   { name: 'flash-firmware.cmd', desc: '一键刷机：自动装 esptool/mpremote（优先用包内 wheels 离线装）→ 输 COM 号 → 擦除 → 刷 MicroPython → 传 main.py → 重启板子——需 USB 数据线连板子' },
   { name: 'cc-light-install.cmd', desc: '一键安装：自动找 Python、缺 bleak 自动装（有 wheels 时离线装）、注册开机自启、启动守护进程（有 Node 还会问是否装钩子）——与程序文件放同一文件夹双击' },
   { name: 'cc-light-uninstall.cmd', desc: '一键卸载：熄灯 + 停守护进程 + 删开机自启任务 + 卸载 Claude Code 钩子' },

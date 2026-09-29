@@ -28,7 +28,7 @@ BLE_NAME_PREFIX = "Agent light"
 UDP_PORT = 7878
 
 MODES = {"demo", "thinking", "ai", "busy", "success",
-         "error", "alarm", "traffic", "off"}
+         "error", "alarm", "traffic", "all", "off"}
 STALE_SEC = {"busy": 1800, "thinking": 900, "ai": 900, "alarm": 1800}
 
 

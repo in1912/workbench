@@ -15,6 +15,7 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = Claude Code 工作状态室外灯�
 | 红灯快闪 error | 工具执行失败(PostToolUse 检测到错误) |
 | 红黄交替警灯 alarm | Claude 等待权限确认(Notification) |
 | 红绿灯循环 traffic | 手动演示模式 |
+| 三色全亮 all | 手动模式（红黄绿同时亮，混白光）：`node send.js all` |
 | 全灭 off | 会话结束(SessionEnd) / 看门狗超时 |
 
 ## 硬件接线（当前已接好）

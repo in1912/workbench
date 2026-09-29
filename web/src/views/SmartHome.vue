@@ -116,6 +116,7 @@
             <tr><td>🔴 红灯快闪</td><td>命令 / 工具执行失败（error）</td></tr>
             <tr><td>🚨 红黄交替警灯</td><td>Claude 等待权限确认（alarm）</td></tr>
             <tr><td>🚦 红绿灯循环</td><td>手动演示模式（traffic）：红3秒→绿3秒→黄1秒</td></tr>
+            <tr><td>⚪ 三色全亮</td><td>手动模式（all）：红黄绿同时亮（混白光），<code>node send.js all</code>，1 分钟后 <code>node send.js demo</code> 恢复</td></tr>
             <tr><td>⚫ 全灭</td><td>会话结束，或看门狗超时自动熄灭（busy 卡 30 分钟等）</td></tr>
           </tbody>
         </table>

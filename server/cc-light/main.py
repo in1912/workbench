@@ -5,7 +5,8 @@
 #       若模块为共阳(公共端→3.3V), 上电自动检测会翻转, 也可 FORCELOW 手动切
 #
 # 模式: demo 开机演示 | thinking 连贯跑马灯 | ai 柔和慢速跑马灯 | busy 黄灯慢闪
-#       success 绿灯常亮 | error 红灯快闪 | alarm 红黄交替 | traffic 红绿灯 | off 全灭
+#       success 绿灯常亮 | error 红灯快闪 | alarm 红黄交替 | traffic 红绿灯
+#       all 三色全亮(混白光) | off 全灭
 #
 # 控制通道(并行两路, 命令一致):
 #   1) BLE 蓝牙 — Nordic UART Service(NUS), 广播名 Agent light, 行协议:
@@ -19,7 +20,7 @@ import _thread
 from machine import Pin, PWM
 
 PIN_R, PIN_Y, PIN_G = 4, 3, 2
-VERSION = "1.1"
+VERSION = "1.2"
 NAME = b"Agent light"
 
 ACT_LOW = False         # 检测后自动设定: 共阴False(高电平亮) / 共阳True(低电平亮)
@@ -28,7 +29,7 @@ MODE = "boot"
 MODE_T0 = time.ticks_ms()
 
 _MODES = ("demo", "thinking", "ai", "busy", "success", "error",
-          "alarm", "traffic", "off")
+          "alarm", "traffic", "all", "off")
 
 
 def _set(m):
@@ -82,6 +83,8 @@ def _render(m, t):
     # t = 进入该模式后经过的毫秒
     if m == "off":
         return 0.0, 0.0, 0.0
+    if m == "all":                        # 三色全亮(混白光)
+        return 1.0, 1.0, 1.0
     if m == "success":
         return 0.0, 0.0, 1.0
     if m == "busy":                       # 黄灯慢闪 0.5Hz
@@ -110,7 +113,7 @@ def _render(m, t):
             return 0.0, 0.0, 1.0
         return 0.0, 1.0, 0.0
     if m == "demo":                       # 轮播各灯效, 每段2.4s
-        seq = ("thinking", "ai", "busy", "success", "error", "alarm", "traffic")
+        seq = ("thinking", "ai", "busy", "success", "error", "alarm", "traffic", "all")
         k = (t // 2400) % len(seq)
         tt = t % 2400
         if seq[k] == "traffic":           # traffic 压缩到 2.33s 看完一轮
