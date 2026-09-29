@@ -43,7 +43,7 @@ router.use(express.json());
 // ---------- 系统信息（免登录：登录页/标题需要显示系统名称；系统键永在主库） ----------
 router.get('/system-info', (req, res) => {
   res.json({
-    name: getSetting('system_name', '工作台'),
+    name: getSetting('system_name', '完全能工作台'),
     name_en: getSetting('system_name_en', 'Workbench'),
     version: getSetting('current_version', '') || 'v1.6.3',
   });
@@ -153,22 +153,95 @@ router.post('/weather/geocode', async (req, res) => {
 // ---------- 邮箱（每人可配自己的邮箱，全部归租户库） ----------
 router.get('/emails', async (req, res) => {
   try {
-    const mails = await emailService.listEmails(req.tdb, 30);
+    const mails = await emailService.listEmails(req.tdb, 30, { accountId: Number(req.query.account) || 1 });
     res.json({ mails });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+// 多邮箱账号管理（v1.7.0）：label 即邮箱页 tab 名；密码只写不读（has_pass 标记已配）
+router.get('/emails/accounts', (req, res) => {
+  res.json({ accounts: emailService.accountsView(req.tdb) });
+});
+router.post('/emails/accounts', (req, res) => {
+  try {
+    const id = emailService.saveAccount(req.tdb, null, req.body || {});
+    res.json({ id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+router.put('/emails/accounts/:id', (req, res) => {
+  try {
+    emailService.saveAccount(req.tdb, Number(req.params.id), req.body || {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+router.delete('/emails/accounts/:id', (req, res) => {
+  const acc = emailService.getAccount(req.tdb, Number(req.params.id));
+  if (!acc) return res.status(404).json({ error: '账号不存在' });
+  emailService.deleteAccount(req.tdb, Number(req.params.id));
+  res.json({ ok: true });
+});
+// 新邮件提醒设置（弹窗 / 提示音）
+router.get('/emails/notify', (req, res) => {
+  res.json(emailService.getNotifyCfg(req.tdb));
+});
+router.put('/emails/notify', (req, res) => {
+  emailService.saveNotifyCfg(req.tdb, req.body || {});
+  res.json(emailService.getNotifyCfg(req.tdb));
+});
+// 关键词标签规则（邮件内容检索命中 → 标题前标签，每封只取第一个命中）
+router.get('/emails/tags', (req, res) => {
+  res.json({ rules: emailService.getTagRules(req.tdb) });
+});
+router.put('/emails/tags', (req, res) => {
+  try { res.json({ rules: emailService.saveTagRules(req.tdb, (req.body || {}).rules) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// 批量已读 / 批量移动（v1.7.0 列表多选）；清空垃圾箱服务端一次删完
+router.post('/emails/batch-seen', (req, res) => {
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+  emailService.batchSeen(req.tdb, ids);
+  res.json({ ok: true, n: ids.length });
+});
+router.post('/emails/batch-move', (req, res) => {
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+  try {
+    emailService.batchMove(req.tdb, ids, req.body && req.body.to);
+    res.json({ ok: true, n: ids.length });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+router.post('/emails/purge-trash', (req, res) => {
+  const acc = Number(req.query.account) || 0;
+  if (acc) req.tdb.prepare(`DELETE FROM emails WHERE account_id=? AND folder='trash'`).run(acc);
+  else req.tdb.prepare(`DELETE FROM emails WHERE folder='trash'`);
+  res.json({ ok: true });
 });
 router.get('/emails/local', (req, res) => {
   const pageSize = Math.min(1000, Math.max(1, Number(req.query.pageSize) || 20));
   const page = Math.max(1, Number(req.query.page) || 1);
   const folder = ['inbox', 'sent', 'trash', 'draft'].includes(req.query.folder) ? req.query.folder : 'inbox';
   const q = (req.query.q || '').trim();
-  const { total, rows } = emailService.listFolder(req.tdb, folder, { q, page, pageSize });
-  res.json({ mails: rows, total, page, pageSize, folder });
+  const accountId = Number(req.query.account) || undefined;
+  const { total, rows } = emailService.listFolder(req.tdb, folder, { q, page, pageSize, accountId });
+  // 收件箱未读数（账号 tab 角标；与列表同条件统计，仅 folder=inbox 时才算）
+  let unread = 0;
+  if (folder === 'inbox') {
+    const accCond = accountId ? `AND account_id=${Number(accountId)}` : '';
+    const like = `%${q}%`;
+    const cond = q ? `AND (subject LIKE ? OR from_addr LIKE ? OR to_addr LIKE ? OR body LIKE ?)` : '';
+    const params = q ? [like, like, like, like] : [];
+    unread = req.tdb.prepare(`SELECT COUNT(*) c FROM emails WHERE folder='inbox' ${accCond} AND seen=0 ${cond}`).get(...params).c;
+  }
+  res.json({ mails: rows, total, page, pageSize, folder, unread });
 });
 router.post('/emails/:uid/seen', (req, res) => {
-  emailService.markSeen(req.tdb, req.params.uid);
+  emailService.markSeen(req.tdb, req.params.uid, Number(req.query.account) || Number(req.body && req.body.account) || 0);
   res.json({ ok: true });
 });
 // 邮件移入文件夹（垃圾箱/恢复/彻底删除）
@@ -191,8 +264,8 @@ router.post('/emails/:id/move', (req, res) => {
 // 发送邮件（SMTP）
 router.post('/emails/send', async (req, res) => {
   try {
-    const { to, cc, subject, text, draftId } = req.body || {};
-    const r = await emailService.sendMail(req.tdb, { to, cc, subject, text });
+    const { to, cc, subject, text, draftId, accountId } = req.body || {};
+    const r = await emailService.sendMail(req.tdb, { to, cc, subject, text, accountId });
     if (draftId) req.tdb.prepare('DELETE FROM emails WHERE id=? AND folder=?').run(Number(draftId), 'draft');
     res.json(r);
   } catch (e) {
@@ -211,8 +284,8 @@ router.post('/emails/draft', (req, res) => {
 // SMTP 测试
 router.post('/emails/send-test', async (req, res) => {
   try {
-    const cfg = emailService.getConfig(req.tdb);
-    const r = await emailService.sendMail(req.tdb, { to: cfg.smtp_user, subject: '工作台发信测试', text: '这是一封来自个人工作台的 SMTP 测试邮件，收到即说明发件配置正确。' });
+    const cfg = emailService.getAccount(req.tdb, Number(req.body && req.body.accountId) || 1) || {};
+    const r = await emailService.sendMail(req.tdb, { to: cfg.smtp_user, subject: '工作台发信测试', text: '这是一封来自个人工作台的 SMTP 测试邮件，收到即说明发件配置正确。', accountId: cfg.id });
     res.json({ ...r, to: cfg.smtp_user });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -220,7 +293,7 @@ router.post('/emails/send-test', async (req, res) => {
 });
 // 签名（GET 掩码无关，直接原文返回给本人使用）
 router.get('/emails/signature', (req, res) => {
-  const cfg = emailService.getConfig(req.tdb);
+  const cfg = emailService.getAccount(req.tdb, Number(req.query.account) || 1) || {};
   res.json({ signature: cfg.signature || '', from_name: cfg.smtp_from_name || '', trash_keep_days: cfg.trash_keep_days || 30 });
 });
 
@@ -332,7 +405,7 @@ router.get('/emails/:id/attachments/:idx', (req, res) => {
 router.post('/emails/refetch-attachments', async (req, res) => {
   try {
     const n = Math.min(100, Math.max(10, Number(req.body?.limit) || 50));
-    const r = await emailService.listEmails(req.tdb, n, { force: true });
+    const r = await emailService.listEmails(req.tdb, n, { force: true, accountId: Number(req.body?.account) || 1 });
     const atts = r.reduce((s, m) => s + (Array.isArray(m.attachments) ? m.attachments.length : 0), 0);
     res.json({ ok: true, mails: r.length, attachments: atts });
   } catch (e) { res.status(500).json({ error: e.message }); }

@@ -8,12 +8,14 @@ const routes = [
   { path: '/email', component: () => import('../views/Email.vue'), meta: { title: '邮箱', page: 'email' } },
   { path: '/notes', component: () => import('../views/Notes.vue'), meta: { title: '笔记', page: 'notes' } },
   { path: '/tasks', component: () => import('../views/Tasks.vue'), meta: { title: '待办与日程', page: 'tasks' } },
-  { path: '/family', component: () => import('../views/Family.vue'), meta: { title: '家庭事项', page: 'family' } },
+  { path: '/family', component: () => import('../views/Family.vue'), meta: { title: '家庭管理', page: 'family' } },
   { path: '/learning', component: () => import('../views/Learning.vue'), meta: { title: '学习', page: 'learning' } },
   { path: '/tools', component: () => import('../views/Tools.vue'), meta: { title: '效率工具', page: 'tools' } },
   // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从效率工具移入；旧地址 /tools?tab=dep 等回落到本页
   { path: '/private', component: () => import('../views/Private.vue'), meta: { title: '私有项目', page: 'private' } },
-  { path: '/business', component: () => import('../views/Business.vue'), meta: { title: '业务系统', page: 'business' } },
+  // v1.7.0 模块重组：业务系统(→效率工具·推送任务)/文件存档/全局搜索/个人账务/用户管理
+  // 不再是独立页面，旧地址带 tab 参数重定向到新位置
+  { path: '/business', redirect: (to) => ({ path: '/tools', query: { ...to.query, tab: 'business' } }) },
   { path: '/ai', component: () => import('../views/AiChat.vue'), meta: { title: 'AI 助手', page: 'ai' } },
   { path: '/pets', component: () => import('../views/Pets.vue'), meta: { title: '我的宠物', page: 'pets' } },
   // 智能家居（2026-09 v1.6.8）：米家扫码绑定 + 家庭/房间/设备卡片控制
@@ -25,14 +27,14 @@ const routes = [
   { path: '/messages', component: () => import('../views/Messages.vue'), meta: { title: '短消息', page: 'messages' } },
   // 「AI 推送」已并入业务系统页；旧地址重定向过去
   { path: '/push', redirect: '/business' },
-  { path: '/files', component: () => import('../views/Files.vue'), meta: { title: '文件存档', page: 'files' } },
-  { path: '/pay', component: () => import('../views/Pay.vue'), meta: { title: '个人账务', page: 'pay' } },
-  { path: '/users', component: () => import('../views/Users.vue'), meta: { title: '用户管理', page: 'users', adminOnly: true } },
+  { path: '/files', redirect: (to) => ({ path: '/tools', query: { ...to.query, tab: 'files' } }) },
+  { path: '/pay', redirect: (to) => ({ path: '/family', query: { ...to.query, tab: 'pay' } }) },
+  { path: '/users', redirect: (to) => ({ path: '/settings', query: { ...to.query, tab: 'users' } }) },
   // 升级管理已并入「设置」页的 tab；旧地址重定向过去
   { path: '/upgrade', redirect: '/settings' },
   { path: '/settings', component: () => import('../views/Settings.vue'), meta: { title: '设置', page: 'settings' } },
   { path: '/dingtalk', component: () => import('../views/Dingtalk.vue'), meta: { title: '钉钉绑定' } },
-  { path: '/search', component: () => import('../views/Search.vue'), meta: { title: '全局搜索', page: 'search' } },
+  { path: '/search', redirect: (to) => ({ path: '/tools', query: { ...to.query, tab: 'search' } }) },
 ];
 
 const router = createRouter({

@@ -1,6 +1,7 @@
 <template>
+  <!-- 文件存档（原独立页，2026-09 v1.7.0 并入效率工具页倒数第二个 tab；标题栏由外层 Tools 页提供） -->
   <div>
-    <h2 class="page-title">文件存档 <span class="muted" style="font-size:13px">点击左侧文件，右侧查看解析文字预览</span></h2>
+    <div class="muted" style="font-size:12.5px; margin-bottom:8px">点击左侧文件，右侧查看解析文字预览</div>
     <div v-if="msg" class="msg" :class="msgType">{{ msg }}</div>
 
     <!-- 上传区 -->

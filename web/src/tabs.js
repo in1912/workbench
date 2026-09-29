@@ -6,13 +6,23 @@ export const TAB_DEFS = {
     { key: 'todo', label: '待办事项' },
   ],
   email: [
+    // v1.7.0 多邮箱：各邮箱账号 tab + 通讯录 + 邮箱设置（账号 tab 统一挂 'mail' 权限）
     { key: 'mail', label: '收发邮件' },
     { key: 'contacts', label: '通讯录' },
+    { key: 'esettings', label: '邮箱设置' },
   ],
   family: [
     { key: 'family', label: '通知' },
     { key: 'kids', label: '子女学习' },
     { key: 'profiles', label: '家庭人员档案' },
+    // 个人账务从独立页并入（2026-09 v1.7.0），作为「家庭管理」最后一个 tab（内含 5 个子 tab）
+    { key: 'pay', label: '个人账务' },
+    // 隐藏伪 tab：个人账务内部的子功能细分（不出现在家庭页 tab 栏，权限表可勾选限制）
+    { key: 'dash', label: '账务看板', hidden: true },
+    { key: 'cats', label: '科目设置', hidden: true },
+    { key: 'import', label: '账单导入', hidden: true },
+    { key: 'bills', label: '账单流水', hidden: true },
+    { key: 'budget', label: '预算', hidden: true },
   ],
   learning: [
     { key: 'dictation', label: '听写' },
@@ -31,19 +41,8 @@ export const TAB_DEFS = {
     { key: 'pianoconfirm', label: '练琴确认', restricted: true, hidden: true },
     { key: 'wishset', label: '心愿卡设置', restricted: true, hidden: true },
   ],
-  pay: [
-    { key: 'dash', label: '账务看板' },
-    { key: 'cats', label: '科目设置' },
-    { key: 'import', label: '账单导入' },
-    { key: 'bills', label: '账单流水' },
-    { key: 'budget', label: '预算' },
-  ],
-  business: [
-    { key: 'sys', label: '业务系统' },
-    { key: 'skill', label: 'Skill 任务' },
-    { key: 'push', label: '推送记录' },
-    { key: 'config', label: '定时配置' },
-  ],
+  // 业务系统改名「推送任务」并入效率工具（2026-09 v1.7.0）；tab 键不变（sys/skill/push/config）
+  // 个人账务（原独立页）→ family 页 tab；此处不再有独立 business/pay 页定义
   // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从「效率工具」页移入
   // H5 分别嵌 /dep/index.html、/pro/index.html、/mbti/index.html；管理列表与分享前缀配置在各 tab
   private: [
@@ -64,8 +63,23 @@ export const TAB_DEFS = {
     { key: 'review', label: '复盘' },
     // 电脑监控（v1.3.5）
     { key: 'monitor', label: '电脑监控' },
-    // 语音配音从「学习」页移来（2026-09 v1.6.5），排最后一个 tab
+    // 语音配音从「学习」页移来（2026-09 v1.6.5）
     { key: 'tts', label: '语音配音' },
+    // 业务系统整页并入，改名「推送任务」（2026-09 v1.7.0，内含 4 个子 tab）
+    { key: 'business', label: '推送任务' },
+    // 隐藏伪 tab：推送任务内部的子功能细分（不出现在效率工具 tab 栏，权限表可勾选限制）
+    { key: 'sys', label: '业务系统', hidden: true },
+    { key: 'skill', label: 'Skill 任务', hidden: true },
+    { key: 'push', label: '推送记录', hidden: true },
+    { key: 'config', label: '定时配置', hidden: true },
+    // 文件存档从独立页并入（2026-09 v1.7.0）：倒数第二个 tab
+    { key: 'files', label: '文件存档' },
+    // 全局搜索从独立页并入（2026-09 v1.7.0）：最后一个 tab（右下角悬浮框直达）
+    { key: 'search', label: '全局搜索' },
+  ],
+  settings: [
+    // 用户管理从独立页并入（2026-09 v1.7.0）：设置页 tab（仅管理员可见，视图内部再按角色拦截）
+    { key: 'users', label: '用户管理' },
   ],
   pets: [
     { key: 'pets', label: '我的宠物' },

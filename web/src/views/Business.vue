@@ -1,13 +1,13 @@
 <template>
+  <!-- 推送任务（原「业务系统」独立页，2026-09 v1.7.0 并入效率工具页 tab；标题栏由外层 Tools 页提供） -->
   <div>
-    <h2 class="page-title">业务系统</h2>
     <div v-if="msg" class="msg" :class="msgType">{{ msg }}</div>
 
     <div class="tabs">
-      <button v-if="canTab('business','sys')" :class="{active: tab==='sys'}" @click="tab='sys'">业务系统</button>
-      <button v-if="canTab('business','skill')" :class="{active: tab==='skill'}" @click="tab='skill'">Skill 任务</button>
-      <button v-if="canTab('business','push')" :class="{active: tab==='push'}" @click="tab='push'">推送记录</button>
-      <button v-if="canTab('business','config')" :class="{active: tab==='config'}" @click="tab='config'; loadSchedules()">定时配置</button>
+      <button v-if="canTab('tools','sys')" :class="{active: tab==='sys'}" @click="tab='sys'">业务系统</button>
+      <button v-if="canTab('tools','skill')" :class="{active: tab==='skill'}" @click="tab='skill'">Skill 任务</button>
+      <button v-if="canTab('tools','push')" :class="{active: tab==='push'}" @click="tab='push'">推送记录</button>
+      <button v-if="canTab('tools','config')" :class="{active: tab==='config'}" @click="tab='config'; loadSchedules()">定时配置</button>
     </div>
 
     <!-- ============ 业务系统 ============ -->
@@ -361,7 +361,7 @@ import { ref, onMounted, computed } from 'vue';
 import { api } from '../api';
 import { canTab, firstTab } from '../tabs';
 
-const tab = ref(firstTab('business', 'sys'));
+const tab = ref(firstTab('tools', 'sys'));
 const msg = ref('');
 const msgType = ref('ok');
 function flash(text, type = 'ok') { msg.value = text; msgType.value = type; setTimeout(() => (msg.value = ''), 4000); }
@@ -675,7 +675,7 @@ async function runSkillNow(sk) {
 
 onMounted(() => {
   load();
-  if (canTab('business', 'push')) loadPushSystems();
+  if (canTab('tools', 'push')) loadPushSystems();
   if (tab.value === 'config') loadSchedules(); // 无推送记录权限时初始落在定时配置
 });
 </script>

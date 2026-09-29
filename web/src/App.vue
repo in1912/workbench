@@ -49,6 +49,13 @@
       </div>
     </div>
 
+    <!-- 全局搜索悬浮框（v1.7.0）：最右下角短输入框 + 搜索按钮，直达效率工具的全局搜索 tab；
+         空输入点搜索 = 进搜索页；带词回车/点按钮 = 进页并自动执行搜索 -->
+    <div v-if="canGlobalSearch" class="float-search">
+      <input v-model="gsQ" placeholder="全局搜索…" @keyup.enter="goSearch" />
+      <button title="全局搜索" @click="goSearch">🔍</button>
+    </div>
+
     <!-- 升级自愈提示：常驻 webview（钉钉工作台等）里的旧前端检测到服务端已升级，提示后自动刷新加载新包 -->
     <div v-if="upgradeTip" class="upgrade-tip">⬆ {{ upgradeTip }}</div>
 
@@ -73,6 +80,7 @@ import NetBadge from './components/NetBadge.vue';
 import { probeLocalBase } from './utils/localBase';
 import { sysName, setSysInfo } from './sysname';
 import { plainText } from './utils/rich';
+import { canTab } from './tabs';
 
 const router = useRouter();
 const route = useRoute();
@@ -135,6 +143,8 @@ onMounted(async () => {
       }
       // 本地直连：登录后即后台探测设置的内网地址（不阻塞界面），可达则学习页大文件自动走内网
       probeLocalBase();
+      // 新邮件提示音开关（邮箱页「邮箱设置」里配置；无邮箱设置权限的成员静默跳过）
+      try { const n = await api.get('/emails/notify'); emailSoundOn.value = !!n.sound; } catch {}
     }
   } catch (e) { /* 保持缓存 */ }
   // 消息提醒：每 20s 轮询新消息（登录瞬间由 watch(isLogin) 立即触发一次）
@@ -200,6 +210,7 @@ function viewerUp() {
 // ---------- 短消息弹窗（右下角，未读常驻，已读才消失） ----------
 const toasts = ref([]);
 const shownMsgIds = new Set(); // 已弹过的消息（避免轮询重复弹）
+const emailSoundOn = ref(false); // 新邮件提示音（邮箱设置里配置；弹出新邮件提醒时播放）
 function checkUnread() {
   if (!localStorage.getItem('wb_token')) return;
   api.get('/messages/unread')
@@ -213,9 +224,31 @@ function checkUnread() {
         if (shownMsgIds.has(m.id)) continue;
         shownMsgIds.add(m.id);
         toasts.value.push(m);
+        // 新邮件提醒弹窗 → 按用户设置播提示音（v1.7.0 任务8）
+        if (m.module === 'email' && emailSoundOn.value) beep();
       }
     })
     .catch(() => {});
+}
+// 新邮件提示音：WebAudio 双音（叮-叮），无需音频文件
+let audioCtx = null;
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.type = 'sine';
+    o.frequency.setValueAtTime(880, t0);
+    o.frequency.setValueAtTime(1174.66, t0 + 0.18);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
+    g.gain.setValueAtTime(0.2, t0 + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+    o.start(t0);
+    o.stop(t0 + 0.55);
+  } catch { /* 无音频环境（如静音策略）则跳过 */ }
 }
 // 登录页 ↔ 主布局切换：App 不会重新挂载，需手动触发（immediate 覆盖带 token 直接打开/刷新页面的情况）
 watch(isLogin, (loginPage) => {
@@ -239,7 +272,27 @@ function dismissToast(id) {
 }
 function openMessages(t) {
   dismissToast(t.id); // 打开会话即视为已读（服务端自动标记），事件对账兜底
-  router.push('/messages');
+  // 按消息来源模块直达对应页面（v1.7.0：新邮件点弹窗直达邮箱页对应账号 tab）
+  if (t.module === 'email') router.push({ path: '/email', query: t.ext_id ? { acc: t.ext_id } : {} });
+  else if (t.module === 'kids') router.push('/family?tab=kids');
+  else if (t.module === 'family') router.push('/family');
+  else router.push('/messages');
+}
+
+// ---------- 全局搜索悬浮框（右下角，v1.7.0） ----------
+const gsQ = ref('');
+const canGlobalSearch = computed(() => {
+  route.fullPath; userTick.value; // 依赖：路由/用户信息变化时重算
+  const u = user.value;
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+  const allowed = u.allowed_pages || [];
+  if (allowed.length && !allowed.includes('tools')) return false; // 没有效率工具页权限
+  return canTab('tools', 'search');
+});
+function goSearch() {
+  const q = gsQ.value.trim();
+  router.push({ path: '/tools', query: { tab: 'search', ...(q ? { q } : {}) } });
 }
 
 // localStorage 非响应式：依赖 route.fullPath + userTick（boot 刷新 wb_user 后手动 +1），
@@ -283,8 +336,18 @@ function logout() {
 </script>
 
 <style scoped>
-.msg-toasts { position: fixed; right: 16px; bottom: 16px; z-index: 1200; display: flex; flex-direction: column; gap: 10px;
-  max-width: 92vw; max-height: calc(100vh - 90px); overflow-y: auto; }
+.msg-toasts { position: fixed; right: 16px; bottom: 76px; z-index: 1200; display: flex; flex-direction: column; gap: 10px;
+  max-width: 92vw; max-height: calc(100vh - 150px); overflow-y: auto; }
+/* 全局搜索悬浮框（最右下角；消息弹窗在其上方让位） */
+.float-search { position: fixed; right: 16px; bottom: 16px; z-index: 1150; display: flex; align-items: center;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 4px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25); }
+.float-search input { border: none; background: transparent; color: var(--text); width: 132px; font-size: 12.5px;
+  padding: 5px 8px; outline: none; border-radius: 7px; }
+.float-search input:focus { background: var(--bg3, rgba(0, 0, 0, 0.12)); }
+.float-search button { border: none; background: rgba(79, 124, 247, 0.16); color: var(--text); border-radius: 7px;
+  padding: 5px 11px; cursor: pointer; font-size: 13px; flex-shrink: 0; }
+.float-search button:hover { background: rgba(79, 124, 247, 0.3); }
 .msg-toast { width: 300px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--bg2); box-shadow: 0 6px 24px rgba(0,0,0,0.25); cursor: pointer; flex-shrink: 0; }
 .toast-read { background: rgba(79, 124, 247, 0.16); border: 1px solid rgba(79, 124, 247, 0.4); color: var(--text);

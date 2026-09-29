@@ -9,6 +9,8 @@
       <button v-if="isAdmin" :class="{ active: tab === 'ssl' }" @click="tab = 'ssl'">SSL 自签名</button>
       <button v-if="isAdmin" :class="{ active: tab === 'upgrade' }" @click="tab = 'upgrade'">升级管理</button>
       <button v-if="isAdmin" :class="{ active: tab === 'logs' }" @click="tab = 'logs'">登录日志</button>
+      <!-- 用户管理（原独立页并入，2026-09 v1.7.0）：仅管理员 -->
+      <button v-if="isAdmin" :class="{ active: tab === 'users' }" @click="tab = 'users'">用户管理</button>
       <button :class="{ active: tab === 'multi' }" @click="tab = 'multi'">多平台</button>
     </div>
 
@@ -63,53 +65,8 @@
         <button class="primary" @click="saveDashModules">保存看板模块配置</button>
       </div>
 
-      <div class="card">
-        <h3>邮箱（IMAP 收件）</h3>
-        <div class="form-row"><label>IMAP 服务器</label><input v-model="s.email.imap_host" placeholder="imap.example.com" /></div>
-        <div class="form-row"><label>端口</label><input v-model.number="s.email.imap_port" type="number" /></div>
-        <div class="form-row"><label>账号</label><input v-model="s.email.imap_user" placeholder="you@example.com" /></div>
-        <div class="form-row"><label>密码 / 授权码</label><input v-model="s.email.imap_pass" type="password" placeholder="建议使用邮箱提供的授权码" /></div>
-        <div class="form-row row">
-          <label style="margin:0">使用 TLS</label>
-          <input v-model="s.email.use_tls" type="checkbox" style="width:auto" />
-        </div>
-        <div class="form-row"><label>自动拉取间隔（分钟）</label><input v-model.number="s.email.refresh_minutes" type="number" min="5" max="1440" /></div>
-        <div class="muted" style="font-size:12px; margin-bottom:10px">系统按此间隔自动拉取新邮件并获取正文（默认 20 分钟，至少 5 分钟）</div>
-        <button class="primary" @click="saveEmail">保存邮箱配置</button>
-      </div>
-
-      <div class="card">
-        <h3>邮箱（SMTP 发件 + 签名 + 垃圾箱）</h3>
-        <div class="form-row"><label>SMTP 服务器</label><input v-model="s.email.smtp_host" placeholder="smtp.example.com" /></div>
-        <div class="row">
-          <div class="form-row" style="flex:1"><label>端口（465=TLS / 587=STARTTLS）</label><input v-model.number="s.email.smtp_port" type="number" /></div>
-          <div class="form-row row" style="flex-shrink:0; align-self:flex-end; padding-bottom:8px">
-            <label style="margin:0">SSL/TLS</label>
-            <input v-model="s.email.smtp_tls" type="checkbox" style="width:auto" />
-          </div>
-        </div>
-        <div class="form-row"><label>发件账号</label><input v-model="s.email.smtp_user" placeholder="you@example.com" /></div>
-        <div class="form-row"><label>密码 / 授权码</label><input v-model="s.email.smtp_pass" type="password" placeholder="SMTP 授权码（通常与 IMAP 相同）" /></div>
-        <div class="form-row"><label>发件人显示名（可选）</label><input v-model="s.email.smtp_from_name" placeholder="如：张三" /></div>
-        <div class="form-row">
-          <label>邮件末尾签名（发送时自动附加）</label>
-          <textarea v-model="s.email.signature" rows="3" placeholder="如：&#10;张三&#10;电话：138xxxx"></textarea>
-        </div>
-        <div class="form-row"><label>垃圾箱保留天数</label><input v-model.number="s.email.trash_keep_days" type="number" min="1" max="365" /></div>
-        <div class="muted" style="font-size:12px; margin-bottom:10px">垃圾箱邮件到期后每天自动清理；QQ/163 等邮箱的 SMTP 端口通常是 465 或 587，密码需用授权码。</div>
-        <div class="row" style="flex-wrap:wrap">
-          <button class="primary" @click="saveEmail">保存发件配置</button>
-          <button class="small" @click="testSmtp" :disabled="smtpTesting">{{ smtpTesting ? '发送中...' : '发测试邮件给自己' }}</button>
-        </div>
-        <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border)">
-          <b style="font-size:13px">邮件附件存储</b>
-          <div class="muted" style="font-size:12px; margin:4px 0 8px">拉取邮件时附件保存到此目录（建议 NAS 映射盘符，如 Z:\mail-attachments 或 \\NAS\mail）。留空则附件仅登记不落盘。配置后可点「补拉附件」把最近邮件的附件存入。Docker/NAS 部署：填容器内路径（如 /mail 是映射进容器的宿主机目录）。</div>
-          <div class="row">
-            <input v-model="attachCfg.dir" placeholder="Z:\mail-attachments" class="grow" />
-            <button class="primary" @click="saveAttachDir">保存路径</button>
-          </div>
-        </div>
-      </div>
+      <!-- 邮箱设置已移到「邮箱」页最后一个 tab「邮箱设置」（2026-09 v1.7.0 多邮箱改造）：
+           收发件服务器、签名、附件目录、新邮件提醒、关键词标签都在那里按账号配置 -->
 
       <div class="card">
         <h3>文件存档</h3>
@@ -445,6 +402,8 @@
     <LoginLogsPanel v-if="isAdmin && tab === 'logs'" />
     <!-- 多平台 tab（分享访问/电视版；地址配置仅管理员可见，自 family-learning v3.0 移植） -->
     <MultiPanel v-if="tab === 'multi'" :is-admin="isAdmin" />
+    <!-- 用户管理 tab（原独立页整页并入，2026-09 v1.7.0；组件内部按管理员角色拦截） -->
+    <UsersPanel v-if="isAdmin && tab === 'users'" />
   </div>
 </template>
 
@@ -455,6 +414,7 @@ import Upgrade from './Upgrade.vue';
 import SslPanel from '../components/SslPanel.vue';
 import LoginLogsPanel from '../components/LoginLogsPanel.vue';
 import MultiPanel from './MultiPanel.vue';
+import UsersPanel from './Users.vue';
 import { NAV_ITEMS, sortByOrder } from '../nav';
 import { probeLocalBase } from '../utils/localBase';
 import { setSysInfo } from '../sysname';
@@ -566,7 +526,6 @@ onMounted(async () => {
   try { const sc = await api.get('/news/search-config'); searchCfg.value = { base_url: sc.base_url, path: sc.path, api_key: sc.api_key }; } catch {}
   try { const f = await api.get('/feishu/config'); feishu.value = { app_id: f.app_id || '', app_secret: f.app_secret || '', targets: Array.isArray(f.targets) ? f.targets : [] }; } catch {}
   try { const g = await api.get('/dingtalk/config'); dingtalk.value = { app_key: g.app_key || '', app_secret: g.app_secret || '', mode: g.mode || 'robot', robot_code: g.robot_code || '', agent_id: g.agent_id || '', userid: g.userid || '', enabled: !!g.enabled, bind_base: g.bind_base || '', bound_nick: g.bound_nick || '', bound_at: g.bound_at || '', app_configured: !!g.app_configured }; } catch {}
-  try { const a = await api.get('/emails/attach-config'); attachCfg.value = { dir: a.dir || '' }; } catch {}
   try { const fd = await api.get('/settings/files-dir'); filesDir.value = { dir: fd.dir || '' }; } catch {}
   try { const ur = await api.get('/settings/upload-root'); uploadRoot.value = { dir: ur.dir || '' }; } catch {}
   try { const lb = await api.get('/settings/local-base'); localBase.value = { base: lb.base || '' }; } catch {}
@@ -714,30 +673,7 @@ async function previewTodos() {
   dtHint.value = `模板已保存，并立即生成 ${items.length} 条今日待办`;
 }
 
-async function saveEmail() {
-  // smtp 空值保护：未填发的保持空串，避免 Number('')→0 覆盖
-  const e = { ...s.value.email };
-  if (e.smtp_port === null || e.smtp_port === undefined || e.smtp_port === '') e.smtp_port = 465;
-  await api.post('/settings/email', e);
-  flash('邮箱配置已保存');
-}
-const smtpTesting = ref(false);
-async function testSmtp() {
-  smtpTesting.value = true;
-  try {
-    const r = await api.post('/emails/send-test', {});
-    flash(`测试邮件已发送到 ${r.to}，请查收`);
-  } catch (e) { flash('发送失败：' + e.message, 'err'); }
-  finally { smtpTesting.value = false; }
-}
-// 附件存储目录
-const attachCfg = ref({ dir: '' });
-async function saveAttachDir() {
-  try {
-    await api.post('/emails/attach-config', attachCfg.value);
-    flash(attachCfg.value.dir ? '附件目录已保存：' + attachCfg.value.dir : '已清空附件目录');
-  } catch (e) { flash('保存失败：' + e.message, 'err'); }
-}
+// 邮箱相关配置（IMAP/SMTP/签名/附件目录）已随 v1.7.0 多邮箱改造移到「邮箱」页的「邮箱设置」tab
 
 // 文件存档存储目录（与邮件附件同法：留空=内容存库）
 const filesDir = ref({ dir: '' });

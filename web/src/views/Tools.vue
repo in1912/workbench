@@ -13,6 +13,12 @@
       <button v-if="canTab('tools','review')" :class="{active: tab==='review'}" @click="switchTab('review')">复盘</button>
       <button v-if="canTab('tools','monitor')" :class="{active: tab==='monitor'}" @click="switchTab('monitor')">电脑监控</button>
       <button v-if="canTab('tools','tts')" :class="{active: tab==='tts'}" @click="switchTab('tts')">语音配音</button>
+      <!-- 推送任务（原「业务系统」独立页整页并入，2026-09 v1.7.0；内含 4 个子 tab，任一子 tab 有权限即可见） -->
+      <button v-if="canBusiness" :class="{active: tab==='business'}" @click="switchTab('business')">推送任务</button>
+      <!-- 文件存档（原独立页并入）：倒数第二个 tab -->
+      <button v-if="canTab('tools','files')" :class="{active: tab==='files'}" @click="switchTab('files')">文件存档</button>
+      <!-- 全局搜索（原独立页并入）：最后一个 tab（右下角悬浮搜索框直达） -->
+      <button v-if="canTab('tools','search')" :class="{active: tab==='search'}" @click="switchTab('search')">全局搜索</button>
     </div>
 
     <!-- ============ 智作平台（文案库整体嵌入，v1.6.2） ============ -->
@@ -201,6 +207,15 @@
     <!-- ============ 录音转写（VibeVoice-ASR） ============ -->
     <VibeVoiceTab v-else-if="tab==='vibe'" />
 
+    <!-- ============ 推送任务（原「业务系统」页整页并入，v1.7.0） ============ -->
+    <BusinessPanel v-else-if="tab==='business'" />
+
+    <!-- ============ 文件存档（原独立页并入，v1.7.0） ============ -->
+    <FilesPanel v-else-if="tab==='files'" />
+
+    <!-- ============ 全局搜索（原独立页并入，v1.7.0；?q= 带词自动执行） ============ -->
+    <SearchPanel v-else-if="tab==='search'" />
+
     <!-- ============ 复盘（自学习页移来） ============ -->
     <template v-else>
       <div class="row" style="margin-bottom:12px">
@@ -239,6 +254,10 @@ import { canTab, firstTab, TAB_DEFS } from '../tabs';
 import MonitorPanel from '../components/MonitorPanel.vue';
 import VibeVoiceTab from '../components/VibeVoiceTab.vue';
 import TtsPanel from '../learning/TtsPanel.vue';
+// v1.7.0 整页并入的三个原独立页（组件内部自带子 tab 与数据加载）
+import BusinessPanel from './Business.vue';
+import FilesPanel from './Files.vue';
+import SearchPanel from './Search.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -266,6 +285,10 @@ const clipSize = ref(15);
 const clipFilter = ref({ device: '', q: '', start: '', end: '' });
 const clipPages = computed(() => Math.max(1, Math.ceil(clipTotal.value / clipSize.value)));
 const meAdmin = (() => { try { return JSON.parse(localStorage.getItem('wb_user') || '{}').role === 'admin'; } catch { return false; } })();
+// 推送任务按钮可见性：整页键 'business' 或任一子 tab 键（sys/skill/push/config）有权限即可见
+// （老用户授权迁移后细分键挂在 tools 下，没有单独的 'business' 键）
+const canBusiness = computed(() =>
+  canTab('tools', 'business') || ['sys', 'skill', 'push', 'config'].some((k) => canTab('tools', k)));
 const links = ref([]);
 const link = ref({ name: '', url: '', icon: '', category: 'general' });
 

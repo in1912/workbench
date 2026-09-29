@@ -3,45 +3,168 @@ const { ImapFlow } = require('imapflow');
 const { getSetting, setSetting, tenantIdOf } = require('../db');
 
 function getConfig(d) {
-  return d.prepare('SELECT * FROM email_config WHERE id=1').get() || {};
+  // 兼容旧调用（/settings/email GET、发测试等）：返回 1 号账号配置
+  return getAccount(d, 1) || {};
+}
+
+// ---------- 多邮箱账号（v1.7.0） ----------
+function getAccounts(d) {
+  return d.prepare('SELECT * FROM email_accounts ORDER BY id').all();
+}
+function getAccount(d, id) {
+  return d.prepare('SELECT * FROM email_accounts WHERE id=?').get(Number(id) || 0) || null;
+}
+function accountReady(a) {
+  return !!(a && a.imap_host && a.imap_user && a.imap_pass);
+}
+// 列表给前端：密码不回传（has_pass 标记是否已配）
+function accountsView(d) {
+  return getAccounts(d).map((a) => ({
+    id: a.id, label: a.label || a.imap_user || `邮箱 ${a.id}`,
+    imap_host: a.imap_host, imap_port: a.imap_port, imap_user: a.imap_user, has_imap_pass: !!a.imap_pass,
+    smtp_host: a.smtp_host, smtp_port: a.smtp_port, smtp_user: a.smtp_user, has_smtp_pass: !!a.smtp_pass,
+    smtp_tls: a.smtp_tls, smtp_from_name: a.smtp_from_name, signature: a.signature,
+    refresh_minutes: a.refresh_minutes, trash_keep_days: a.trash_keep_days, enabled: a.enabled,
+  }));
+}
+function saveAccount(d, id, cfg) {
+  const fields = [
+    'label', 'imap_host', 'imap_port', 'imap_user', 'use_tls',
+    'smtp_host', 'smtp_port', 'smtp_user', 'smtp_tls', 'smtp_from_name',
+    'signature', 'refresh_minutes', 'trash_keep_days', 'enabled',
+  ];
+  const row = {};
+  for (const f of fields) row[f] = cfg[f];
+  row.imap_port = Number(cfg.imap_port) || 993;
+  row.smtp_port = Number(cfg.smtp_port) || 465;
+  row.refresh_minutes = Math.max(5, Number(cfg.refresh_minutes) || 20);
+  row.trash_keep_days = Math.max(1, Number(cfg.trash_keep_days) || 30);
+  row.enabled = cfg.enabled === 0 || cfg.enabled === false ? 0 : 1;
+  // 密码为空 = 不修改（前端掩码回传空串时保留原值）
+  row.imap_pass = cfg.imap_pass ? cfg.imap_pass : null;
+  row.smtp_pass = cfg.smtp_pass ? cfg.smtp_pass : null;
+  if (id) {
+    const cur = getAccount(d, id);
+    if (!cur) throw new Error('账号不存在');
+    d.prepare(
+      `UPDATE email_accounts SET label=?, imap_host=?, imap_port=?, imap_user=?, imap_pass=COALESCE(?,imap_pass), use_tls=?,
+       smtp_host=?, smtp_port=?, smtp_user=?, smtp_pass=COALESCE(?,smtp_pass), smtp_tls=?, smtp_from_name=?,
+       signature=?, refresh_minutes=?, trash_keep_days=?, enabled=? WHERE id=?`
+    ).run(
+      row.label || '', row.imap_host || '', row.imap_port, row.imap_user || '', row.imap_pass, row.use_tls ? 1 : 0,
+      row.smtp_host || '', row.smtp_port, row.smtp_user || '', row.smtp_pass, row.smtp_tls ? 1 : 0, row.smtp_from_name || '',
+      row.signature || '', row.refresh_minutes, row.trash_keep_days, row.enabled, id
+    );
+    return Number(id);
+  }
+  if (!row.imap_user) throw new Error('请填写 IMAP 账号');
+  const r = d.prepare(
+    `INSERT INTO email_accounts(label,imap_host,imap_port,imap_user,imap_pass,use_tls,
+     smtp_host,smtp_port,smtp_user,smtp_pass,smtp_tls,smtp_from_name,signature,refresh_minutes,trash_keep_days,enabled)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(
+    row.label || '', row.imap_host || '', row.imap_port, row.imap_user || '', row.imap_pass || '', row.use_tls ? 1 : 0,
+    row.smtp_host || '', row.smtp_port, row.smtp_user || '', row.smtp_pass || '', row.smtp_tls ? 1 : 0, row.smtp_from_name || '',
+    row.signature || '', row.refresh_minutes, row.trash_keep_days, row.enabled
+  );
+  return Number(r.lastInsertRowid);
+}
+function deleteAccount(d, id) {
+  const tx = d.transaction(() => {
+    d.prepare('DELETE FROM emails WHERE account_id=?').run(Number(id));
+    d.prepare('DELETE FROM email_accounts WHERE id=?').run(Number(id));
+  });
+  tx();
 }
 
 function saveConfig(d, cfg) {
-  d.prepare(
-    `UPDATE email_config SET imap_host=?, imap_port=?, imap_user=?, imap_pass=?, use_tls=?, refresh_minutes=?,
-     smtp_host=?, smtp_port=?, smtp_user=?, smtp_pass=?, smtp_tls=?, smtp_from_name=?, signature=?, trash_keep_days=?,
-     updated_at=datetime('now','localtime') WHERE id=1`
-  ).run(
-    cfg.imap_host || '', cfg.imap_port || 993, cfg.imap_user || '', cfg.imap_pass || '',
-    cfg.use_tls ? 1 : 0, Math.max(5, Number(cfg.refresh_minutes) || 20),
-    cfg.smtp_host || '', cfg.smtp_port || 465, cfg.smtp_user || '', cfg.smtp_pass || '',
-    cfg.smtp_tls ? 1 : 0, cfg.smtp_from_name || '', cfg.signature || '',
-    Math.max(1, Number(cfg.trash_keep_days) || 30)
-  );
+  // 兼容旧入口（/settings/email POST）：写 1 号账号；无账号时创建
+  if (getAccount(d, 1)) saveAccount(d, 1, cfg);
+  else saveAccount(d, null, cfg);
 }
 
 function isConfigured(d) {
-  const c = getConfig(d);
-  return !!(c.imap_host && c.imap_user && c.imap_pass);
+  return getAccounts(d).some(accountReady);
 }
 
-// 定时拉取入口（供 scheduler 调用，带防重入——按租户库句柄区分）
+// 新邮件提醒设置：{popup:1, sound:0}（弹窗走站内消息通道，提示音由前端播放）
+function getNotifyCfg(d) {
+  const c = getSetting(d, 'email_notify', null);
+  return { popup: c && c.popup !== undefined ? c.popup : 1, sound: c && c.sound !== undefined ? c.sound : 0 };
+}
+function saveNotifyCfg(d, c) {
+  setSetting(d, 'email_notify', { popup: c && c.popup ? 1 : 0, sound: c && c.sound ? 1 : 0 });
+}
+
+// 关键词标签规则：[{keyword,label}]（邮件主题+正文命中第一个关键词 → 标题前显示标签）
+function getTagRules(d) {
+  const list = getSetting(d, 'email_tags', null);
+  return Array.isArray(list) ? list.filter((r) => r && r.keyword && r.label) : [];
+}
+function saveTagRules(d, list) {
+  const clean = (Array.isArray(list) ? list : [])
+    .map((r) => ({ keyword: String(r.keyword || '').trim(), label: String(r.label || '').trim() }))
+    .filter((r) => r.keyword && r.label);
+  if (clean.length > 50) throw new Error('标签规则最多 50 条');
+  setSetting(d, 'email_tags', clean);
+  return clean;
+}
+// 单封邮件匹配标签（每个邮件只取第一个命中的关键词）
+function matchTag(rules, subject, body) {
+  for (const r of rules) {
+    const k = r.keyword.toLowerCase();
+    if (k && (String(subject || '').toLowerCase().includes(k) || String(body || '').toLowerCase().includes(k))) return r.label;
+  }
+  return '';
+}
+
+// 定时拉取入口（供 scheduler 调用，带防重入——按租户库句柄区分）。
+// v1.7.0 多邮箱：逐个启用中的账号拉取；uid 为当前租户用户 id（用于新邮件站内提醒，可缺省）。
 const refreshing = new Set();
-async function refresh(d) {
+async function refresh(d, uid) {
   if (refreshing.has(d)) return { ok: false, error: '正在拉取中' };
   refreshing.add(d);
   try {
     // v1.2.5 附件解析修复后的一次性自愈：老库里被 '[]' 毒化的邮件自动补拉一次附件
     // （用户要求附件随邮件默认直接拉取，不依赖手动点「补拉附件」——升级后第一次巡检即翻案）
     const heal = !getSetting(d, 'email_att_fix_v125', 0);
-    const mails = await listEmails(d, heal ? 50 : 30, { force: heal });
+    const results = [];
+    let total = 0, newTotal = 0;
+    for (const acc of getAccounts(d)) {
+      if (!acc.enabled || !accountReady(acc)) continue;
+      try {
+        const r = await listEmails(d, heal ? 50 : 30, { force: heal, accountId: acc.id });
+        total += r.length;
+        newTotal += r.reduce((s, m) => s + (m.isNew ? 1 : 0), 0);
+        results.push({ id: acc.id, label: acc.label || acc.imap_user, count: r.length, new: r.filter((m) => m.isNew).length });
+        // 新邮件 → 站内消息弹窗提醒（可在邮箱设置里关掉/开提示音）
+        if (uid && r.some((m) => m.isNew) && getNotifyCfg(d).popup) notifyNew(d, uid, acc, r.filter((m) => m.isNew));
+      } catch (e) {
+        results.push({ id: acc.id, label: acc.label || acc.imap_user, error: e.message });
+      }
+    }
     if (heal) setSetting(d, 'email_att_fix_v125', 1);
-    return { ok: true, count: mails.length };
+    return { ok: true, count: total, newCount: newTotal, accounts: results };
   } catch (e) {
     return { ok: false, error: e.message };
   } finally {
     refreshing.delete(d);
   }
+}
+
+// 新邮件站内提醒：走现有消息弹窗（module=email，点弹窗直达邮箱页对应账号）
+function notifyNew(d, uid, acc, mails) {
+  try {
+    const { db: mainDb } = require('../db');
+    const messageService = require('./messageService');
+    const subjects = mails.slice(0, 5).map((m) => `· ${m.subject || '（无主题）'}`).join('\n');
+    const more = mails.length > 5 ? `\n… 等共 ${mails.length} 封` : '';
+    messageService.send(mainDb, {
+      from_user: uid, to_user: uid, module: 'email', ext_id: String(acc.id),
+      subject: `新邮件 ${mails.length} 封（${acc.label || acc.imap_user}）`,
+      content: subjects + more,
+    });
+  } catch (e) { console.warn('[email] 新邮件提醒发送失败:', e.message); }
 }
 
 // ---------- MIME 正文解析（无 mailparser 依赖，直接解析 source） ----------
@@ -242,12 +365,12 @@ function getAttachConfig(d) {
 function saveAttachConfig(d, cfg) {
   setSetting(d, 'email_attachments', { dir: String(cfg.dir || '').trim() });
 }
-// 保存附件文件：{dir}/t<租户>_{uid}_{安全文件名}；返回相对名（租户前缀防多租户共用目录时撞名）
+// 保存附件文件：{dir}/t<租户>_a<账号>_{uid}_{安全文件名}；返回相对名（租户+账号前缀防共用目录时撞名）
 // 专属目录留空时回落「全局默认上传路径」的 email-attachments 子目录；都没配才不落盘
-function saveAttachment(d, uid, att) {
+function saveAttachment(d, uid, att, accountId = 1) {
   const dir = String(getAttachConfig(d).dir || '').trim() || require('../services/storagePaths').uploadSubDir('email-attachments') || '';
   const safe = String(att.filename || 'attachment').replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 120);
-  const rel = `t${tenantIdOf(d) ?? 0}_${uid}_${safe}`;
+  const rel = `t${tenantIdOf(d) ?? 0}_a${Number(accountId) || 1}_${uid}_${safe}`;
   if (dir) {
     try {
       fs.mkdirSync(dir, { recursive: true });
@@ -273,8 +396,10 @@ function attachmentFullPath(d, rel) {
 //   已有附件的邮件不重拉，避免白下载大附件）
 async function listEmails(d, limit = 30, opts = {}) {
   const force = !!(opts && opts.force);
-  const cfg = getConfig(d);
-  if (!isConfigured(d)) throw new Error('邮箱尚未配置');
+  const accountId = Number(opts && opts.accountId) || 1;
+  const cfg = getAccount(d, accountId);
+  if (!cfg) throw new Error('邮箱账号不存在');
+  if (!accountReady(cfg)) throw new Error('邮箱尚未配置完整（服务器 / 账号 / 授权码）');
 
   const client = new ImapFlow({
     host: cfg.imap_host,
@@ -294,7 +419,7 @@ async function listEmails(d, limit = 30, opts = {}) {
       if (!total) return [];
       const start = Math.max(1, total - limit + 1); // 取最后 limit 封（最新）
       const known = new Map(
-        d.prepare('SELECT uid, seen, body, attachments FROM emails').all().map((r) => [r.uid, r])
+        d.prepare('SELECT uid, seen, body, attachments FROM emails WHERE account_id=?').all(accountId).map((r) => [r.uid, r])
       );
       const mails = [];
       for await (const msg of client.fetch(`${start}:*`, { envelope: true, uid: true })) {
@@ -303,19 +428,21 @@ async function listEmails(d, limit = 30, opts = {}) {
         mails.push({
           uid,
           subject: (env.subject || '').slice(0, 300),
+          from_name: env.from?.[0]?.name || '',
           from_addr: env.from?.[0]?.address || '',
           date: env.date ? new Date(env.date).toISOString() : null,
           seen: known.has(uid) ? !!known.get(uid).seen : false,
+          isNew: !known.has(uid),
         });
       }
       mails.sort((a, b) => (b.date || '').localeCompare(a.date || '')); // 最新在前
 
-      // 入库元信息（INSERT OR IGNORE，依赖 idx_emails_uid 唯一索引去重）
+      // 入库元信息（INSERT OR IGNORE，依赖 (account_id, uid) 组合唯一索引去重）
       const insert = d.prepare(
-        "INSERT OR IGNORE INTO emails(uid,subject,from_addr,date,seen,folder) VALUES(?,?,?,?,0,'inbox')"
+        "INSERT OR IGNORE INTO emails(account_id,uid,subject,from_name,from_addr,date,seen,folder) VALUES(?,?,?,?,?,0,'inbox')"
       );
       const tx = d.transaction((list) => {
-        for (const m of list) insert.run(m.uid, m.subject, m.from_addr, m.date);
+        for (const m of list) insert.run(accountId, m.uid, m.subject, m.from_name || '', m.from_addr, m.date);
       });
       tx(mails);
 
@@ -336,11 +463,11 @@ async function listEmails(d, limit = 30, opts = {}) {
           const src = await client.fetchOne(m.uid, { source: true }, { uid: true });
           const bodyText = extractBodyFromSource(src?.source);
           const atts = extractAttachmentsFromSource(src?.source);
-          const meta = atts.map((a) => saveAttachment(d, m.uid, a));
+          const meta = atts.map((a) => saveAttachment(d, m.uid, a, accountId));
           if (meta.length) attCount += meta.length;
           const attJson = JSON.stringify(meta); // 无附件存 []，避免下次重复拉
           if (force || bodyText || meta.length) {
-            updates.push([bodyText || (prev?.body || ''), attJson, m.uid]);
+            updates.push([bodyText || (prev?.body || ''), attJson, m.uid, accountId]);
             m.body = bodyText || prev?.body || ''; m.attachments = meta; fetched++;
           }
         } catch (e) {
@@ -348,11 +475,11 @@ async function listEmails(d, limit = 30, opts = {}) {
         }
       }
       if (updates.length) {
-        const upd = d.prepare('UPDATE emails SET body=?, attachments=? WHERE uid=?');
-        const tx2 = d.transaction((list) => { for (const u of list) upd.run(u[0], u[1], u[2]); });
+        const upd = d.prepare('UPDATE emails SET body=?, attachments=? WHERE account_id=? AND uid=?');
+        const tx2 = d.transaction((list) => { for (const u of list) upd.run(u[0], u[1], u[3], u[2]); });
         tx2(updates);
       }
-      console.log(`[email] 拉取 ${mails.length} 封元信息（最新 ${limit}），新拉正文 ${fetched} 封，附件 ${attCount} 个`);
+      console.log(`[email] 账号${accountId} 拉取 ${mails.length} 封元信息（最新 ${limit}），新拉正文 ${fetched} 封，附件 ${attCount} 个`);
       return mails;
     } finally {
       lock.release();
@@ -362,8 +489,27 @@ async function listEmails(d, limit = 30, opts = {}) {
   }
 }
 
-function markSeen(d, uid) {
-  d.prepare('UPDATE emails SET seen=1 WHERE uid=?').run(uid);
+function markSeen(d, uid, accountId) {
+  if (accountId) d.prepare('UPDATE emails SET seen=1 WHERE account_id=? AND uid=?').run(Number(accountId), uid);
+  else d.prepare('UPDATE emails SET seen=1 WHERE uid=?').run(uid);
+}
+
+// 批量：按行 id 标已读 / 移动文件夹（v1.7.0 批量多选用）
+function batchSeen(d, ids) {
+  const st = d.prepare('UPDATE emails SET seen=1 WHERE id=?');
+  const tx = d.transaction((list) => { for (const id of list) st.run(Number(id)); });
+  tx(ids.filter((n) => Number.isInteger(Number(n)) && Number(n) > 0));
+}
+function batchMove(d, ids, to) {
+  const SET = to === 'delete' ? null
+    : to === 'trash' ? `folder='trash', deleted_at=datetime('now','localtime')`
+    : ['inbox', 'sent', 'draft'].includes(to) ? `folder='${to}', deleted_at=NULL` : null;
+  if (!SET) { if (to !== 'delete') throw new Error('无效文件夹'); }
+  const st = to === 'delete'
+    ? d.prepare('DELETE FROM emails WHERE id=?')
+    : d.prepare(`UPDATE emails SET ${SET} WHERE id=?`);
+  const tx = d.transaction((list) => { for (const id of list) st.run(Number(id)); });
+  tx(ids.filter((n) => Number.isInteger(Number(n)) && Number(n) > 0));
 }
 
 // ---------- SMTP 发送（Node 原生 net/tls，无 nodemailer 依赖） ----------
@@ -478,10 +624,10 @@ function buildMime({ from, fromName, to, cc, subject, text, signature }) {
   return lines.join('\r\n');
 }
 
-async function sendMail(d, { to, cc, subject, text }) {
-  const cfg = getConfig(d);
+async function sendMail(d, { to, cc, subject, text, accountId }) {
+  const cfg = getAccount(d, Number(accountId) || 1) || {};
   if (!cfg.smtp_host || !cfg.smtp_user || !cfg.smtp_pass) {
-    throw new Error('SMTP 尚未配置，请先在「设置」中填写发件服务器');
+    throw new Error('SMTP 尚未配置，请先在「邮箱设置」里填写发件服务器');
   }
   if (!to || !to.trim()) throw new Error('收件人不能为空');
   const fromName = cfg.smtp_from_name || cfg.imap_user || cfg.smtp_user;
@@ -496,9 +642,9 @@ async function sendMail(d, { to, cc, subject, text }) {
     const safe = body.replace(/(^|\r?\n)\./g, '$1..');
     await c.cmd(safe + '\r\n.');
     await c.cmd('QUIT');
-    // 存入发件箱
-    d.prepare(`INSERT INTO emails(uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(NULL,?,?,?,?,1,?,'sent')`)
-      .run(subject || '', cfg.smtp_user, to, new Date().toISOString(), body);
+    // 存入发件箱（归属发件账号）
+    d.prepare(`INSERT INTO emails(account_id,uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(?,NULL,?,?,?,?,1,?,'sent')`)
+      .run(cfg.id || 1, subject || '', cfg.smtp_user, to, new Date().toISOString(), body);
     return { ok: true };
   } finally {
     c.close();
@@ -506,37 +652,46 @@ async function sendMail(d, { to, cc, subject, text }) {
 }
 
 // ---------- 文件夹视图 / 垃圾箱清理 ----------
-function listFolder(d, folder, { q = '', page = 1, pageSize = 20 } = {}) {
+function listFolder(d, folder, { q = '', page = 1, pageSize = 20, accountId } = {}) {
   const like = `%${q}%`;
+  const accCond = accountId ? `AND account_id=${Number(accountId)}` : '';
   const where = folder === 'trash'
     ? "folder='trash'"
     : `folder='${folder}'`;
   const cond = q ? `AND (subject LIKE ? OR from_addr LIKE ? OR to_addr LIKE ? OR body LIKE ?)` : '';
   const params = q ? [like, like, like, like] : [];
-  const total = d.prepare(`SELECT COUNT(*) c FROM emails WHERE ${where} ${cond}`).get(...params).c;
-  const rows = d.prepare(`SELECT * FROM emails WHERE ${where} ${cond} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`)
+  const total = d.prepare(`SELECT COUNT(*) c FROM emails WHERE ${where} ${accCond} ${cond}`).get(...params).c;
+  const rows = d.prepare(`SELECT * FROM emails WHERE ${where} ${accCond} ${cond} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`)
     .all(...params, pageSize, (page - 1) * pageSize);
+  // 关键词标签（v1.7.0）：主题+正文全网检索，命中第一个预设关键词 → 标题前显示标签（每封只一个）
+  const rules = getTagRules(d);
+  if (rules.length) {
+    for (const r of rows) r.tag = matchTag(rules, r.subject, r.body);
+  }
   return { total, rows };
 }
 
-// 垃圾箱按保留天数物理删除（scheduler 每日调）
+// 垃圾箱按保留天数物理删除（scheduler 每日调；多邮箱按各账号自己的保留天数）
 function purgeTrash(d) {
-  const days = Number(getConfig(d).trash_keep_days) || 30;
-  const r = d.prepare(`DELETE FROM emails WHERE folder='trash' AND deleted_at IS NOT NULL AND deleted_at < datetime('now','localtime', ?)`).run(`-${days} days`);
-  if (r.changes) console.log(`[email] 垃圾箱清理：删除 ${r.changes} 封（保留 ${days} 天）`);
-  return r.changes;
+  let n = 0;
+  for (const acc of getAccounts(d)) {
+    const days = Math.max(1, Number(acc.trash_keep_days) || 30);
+    const r = d.prepare(`DELETE FROM emails WHERE account_id=? AND folder='trash' AND deleted_at IS NOT NULL AND deleted_at < datetime('now','localtime', ?)`).run(acc.id, `-${days} days`);
+    if (r.changes) console.log(`[email] 垃圾箱清理（账号${acc.id}）：删除 ${r.changes} 封（保留 ${days} 天）`);
+    n += r.changes;
+  }
+  return n;
 }
 
-function saveDraft(d, { id, to, cc, subject, text }) {
-  const cfg = getConfig(d);
-  const sig = cfg.signature || '';
+function saveDraft(d, { id, to, cc, subject, text, accountId }) {
+  const cfg = getAccount(d, Number(accountId) || 1) || {};
   if (id) {
     d.prepare(`UPDATE emails SET to_addr=?, subject=?, body=?, date=datetime('now','localtime') WHERE id=? AND folder='draft'`)
       .run(to || '', subject || '', text || '', id);
     return id;
   }
-  const r = d.prepare(`INSERT INTO emails(uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(NULL,?,?,?,?,0,?,'draft')`)
-    .run(subject || '', cfg.smtp_user || '', to || '', new Date().toISOString(), text || '');
+  const r = d.prepare(`INSERT INTO emails(account_id,uid,subject,from_addr,to_addr,date,seen,body,folder) VALUES(?,NULL,?,?,?,?,0,?,'draft')`)
+    .run(cfg.id || 1, subject || '', cfg.smtp_user || '', to || '', new Date().toISOString(), text || '');
   return Number(r.lastInsertRowid);
 }
 
@@ -545,4 +700,6 @@ module.exports = {
   extractBodyFromSource, extractAttachmentsFromSource,
   sendMail, listFolder, purgeTrash, saveDraft,
   getAttachConfig, saveAttachConfig, attachmentFullPath, saveAttachment,
+  getAccounts, getAccount, accountsView, saveAccount, deleteAccount, accountReady,
+  batchSeen, batchMove, getNotifyCfg, saveNotifyCfg, getTagRules, saveTagRules,
 };

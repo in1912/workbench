@@ -1,15 +1,14 @@
 <template>
+  <!-- 个人账务（原独立页，2026-09 v1.7.0 并入「家庭管理」页最后一个 tab；标题栏由外层 Family 页提供） -->
   <div>
-    <h2 class="page-title">个人账务
-      <span class="muted" style="font-size:12px; font-weight:400">支付宝账单导入 · 科目识别 · 预算管理</span>
-    </h2>
     <div v-if="msg" class="msg" :class="msgType">{{ msg }}</div>
+    <div class="muted" style="font-size:12px; margin-bottom:6px">支付宝账单导入 · 科目识别 · 预算管理</div>
     <div class="tabs">
-      <button v-if="canTab('pay','dash')" :class="{active: tab==='dash'}" @click="tab='dash'">账务看板</button>
-      <button v-if="canTab('pay','cats')" :class="{active: tab==='cats'}" @click="openCats">科目设置</button>
-      <button v-if="canTab('pay','import')" :class="{active: tab==='import'}" @click="tab='import'">账单导入</button>
-      <button v-if="canTab('pay','bills')" :class="{active: tab==='bills'}" @click="openBills">账单明细流水</button>
-      <button v-if="canTab('pay','budget')" :class="{active: tab==='budget'}" @click="openBudget">月度年度预算</button>
+      <button v-if="canTab('family','dash')" :class="{active: tab==='dash'}" @click="tab='dash'">账务看板</button>
+      <button v-if="canTab('family','cats')" :class="{active: tab==='cats'}" @click="openCats">科目设置</button>
+      <button v-if="canTab('family','import')" :class="{active: tab==='import'}" @click="tab='import'">账单导入</button>
+      <button v-if="canTab('family','bills')" :class="{active: tab==='bills'}" @click="openBills">账单明细流水</button>
+      <button v-if="canTab('family','budget')" :class="{active: tab==='budget'}" @click="openBudget">月度年度预算</button>
     </div>
 
     <!-- ============ 账务看板 ============ -->
@@ -360,7 +359,7 @@ import { ref, computed, onMounted } from 'vue';
 import { api } from '../api';
 import { canTab, firstTab } from '../tabs';
 
-const tab = ref(firstTab('pay', 'dash'));
+const tab = ref(firstTab('family', 'dash'));
 const msg = ref('');
 const msgType = ref('ok');
 function flash(text, type = 'ok') { msg.value = text; msgType.value = type; setTimeout(() => (msg.value = ''), 4000); }

@@ -216,6 +216,11 @@
                 <input v-model.number="cfgForm.affection[k]" type="number" step="0.01" :disabled="!isAdmin" style="width:90px">
               </label>
             </div>
+            <!-- v1.7.0：管理员页面隐藏他人归属的宠物（只看自己创建/被分配的，避免全员宠物混在一起） -->
+            <label v-if="isAdmin" class="row small" style="gap:6px; margin-top:12px; cursor:pointer; align-items:center">
+              <input v-model="cfgForm.admin_hide_others" type="checkbox" style="width:auto" />
+              管理员只看自己的宠物（隐藏他人创建/分配给别人的宠物，我的页面不再混入全家的宠物）
+            </label>
             <button v-if="isAdmin" class="primary small" style="margin-top:10px" :disabled="saving" @click="saveConfig">{{ saving ? '保存中…' : '保存参数' }}</button>
           </template>
         </div>
@@ -555,6 +560,7 @@ function openSettings() {
   const c = config.value;
   for (const f of CFG_FIELDS) cfgForm[f.key] = c[f.key];
   cfgForm.affection = { ...(c.affection || {}) };
+  cfgForm.admin_hide_others = !!c.admin_hide_others; // v1.7.0 管理员隐藏他人宠物
 }
 async function saveConfig() {
   saving.value = true;

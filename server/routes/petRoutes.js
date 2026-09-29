@@ -51,6 +51,7 @@ const DEFAULT_CONFIG = {
   starve_death_days: 60,      // 超过 N 天没喂饭 → 去世
   growth_days: 14,            // 每 N 天长一圈像素
   max_rings: 6,               // 成长圈数上限
+  admin_hide_others: 0,       // 管理员页面隐藏他人归属的宠物（1=只看自己创建/被分配的，v1.7.0）
   poop_penalty_threshold: 3,  // 粪便超过 N 块开始按小时扣好感度
   affection: { rice: 0.01, water: 0.01, snack: 0.02, banana: 0.02, apple: 0.02, play: 0.03, checkin: 0.01, sick: -1, poop_hour: -0.02 },
 };
@@ -178,6 +179,12 @@ router.put('/pets/config', (req, res) => {
 // ---------- 权限 ----------
 function canManage(pet, user) { return user.role === 'admin' || pet.owner_id === user.id; }
 function canSee(pet, user) {
+  // v1.7.0：管理员开启「只看自己的宠物」后，他人创建/分配给别人的宠物不再全量混入管理员页面
+  // （此前管理员默认可见全部宠物很混乱，且从分配里移除管理员也不生效——可见性不看分配表）
+  if (user.role === 'admin' && getConfig().admin_hide_others) {
+    if (pet.owner_id === user.id) return true;
+    return !!db.prepare('SELECT 1 FROM pet_members WHERE pet_id=? AND user_id=?').get(pet.id, user.id);
+  }
   if (canManage(pet, user)) return true;
   if (pet.raise_mode === 'personal') return false; // 他人个人宠物不可见
   return !!db.prepare('SELECT 1 FROM pet_members WHERE pet_id=? AND user_id=?').get(pet.id, user.id);

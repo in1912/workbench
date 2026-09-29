@@ -247,6 +247,28 @@ CREATE TABLE IF NOT EXISTS email_config (
 );
 INSERT OR IGNORE INTO email_config (id) VALUES (1);
 
+-- 多邮箱账号（v1.7.0）：email_config 单行配置升级为多账号；老配置迁移为 1 号账号
+CREATE TABLE IF NOT EXISTS email_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT DEFAULT '',
+  imap_host TEXT DEFAULT '',
+  imap_port INTEGER DEFAULT 993,
+  imap_user TEXT DEFAULT '',
+  imap_pass TEXT DEFAULT '',
+  use_tls INTEGER DEFAULT 1,
+  smtp_host TEXT DEFAULT '',
+  smtp_port INTEGER DEFAULT 465,
+  smtp_user TEXT DEFAULT '',
+  smtp_pass TEXT DEFAULT '',
+  smtp_tls INTEGER DEFAULT 1,
+  smtp_from_name TEXT DEFAULT '',
+  signature TEXT DEFAULT '',
+  refresh_minutes INTEGER DEFAULT 20,
+  trash_keep_days INTEGER DEFAULT 30,
+  enabled INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
 -- 邮件通信录
 CREATE TABLE IF NOT EXISTS email_contacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -400,6 +422,10 @@ function applyColumnMigrations(d) {
   addCol(d, 'emails', 'deleted_at', 'TEXT');
   // 附件（JSON 数组 [{filename, size, path}]，path 为 NAS 目录下相对路径）
   addCol(d, 'emails', 'attachments', "TEXT DEFAULT ''");
+  // 多邮箱（v1.7.0）：邮件归属账号 id，与 email_accounts.id 对应；老邮件默认 1
+  addCol(d, 'emails', 'account_id', "INTEGER DEFAULT 1");
+  // 发件人显示名（v1.7.0 列表第一列用：如 GitHub &lt;noreply@github.com&gt; 显示 GitHub）
+  addCol(d, 'emails', 'from_name', "TEXT DEFAULT ''");
   // 文件存档落盘路径（设置 → 文件存档 配置目录后新文件存磁盘、库里只留元数据；空=内容存库，旧数据兼容读取）
   addCol(d, 'files', 'storage_path', "TEXT DEFAULT ''");
   // 家庭图床落盘路径（全局默认上传路径配置后新图片存磁盘、库里不再存 base64；空=base64 存库，旧数据兼容读取）
@@ -492,8 +518,40 @@ function initBusinessSchema(d) {
     CREATE INDEX IF NOT EXISTS idx_news_hot ON news_hot(board, day, rank);
     CREATE INDEX IF NOT EXISTS idx_clip ON clipboard_items(id DESC);
   `);
-  // emails.uid 唯一索引：让 INSERT OR IGNORE 去重生效（租户库新建表必建；主库由历史守卫处理）
-  try { d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_uid ON emails(uid)'); } catch {}
+  // emails 去重唯一索引（v1.7.0 多邮箱）：(account_id, uid) 组合唯一，
+  // 不同账号的 uid 互不冲突；发件/草稿 uid 为 NULL（SQLite 唯一索引视 NULL 互不相同，可多行）。
+  // 旧库是单列 idx_emails_uid → 先检测存在即删除，再建组合索引
+  try {
+    const legacy = d.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_emails_uid'").get();
+    if (legacy) d.exec('DROP INDEX idx_emails_uid');
+  } catch {}
+  try { d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_acc_uid ON emails(account_id, uid)'); } catch {}
+
+  // 多邮箱迁移（v1.7.0）：email_config 单行配置 → email_accounts 1 号账号（一次性，幂等标记）
+  try {
+    if (!getSetting(d, 'email_accounts_v17', false)) {
+      setSetting(d, 'email_accounts_v17', true);
+      const hasAcc = d.prepare('SELECT COUNT(*) c FROM email_accounts').get().c;
+      if (!hasAcc) {
+        const cfg = d.prepare('SELECT * FROM email_config WHERE id=1').get();
+        if (cfg && cfg.imap_user) {
+          const label = String(cfg.imap_user).split('@')[0] || '邮箱 1';
+          d.prepare(
+            `INSERT INTO email_accounts(id,label,imap_host,imap_port,imap_user,imap_pass,use_tls,
+             smtp_host,smtp_port,smtp_user,smtp_pass,smtp_tls,smtp_from_name,signature,
+             refresh_minutes,trash_keep_days,enabled)
+             VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`
+          ).run(
+            label, cfg.imap_host || '', cfg.imap_port || 993, cfg.imap_user || '', cfg.imap_pass || '',
+            cfg.use_tls ? 1 : 0, cfg.smtp_host || '', cfg.smtp_port || 465, cfg.smtp_user || '',
+            cfg.smtp_pass || '', cfg.smtp_tls ? 1 : 0, cfg.smtp_from_name || '', cfg.signature || '',
+            Math.max(5, Number(cfg.refresh_minutes) || 20), Math.max(1, Number(cfg.trash_keep_days) || 30)
+          );
+          console.log('[db] 邮箱单账号配置已迁移为多邮箱 1 号账号');
+        }
+      }
+    }
+  } catch (e) { console.warn('[db] 邮箱多账号迁移跳过:', e.message); }
 }
 
 // ---------- 主库 ----------
@@ -1353,9 +1411,9 @@ function cleanupMainBusinessTables() {
 if (!getSetting(db, 'email_rebuild_done')) {
   try {
     db.exec('DELETE FROM emails');
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_uid ON emails(uid)');
+    // v1.7.0 多邮箱：去重索引改为 (account_id, uid) 组合唯一（建/删统一在 initBusinessSchema 处理）
     setSetting(db, 'email_rebuild_done', true);
-    console.log('[db] 邮件表已清空并建立 uid 唯一索引');
+    console.log('[db] 邮件表已清空（历史重复数据修复）');
   } catch (e) { console.warn('[db] 邮件表迁移失败:', e.message); }
 }
 
@@ -1576,6 +1634,55 @@ function migrateTtsToTools() {
   console.log('[db] 「语音配音」tab 已从「学习」页移至「效率工具」页（用户授权已迁移）');
 }
 migrateTtsToTools();
+
+// 一次性迁移（2026-09 v1.7.0）：模块重组并入 tab ——
+//   业务系统(推送任务)/文件存档/全局搜索 → 「效率工具」页 tab；
+//   个人账务 → 「家庭管理」页最后一个 tab；用户管理 → 「设置」页 tab。
+// 页面权限随之迁移：allowed_pages 的 business/files/search → tools、pay → family、users → settings；
+// tab 细分合并：tabs.business(→tools) / tabs.pay(→family)（无细分=全开的语义保持不变）。
+function migrateV170Pages() {
+  const PAGE_TO = { business: 'tools', files: 'tools', search: 'tools', pay: 'family', users: 'settings' };
+  const TAB_TO = { business: ['tools'], pay: ['family'] };
+  const fix = (d) => {
+    if (getSetting(d, 'pages_merge_v170', false)) return;
+    setSetting(d, 'pages_merge_v170', true);
+    const users = (() => { try { return d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all(); } catch { return []; } })();
+    for (const u of users) {
+      let pages;
+      try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+      let tabs;
+      try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+      let changed = false;
+      if (Array.isArray(pages) && pages.length) {
+        const out = [];
+        for (const p of pages) {
+          const to = PAGE_TO[p];
+          if (to) { if (!out.includes(to)) out.push(to); changed = true; }
+          else out.push(p);
+        }
+        pages = out;
+      }
+      if (tabs && typeof tabs === 'object') {
+        for (const [from, tos] of Object.entries(TAB_TO)) {
+          if (!(from in tabs) || !Array.isArray(tabs[from])) continue;
+          const fromList = tabs[from];
+          delete tabs[from];
+          for (const to of tos) {
+            const cur = Array.isArray(tabs[to]) ? tabs[to] : null;
+            tabs[to] = cur ? [...new Set([...cur, ...fromList])] : [...new Set(fromList)];
+          }
+          changed = true;
+        }
+      }
+      if (changed) d.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE id=?')
+        .run(JSON.stringify(pages), JSON.stringify(tabs), u.id);
+    }
+  };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] v1.7.0 模块重组授权迁移完成（业务系统/文件存档/全局搜索→效率工具，个人账务→家庭管理，用户管理→设置）');
+}
+migrateV170Pages();
 
 // 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
 // （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。

@@ -1,10 +1,12 @@
 <template>
   <div>
-    <h2 class="page-title">家庭事项</h2>
+    <h2 class="page-title">家庭管理</h2>
     <div class="tabs">
       <button v-if="canTab('family','family')" :class="{active: tab==='family'}" @click="tab='family'">通知</button>
       <button v-if="canTab('family','kids')" :class="{active: tab==='kids'}" @click="tab='kids'">子女学习</button>
       <button v-if="canTab('family','profiles')" :class="{active: tab==='profiles'}" @click="openProfiles">家庭人员档案</button>
+      <!-- 个人账务（原独立页并入，2026-09 v1.7.0）：最后一个 tab，内含 5 个子 tab -->
+      <button v-if="canPay" :class="{active: tab==='pay'}" @click="tab='pay'">个人账务</button>
     </div>
 
     <template v-if="tab==='family'">
@@ -147,6 +149,9 @@
       </div>
     </template>
 
+    <!-- ============ 个人账务（原独立页整页并入，v1.7.0 最后一个 tab） ============ -->
+    <PayPanel v-else-if="tab==='pay'" />
+
     <!-- 档案修改弹窗：独立 v-if，刻意放在所有页签 template 之后。
          曾插在 profiles 与 kids 两个 template 中间，打断了 v-if/v-else-if 链：
          kids 变成了弹窗的 else 分支，弹窗开着时切换页签整页只剩弹窗 -->
@@ -180,13 +185,20 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { api } from '../api';
 import UserPicker from '../components/UserPicker.vue';
 import RichBox from '../components/RichBox.vue';
 import { canTab, firstTab } from '../tabs';
 import { displayHtml, richHasContent } from '../utils/rich';
+// v1.7.0 个人账务整页并入（组件内部自带 5 个子 tab 与数据加载）
+import PayPanel from './Pay.vue';
 
+const route = useRoute();
 const tab = ref(firstTab('family', 'family'));
+// 个人账务按钮可见性：整页键 'pay' 或任一子 tab 键有权限即可见（老授权迁移后细分键挂在 family 下）
+const canPay = computed(() =>
+  canTab('family', 'pay') || ['dash', 'cats', 'import', 'bills', 'budget'].some((k) => canTab('family', k)));
 const data = ref({ kids: [], tasks: [] });
 const family = ref([]);
 // 登记日期默认当天（可改可清空）
@@ -377,5 +389,9 @@ async function loadContacts() {
   try { contacts.value = (await api.get('/messages/contacts')).users || []; } catch { contacts.value = []; }
 }
 
-onMounted(() => { load(); loadContacts(); });
+onMounted(() => {
+  // ?tab=pay 直达（旧 /pay 地址重定向过来）
+  if (String(route.query.tab || '') === 'pay' && canPay.value) tab.value = 'pay';
+  load(); loadContacts();
+});
 </script>

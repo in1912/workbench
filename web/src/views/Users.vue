@@ -1,6 +1,7 @@
 <template>
+  <!-- 用户管理（原独立页，2026-09 v1.7.0 并入「设置」页 tab；标题栏由外层 Settings 页提供） -->
   <div>
-    <h2 class="page-title">用户管理 <span class="badge blue" style="font-size:12px">仅管理员</span></h2>
+    <div class="muted" style="font-size:12.5px; margin-bottom:8px">用户管理 <span class="badge blue" style="font-size:11px">仅管理员</span></div>
     <div v-if="msg" class="msg" :class="msgType">{{ msg }}</div>
 
     <div class="card" style="margin-bottom:14px">

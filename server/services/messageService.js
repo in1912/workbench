@@ -1,7 +1,7 @@
 // 短消息服务（跨租户：messages 表在主库，成员互发 + 各模块推送，永久留存）
 // module 取值：message=站内消息 / family=家庭事项 / kids=子女学习 / event=日程共享 / dingtalk=钉钉机器人收到
 const dingtalk = require('./dingtalkService');
-const MODULE_LABELS = { message: '站内消息', family: '家庭事项', kids: '子女学习', event: '日程提醒', dingtalk: '钉钉', ssl: 'SSL 证书', monitor: '电脑监控' };
+const MODULE_LABELS = { message: '站内消息', family: '家庭事项', kids: '子女学习', event: '日程提醒', dingtalk: '钉钉', ssl: 'SSL 证书', monitor: '电脑监控', email: '邮箱' };
 
 // 是否机器人虚拟成员（钉钉）
 function isBot(d, id) {

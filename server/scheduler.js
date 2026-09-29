@@ -27,27 +27,31 @@ function syncDefaultTodos(d, username) {
   setSetting(d, 'last_template_date', today);
 }
 
-// 邮箱拉取：固定每 5 分钟巡检一次，各租户按自己的 refresh_minutes 与上次拉取时间决定是否到点
-// （旧实现按单一配置注册一个间隔 cron，多租户后各人间隔不同，改为统一巡检 + 时间戳判断）
+// 邮箱拉取：固定每 5 分钟巡检一次，各租户各账号按自己的 refresh_minutes 与上次拉取时间决定是否到点
+// （v1.7.0 多邮箱：逐账号判断到点，到点即整租户拉取一遍启用中的账号；时间戳按账号分开记）
 async function pollEmails() {
   const emailService = require('./services/emailService');
   forEachTenant((d, uid, username) => {
     if (!emailService.isConfigured(d)) return;
-    let minutes = 20;
-    try {
-      const cfg = d.prepare('SELECT refresh_minutes FROM email_config WHERE id=1').get() || {};
-      minutes = Math.max(5, Number(cfg.refresh_minutes) || 20);
-    } catch { /* email_config 缺行用默认 */ }
-    const last = Number(getSetting(d, 'last_email_pull', 0)) || 0;
-    if (Date.now() - last < minutes * 60 * 1000) return;
-    setSetting(d, 'last_email_pull', Date.now()); // 先占位防并发重入
+    let due = false;
+    for (const acc of emailService.getAccounts(d)) {
+      if (!acc.enabled || !emailService.accountReady(acc)) continue;
+      const minutes = Math.max(5, Number(acc.refresh_minutes) || 20);
+      const last = Number(getSetting(d, `last_email_pull_a${acc.id}`, 0)) || 0;
+      if (Date.now() - last >= minutes * 60 * 1000) {
+        due = true;
+        setSetting(d, `last_email_pull_a${acc.id}`, Date.now()); // 先占位防并发重入
+      }
+    }
+    if (!due) return;
     (async () => {
       try {
         const r = await Promise.race([
-          emailService.refresh(d),
+          emailService.refresh(d, uid),
           new Promise((_, rej) => setTimeout(() => rej(new Error('超时')), 180000)),
         ]);
-        console.log(`[scheduler] 邮箱拉取(${username}):`, r.ok ? `成功 ${r.count} 封` : `失败 ${r.error}`);
+        const parts = (r.accounts || []).map((a) => a.error ? `账号${a.id}失败` : `账号${a.id} ${a.new || 0} 新`).join('，');
+        console.log(`[scheduler] 邮箱拉取(${username}):`, r.ok ? `成功（${parts}）` : `失败 ${r.error}`);
       } catch (e) {
         console.error(`[scheduler] 邮箱拉取超时(${username}):`, e.message);
       }

@@ -52,11 +52,12 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'search', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'private', 'business', 'ai', 'files', 'pay', 'pets', 'smarthome', 'settings'];
+const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'private', 'ai', 'pets', 'smarthome', 'settings'];
 
 function pageForPath(p) {
   if (p.startsWith('/overview')) return 'dashboard';
-  if (p.startsWith('/search')) return 'search';
+  // v1.7.0 模块重组：全局搜索/文件存档并入「效率工具」页 tab
+  if (p.startsWith('/search')) return 'tools';
   if (p.startsWith('/news')) return 'news';
   if (p.startsWith('/emails')) return 'email';
   if (p.startsWith('/contacts')) return 'email'; // 邮箱页「通讯录」tab（email_contacts 表）
@@ -79,21 +80,22 @@ function pageForPath(p) {
   // 智能家居（v1.6.8）：米家设备总览/属性读写/能力描述为页内共享；
   // /mihome/callback 在 index.js EXEMPT 免登录名单里（OAuth 回跳无登录态），不经过这里
   if (p.startsWith('/mihome')) return 'smarthome';
-  if (p.startsWith('/business') || p.startsWith('/business/skills')) return 'business';
+  // 业务系统改名「推送任务」并入效率工具页（2026-09 v1.7.0）
+  if (p.startsWith('/business')) return 'tools';
   if (p.startsWith('/ai')) return 'ai';
-  if (p.startsWith('/pushes') || p.startsWith('/schedules')) return 'business'; // 原「AI 推送」页已并入业务系统页
-  if (p.startsWith('/files')) return 'files';
+  if (p.startsWith('/pushes') || p.startsWith('/schedules')) return 'tools'; // 原「AI 推送」页并入的推送 tab
+  if (p.startsWith('/files')) return 'tools'; // 文件存档并入效率工具页（v1.7.0）
   // 日历公共数据（看板「中国节日日历」与「待办与日程 → 日历」共用）：仅需登录，不绑页面权限。
   // 曾挂在 files 页下——没开「文件存档」权限的成员，日历上节假日全部消失
   if (p.startsWith('/holidays') || p.startsWith('/calendar')) return null;
-  if (p.startsWith('/pay')) return 'pay';
+  if (p.startsWith('/pay')) return 'family'; // 个人账务并入「家庭管理」页（v1.7.0）
   if (p.startsWith('/pets')) return 'pets'; // 电子宠物（悬浮窗的 state/action 不绑 tab，整页共享）
   if (p.startsWith('/typing')) return 'learning'; // 打字赚钱 4 个 tab 已并入学习页
   if (p.startsWith('/credit')) return 'learning'; // 赊账兑换（兑现登记/记录页共用列表）
   if (p.startsWith('/piano')) return 'learning'; // 练琴录音
   if (p.startsWith('/wish')) return 'learning'; // 心愿卡
   if (p.startsWith('/upgrade')) return 'upgrade';
-  if (p.startsWith('/users')) return 'users';
+  if (p.startsWith('/users')) return 'settings'; // 用户管理并入「设置」页 tab（v1.7.0，路由内部再限管理员）
   if (p.startsWith('/settings') || p.startsWith('/roles')) return 'settings';
   return null;
 }
@@ -107,12 +109,22 @@ const TAB_PATHS = {
     ['family', ['/family']],
     ['kids', ['/kids', '/kid-tasks']],
     ['profiles', ['/family-profiles']], // /lunar 是 Tasks 日历共用工具接口，不绑 tab
+    // 个人账务从独立页并入（2026-09 v1.7.0）：'pay' 为可见 tab 键（空数组=仅授权表勾选项，
+    // 无独立 API 前缀），下面 5 个细分键继续约束子功能接口
+    ['pay', []],
+    ['dash', ['/pay/dashboard', '/pay/rank', '/pay/ai-analysis']],
+    ['cats', ['/pay/categories', '/pay/cycle', '/pay/fixed']],
+    ['import', ['/pay/import', '/pay/train', '/pay/classify-ai']],
+    ['bills', ['/pay/bills']],
+    ['budget', ['/pay/budgets', '/pay/budget-compare']],
   ],
   tasks: [
     ['todo', ['/todos']],
     ['cal', ['/events', '/calendar']],
   ],
   email: [
+    // 邮箱设置 tab（v1.7.0）：账号管理/标签规则/提醒设置；长前缀在前，避免被 mail 的 /emails 截获
+    ['esettings', ['/emails/accounts', '/emails/tags', '/emails/notify', '/settings/email']],
     ['mail', ['/emails']],
     ['contacts', ['/contacts']],
   ],
@@ -141,19 +153,6 @@ const TAB_PATHS = {
     // 心愿卡设置（上传/改/删产品）：受限，独立于 wish tab
     ['wishset', ['/wish/manage']],
   ],
-  pay: [
-    ['dash', ['/pay/dashboard', '/pay/rank', '/pay/ai-analysis']],
-    ['cats', ['/pay/categories', '/pay/cycle', '/pay/fixed']],
-    ['import', ['/pay/import', '/pay/train', '/pay/classify-ai']],
-    ['bills', ['/pay/bills']],
-    ['budget', ['/pay/budgets', '/pay/budget-compare']],
-  ],
-  business: [
-    ['skill', ['/business/skills']],
-    ['sys', ['/business']],
-    ['push', ['/pushes']],   // 原「AI 推送」页的两个 tab 并入业务系统
-    ['config', ['/schedules']],
-  ],
   // 「私有项目」页（2026-09 v1.6.2）：三大测试中心从「效率工具」页移入
   // 三个中心接口同构：档案同步 / 分享前缀 / 管理列表（免登录的 /xxx/public/:id 不经过权限校验）
   private: [
@@ -175,6 +174,21 @@ const TAB_PATHS = {
     // 语音配音从「学习」页移来（2026-09 v1.6.5）：音色库管理与引擎安装（安装接口内部再限管理员）；
     // 共享的合成/音色/状态在 pageForPath 已放行为仅需登录（听写播报也用）
     ['tts', ['/tts/manage', '/tts/engine']],
+    // 业务系统（改名「推送任务」）整页并入（2026-09 v1.7.0）：'business' 为可见 tab 键（空数组=仅
+    // 授权表勾选项），sys/skill/push/config 细分键继续约束子功能接口
+    ['business', []],
+    ['skill', ['/business/skills']],
+    ['sys', ['/business']],
+    ['push', ['/pushes']],
+    ['config', ['/schedules']],
+    // 文件存档整页并入（2026-09 v1.7.0）
+    ['files', ['/files']],
+    // 全局搜索整页并入（2026-09 v1.7.0）
+    ['search', ['/search']],
+  ],
+  settings: [
+    // 用户管理并入「设置」页（2026-09 v1.7.0）：/users 端点路由内部再限管理员
+    ['users', ['/users']],
   ],
   pets: [
     // 主查看 tab（宠物列表/喂养/悬浮窗）：整页共享端点不绑路径，空数组=仅作授权表勾选项

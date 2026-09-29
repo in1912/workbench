@@ -109,5 +109,9 @@ async function aiSummarize() {
   }
 }
 
-onMounted(load);
+// 进页默认选中最新一篇笔记并显示预览（列表按更新时间倒序，第一条即最新；2026-09 v1.7.0）
+onMounted(async () => {
+  await load();
+  if (notes.value.length) select(notes.value[0]);
+});
 </script>
