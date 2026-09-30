@@ -1,0 +1,7 @@
+# 换行规范：macOS shell 脚本必须 LF；Windows 批处理必须 CRLF
+*.command text eol=lf
+*.sh text eol=lf
+*.mjs text eol=lf
+*.py text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
