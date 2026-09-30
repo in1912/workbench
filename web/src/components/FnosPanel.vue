@@ -23,7 +23,9 @@
           下载链接自动跟随你打开本页的地址：在内网浏览器打开（如 <code>http://192.168.x.x:3000</code>）即走内网直连，在外网打开（如域名 https:// 地址）即走外网——内网下载更快。把上面的下载地址复制到内网其它设备浏览器（已登录工作台）也可直接下载。
         </div>
       </template>
-      <div v-else-if="info" class="msg err">当前部署未内置 fpk 安装包（server/fnos/ 为空）。本页下载需在部署目录放入选最新的 fpk 文件。</div>
+      <div v-else-if="info" class="msg" style="background:rgba(230,162,60,.15); color:var(--orange,#e6a23c); border:1px solid var(--orange,#e6a23c)">
+        当前部署（fnOS 应用）未内置 fpk 安装包——应用包自身不含安装包文件（避免包中套包逐版翻倍）。请到电脑 / 服务器版工作台的同一页面下载，或从源码仓库 <code>server/fnos/</code> 目录获取；下方安装步骤与介绍照常适用。
+      </div>
       <div v-else class="muted">正在读取安装包信息…</div>
     </div>
 
