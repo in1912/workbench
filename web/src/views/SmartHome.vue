@@ -536,9 +536,11 @@ async function loadCcFiles() {
   catch { ccFiles.value = []; }
 }
 const fmtCcSize = (n) => (!n ? '' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-function ccDl(name) { api.download(`/cclight/file/${encodeURIComponent(name)}`, name).catch(() => {}); }
-function ccDlPack() { api.download('/cclight/package', 'cc-light.zip').catch(() => {}); }
-function ccDlPackMac() { api.download('/cclight/package-mac', 'cc-light-mac.zip').catch(() => {}); }
+// v1.9.8：下载失败不再静默（此前 .catch(()=>{}) 吞掉一切——网关代答/断网时点了没反应，
+// 「打包下载内容是空的」反馈因此无从定位）。错误经 flashErr 显示在页面顶部。
+function ccDl(name) { api.download(`/cclight/file/${encodeURIComponent(name)}`, name).catch((e) => flashErr(`下载失败：${e.message}`)); }
+function ccDlPack() { api.download('/cclight/package', 'cc-light.zip').catch((e) => flashErr(`打包下载失败：${e.message}`)); }
+function ccDlPackMac() { api.download('/cclight/package-mac', 'cc-light-mac.zip').catch((e) => flashErr(`打包下载失败：${e.message}`)); }
 if (tab.value === 'cclight') loadCcFiles();
 
 // ---------- 消息 ----------

@@ -26,15 +26,18 @@ schtasks /Delete /TN "CC-Light-Daemon" /F >nul 2>nul
 if errorlevel 1 (echo [2/3] Autostart task not found.) else (echo [2/3] Autostart task deleted.)
 
 rem ---- 4. remove hooks (Claude Code, then Codex CLI) ----
-where node >nul 2>nul && node "%~dp0install-hooks.js" --remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --codex-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --workbuddy-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --codebuddy-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --cursor-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --dsh-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --hermes-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --gemini-remove
-where node >nul 2>nul && node "%~dp0install-hooks.js" --qwen-remove
+if not exist "%~dp0install-hooks.js" echo [!] install-hooks.js not found next to this script - agent hooks NOT removed.
+if exist "%~dp0install-hooks.js" (
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --codex-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --workbuddy-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --codebuddy-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --cursor-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --dsh-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --hermes-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --gemini-remove
+  where node >nul 2>nul && node "%~dp0install-hooks.js" --qwen-remove
+)
 echo [3/3] Hooks removed (if they were installed).
 
 echo.

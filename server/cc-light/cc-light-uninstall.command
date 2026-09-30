@@ -26,7 +26,10 @@ pkill -f "$PWD/daemon.py" >/dev/null 2>&1
 echo "[2/3] Daemon stopped."
 
 # ---- 4. remove hooks (all 9 agents) ----
-if command -v node >/dev/null 2>&1; then
+if [ ! -f ./install-hooks.js ]; then
+  echo "[!] install-hooks.js not found in this folder - agent hooks NOT removed."
+fi
+if command -v node >/dev/null 2>&1 && [ -f ./install-hooks.js ]; then
   node ./install-hooks.js --remove
   node ./install-hooks.js --codex-remove
   node ./install-hooks.js --workbuddy-remove

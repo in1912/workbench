@@ -74,7 +74,12 @@ ask_install() {
   prompt="$1"; flag="$2"
   read -r -p "$prompt [Y/N]: " ANS
   case "$ANS" in
-    Y|y) node ./install-hooks.js "$flag" ;;
+    Y|y) if [ -f ./install-hooks.js ]; then
+           node ./install-hooks.js "$flag"
+         else
+           echo "  [!] install-hooks.js not found in this folder - hook NOT installed."
+           echo "      Use the full cc-light package (cc-light-mac.zip) to install hooks."
+         fi ;;
     *) echo "  skipped." ;;
   esac
 }

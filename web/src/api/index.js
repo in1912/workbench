@@ -48,6 +48,30 @@ export function prefixUrl(p) {
   return GATEWAY_PREFIX + p;
 }
 
+// v1.9.8：二进制/附件通道的网关假200守卫。request() 的自愈只覆盖 JSON 响应；
+// download / postBlob / upload 走 res.ok 直判——fnOS 网关代答（HTTP 200 +
+// text/plain「invalid token」13 字节，NAS 会话失效签名，真机 2026-10-01 复现）
+// 会被当成功：下载把代答文本存成「空 zip」（红绿灯安装包下载全空的用户反馈），
+// 上传吞成 {}。本应用这些接口的正常响应 Content-Type 恒非 text/plain|html，
+// 命中即读出代答原文：invalid token 给重登指引，其余给片段，并上报前端错误日志。
+async function rejectGatewayText(res) {
+  if (!res.ok) return; // 非 2xx 由调用方按各自语义报错
+  const ct = res.headers.get('content-type') || '';
+  if (!/^text\/(plain|html)/i.test(ct)) return;
+  const text = await res.text();
+  const snippet = text.slice(0, 120).replace(/\s+/g, ' ');
+  try {
+    navigator.sendBeacon(rawUrl('/api/client-errors'), new Blob([JSON.stringify({
+      msg: `网关假200（二进制通道）→ ${snippet}`, stack: '', page: location.hash, ts: Date.now(),
+    })], { type: 'application/json' }));
+  } catch { /* 上报失败不影响本地 */ }
+  throw new Error(
+    snippet.includes('invalid token')
+      ? 'NAS 会话已失效（网关拦截了该请求）：请打开 NAS 网页重新登录后刷新本页，或从飞牛桌面重新进入应用'
+      : `响应被网关代答（${snippet || '空响应'}），请重试或重新进入应用`
+  );
+}
+
 // 花生壳 HTTP 型映射会掐掉 PATCH 方法的连接（实测 GET/POST/PUT/DELETE 均可达、PATCH 必断）：
 // 所有 PATCH 实际改发 PUT + 还原头，服务端中间件在路由前还原为 PATCH，路由零改动。
 // 幂等方法网络层失败自动重试一次（中转杀连接/复用死套接字时，换新连接实测 100% 可达）；
@@ -161,6 +185,7 @@ async function upload(url, fields = {}, files = []) {
     if (!location.hash.includes('/login')) location.hash = '#/login';
     throw new Error('登录已过期，请重新登录');
   }
+  await rejectGatewayText(res);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `上传失败 (${res.status})`);
   return data;
@@ -185,6 +210,7 @@ async function postBlob(url, body) {
     const d = await res.json().catch(() => ({}));
     throw new Error(d.error || `请求失败 (${res.status})`);
   }
+  await rejectGatewayText(res);
   return res.blob();
 }
 
@@ -198,6 +224,7 @@ async function download(url, filename) {
     const d = await res.json().catch(() => ({}));
     throw new Error(d.error || `下载失败 (${res.status})`);
   }
+  await rejectGatewayText(res);
   if (!filename) {
     const cd = res.headers.get('Content-Disposition') || '';
     const m = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="([^"]+)"/);
