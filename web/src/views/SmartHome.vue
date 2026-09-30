@@ -112,6 +112,7 @@
       </div>
 
       <div class="card">
+        <img class="cc-demo" :src="ccDemoImg" alt="成品示例：ESP32-C3 红绿灯" title="成品示例" />
         <h3 style="margin:0 0 8px">Agent红绿灯 — AI Agent 状态指示灯（九家：Claude Code / Codex CLI / WorkBuddy / CodeBuddy / Cursor / DeepSeek Harness / Hermes / Gemini CLI / Qwen Code）</h3>
         <div class="muted" style="font-size:13px; line-height:1.8; margin-bottom:10px">
           ESP32-C3 SuperMini 开发板 + 三色红绿灯模块。AI 干什么，灯就显示什么——<b>一块板子同时兼容九家 agent</b>（见下方「① 多 agent 兼容说明」），<b>Windows / macOS 都能装</b>（下载包见本页顶部）：
@@ -498,6 +499,7 @@ import { canTab, firstTab } from '../tabs';
 import { api } from '../api';
 import QRCode from 'qrcode';
 import { zh, TERM_GROUPS } from '../miotTerms';
+import ccDemoImg from '../assets/cclight-demo.png';
 
 const route = useRoute();
 const router = useRouter();
@@ -1090,6 +1092,9 @@ onBeforeUnmount(() => {
 .sh-events { margin-top: 6px; }
 
 /* Agent红绿灯 tab（v1.8.1）：灯效表 / 步骤 / 下载清单 */
+/* 成品示例图：浮在介绍卡片右上角，标题/简介环绕，宽表格自动排到图下方 */
+.cc-demo { float: right; width: 150px; max-width: 40%; margin: 2px 0 10px 16px; border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,.12); }
+@media (max-width: 640px) { .cc-demo { width: 104px; margin-left: 10px; } }
 .cc-note { border: 1px solid rgba(79, 124, 247, .4); background: rgba(79, 124, 247, .08); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.8; margin: 0 0 12px; }
 .cc-dl-group { font-size: 13.5px; margin: 2px 0 6px; color: var(--text); border-left: 3px solid rgba(79, 124, 247, .6); padding-left: 8px; }
 .cc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
