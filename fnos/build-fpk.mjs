@@ -38,7 +38,12 @@ for (const f of ['manifest', 'ICON.PNG', 'ICON_256.PNG', 'cmd', 'config', 'wizar
 // 2) UI 入口：fnos/app-ui → app/ui（manifest desktop_uidir=ui）
 fs.cpSync(path.join(FNOS_DIR, 'app-ui'), path.join(APP, 'ui'), { recursive: true });
 // 3) 运行文件：git 已提交内容（server + zhizu + package*.json + fnos 说明），与 GitHub 完全一致
-execSync(`git archive HEAD server zhizu package.json package-lock.json fnos/README-FNOS.md | tar -x -C "${APP}"`, { cwd: ROOT, stdio: 'inherit' });
+//    （MSYS tar 不认反斜杠盘符路径，-C 统一转正斜杠）
+const APP_POSIX = APP.replaceAll('\\', '/');
+execSync(`git archive HEAD server zhizu package.json package-lock.json fnos/README-FNOS.md | tar -x -C "${APP_POSIX}"`, { cwd: ROOT, stdio: 'inherit' });
+// git archive 保留 fnos/ 路径前缀：说明文档挪到 app 根（随包安装在 target/ 根可读）
+fs.renameSync(path.join(APP, 'fnos', 'README-FNOS.md'), path.join(APP, 'README-FNOS.md'));
+fs.rmSync(path.join(APP, 'fnos'), { recursive: true, force: true });
 // 4) 前端构建产物：只带最新一份
 fs.cpSync(path.join(distRoot, latest), path.join(APP, 'web', 'dist', latest), { recursive: true });
 // 5) 生产依赖：优先用现成目录（同 lockfile、已验证零原生模块），否则现场安装

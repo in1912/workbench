@@ -1,0 +1,4 @@
+#!/bin/bash
+# 安装前：准备数据/日志目录（$TRIM_PKGVAR 由 fnOS 创建，这里兜底并建子目录）
+mkdir -p "${TRIM_PKGVAR:-/var/apps/qgworkbench/var}/data" "${TRIM_PKGVAR:-/var/apps/qgworkbench/var}/logs"
+exit 0
