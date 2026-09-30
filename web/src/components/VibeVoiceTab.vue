@@ -413,7 +413,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
 import { marked } from 'marked';
-import { api } from '../api';
+import { api, rawUrl } from '../api';
 import { toWavBlob } from '../learning/audioWav';
 
 const fmtDur = (sec) => {
@@ -709,7 +709,7 @@ function uploadBlob(blob, name, source, startedAt, endedAt, hint, onProg) {
     fd.append('ended_at', endedAt);
     fd.append('duration_hint', String(Math.round((Number(hint) || 0) * 10) / 10));
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/vibe/upload');
+    xhr.open('POST', rawUrl('/api/vibe/upload'));   // 网关前缀 + token 冗余（v1.9.1）
     xhr.setRequestHeader('Authorization', 'Bearer ' + (localStorage.getItem('wb_token') || ''));
     xhr.responseType = 'json';
     xhr.timeout = 10 * 60 * 1000; // 大文件/慢网络 10 分钟兜底

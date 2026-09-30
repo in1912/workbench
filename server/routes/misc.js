@@ -45,7 +45,7 @@ router.get('/system-info', (req, res) => {
   res.json({
     name: getSetting('system_name', '全能工作台'),
     name_en: getSetting('system_name_en', 'Workbench'),
-    version: getSetting('current_version', '') || 'v1.9.0',
+    version: getSetting('current_version', '') || 'v1.9.1',
   });
 });
 // 保存系统名称（管理员：系统级配置全员可见）

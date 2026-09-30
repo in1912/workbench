@@ -186,7 +186,7 @@
 import { ref, computed, onMounted, watch, nextTick, defineAsyncComponent } from 'vue';
 import { useRouter } from 'vue-router';
 import { plainText } from '../utils/rich';
-import { api } from '../api';
+import { api, rawUrl } from '../api';
 const router = useRouter();
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -416,7 +416,7 @@ function renderMap() {
   if (amap) { amap.destroy(); amap = null; }
   if (!map) {
     map = L.map(el).setView([30, 120], 5);
-    L.tileLayer('/api/tile?x={x}&y={y}&z={z}', {
+    L.tileLayer(rawUrl('/api/tile?x={x}&y={y}&z={z}'), {   // rawUrl 补网关前缀（v1.9.1；瓦片本身免鉴权）
       attribution: '© Esri', maxZoom: 18,
     }).addTo(map);
   }

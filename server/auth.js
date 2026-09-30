@@ -26,19 +26,27 @@ function createSession(userId) {
 }
 function resolveUser(req) {
   const header = req.headers.authorization || '';
-  // Bearer 头优先；<img> 等标签请求带不了自定义头，退回 ?token= 查询参数（富文本图片 URL 场景）
-  const token = header.startsWith('Bearer ') ? header.slice(7) : String(req.query.token || '');
-  if (!token) return null;
-  const row = db.prepare(
-    `SELECT u.id, u.username, u.role, u.display_name, u.nickname, u.allowed_pages, u.allowed_tabs
-     FROM sessions s JOIN users u ON u.id=s.user_id
-     WHERE s.token=? AND s.expires_at > datetime('now','localtime')`
-  ).get(token);
-  return row ? {
-    ...row,
-    allowed_pages: JSON.parse(row.allowed_pages || '[]'),
-    allowed_tabs: JSON.parse(row.allowed_tabs || '{}'),
-  } : null;
+  // Bearer 头优先；<img> 等标签请求带不了自定义头，退回 ?token= 查询参数（富文本图片 URL 场景）。
+  // v1.9.1：fnOS 网关会把转发的 Authorization 头替换成 NAS 自己的凭证，单取头会把真令牌埋掉
+  // （免登成功但业务接口全 401）；改为逐个候选尝试——头查不到会话再试 query，两边都有效时头优先，
+  // 常规部署行为不变。
+  const candidates = [];
+  if (header.startsWith('Bearer ')) candidates.push(header.slice(7));
+  if (req.query.token) candidates.push(String(req.query.token));
+  for (const token of candidates) {
+    if (!token) continue;
+    const row = db.prepare(
+      `SELECT u.id, u.username, u.role, u.display_name, u.nickname, u.allowed_pages, u.allowed_tabs
+       FROM sessions s JOIN users u ON u.id=s.user_id
+       WHERE s.token=? AND s.expires_at > datetime('now','localtime')`
+    ).get(token);
+    if (row) return {
+      ...row,
+      allowed_pages: JSON.parse(row.allowed_pages || '[]'),
+      allowed_tabs: JSON.parse(row.allowed_tabs || '{}'),
+    };
+  }
+  return null;
 }
 function destroySession(req) {
   const header = req.headers.authorization || '';

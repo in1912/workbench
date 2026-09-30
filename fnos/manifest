@@ -1,12 +1,12 @@
 appname=qgworkbench
-version=1.9.0
+version=1.9.1
 display_name=全能工作台
-desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/personal-workbench
+desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
 platform=all
 
 maintainer=in1912
-maintainer_url=https://github.com/in1912/personal-workbench
+maintainer_url=https://github.com/in1912/workbench
 
 install_dep_apps=nodejs_v22
 
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=首个飞牛应用版（工作台 v1.9.0）：全部 13 模块 + 统一网关 NAS 免登嵌入 + 7777 端口直连 + @appdata 数据持久化
+changelog=修复网关入口令牌被剥导致的页面闪退/无法保存/退出重登循环（令牌改走查询参数冗余通道）；退出后不再自动用 NAS 账号重登（同标签页内）；网关 isadmin 头取值容错

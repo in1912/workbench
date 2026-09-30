@@ -1,6 +1,6 @@
 # 全能工作台 · 飞牛 fnOS 应用版（v1.9.0）
 
-把 [personal-workbench](https://github.com/in1912/personal-workbench)（自托管家庭/个人效率中枢，13 个模块）打包成飞牛 fnOS 应用（.fpk）：应用中心安装、桌面图标直达、**NAS 账号免登**（统一网关）、数据持久化在 `@appdata`，同时保留 **7777 端口局域网直连**。
+把 [personal-workbench](https://github.com/in1912/workbench)（自托管家庭/个人效率中枢，13 个模块）打包成飞牛 fnOS 应用（.fpk）：应用中心安装、桌面图标直达、**NAS 账号免登**（统一网关）、数据持久化在 `@appdata`，同时保留 **7777 端口局域网直连**。
 
 ## 安装（二选一）
 

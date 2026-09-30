@@ -19,6 +19,23 @@ function getToken() {
   return localStorage.getItem('wb_token') || '';
 }
 
+// 令牌冗余通道（v1.9.1）：飞牛 fnOS 统一网关会剥掉/替换转请求的 Authorization 头，
+// 表现为免登成功但所有业务接口 401（页面闪退、保存失败、退出即自动重登循环）。
+// query 参数任何网关都不会动——<img> 直链本来就走这条路，这里推广到全部请求；
+// Authorization 头照发（非网关部署优先走头），服务端 resolveUser 按头→query 顺序回退。
+function withToken(url) {
+  const t = getToken();
+  if (!t) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t);
+}
+
+// 给不走 api 模块的裸 '/api/..' 调用（XHR 上传、Leaflet 瓦片 URL 模板等）用：
+// 同样补网关前缀 + 令牌查询参数。非 '/api' 开头（跨机绝对地址等）原样返回。
+export function rawUrl(url) {
+  if (!url.startsWith('/api')) return url;
+  return withToken(GATEWAY_PREFIX + url);
+}
+
 // 花生壳 HTTP 型映射会掐掉 PATCH 方法的连接（实测 GET/POST/PUT/DELETE 均可达、PATCH 必断）：
 // 所有 PATCH 实际改发 PUT + 还原头，服务端中间件在路由前还原为 PATCH，路由零改动。
 // 幂等方法网络层失败自动重试一次（中转杀连接/复用死套接字时，换新连接实测 100% 可达）；
@@ -39,7 +56,7 @@ async function request(method, url, body, retried = false) {
   }
   let res;
   try {
-    res = await fetch(base + url, { ...opts, signal: AbortSignal.timeout(180000) });
+    res = await fetch(withToken(base + url), { ...opts, signal: AbortSignal.timeout(180000) });
   } catch (e) {
     if (!retried && NET_RETRY.has(method) && e && e.name !== 'AbortError') {
       await new Promise((r) => setTimeout(r, 500));
@@ -77,7 +94,7 @@ async function upload(url, fields = {}, files = []) {
     if (v !== undefined && v !== null && v !== '') fd.append(k, v);
   }
   for (const f of files) fd.append(f.name, f.file, f.file.name);
-  const res = await fetch(base + url, {
+  const res = await fetch(withToken(base + url), {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body: fd,
@@ -97,7 +114,7 @@ async function upload(url, fields = {}, files = []) {
 // 带登录令牌取二进制（语音合成返回 audio/wav）。
 // 超时放宽到 5 分钟：首次合成可能包含引擎冷启动 + 首次模型加载。
 async function postBlob(url, body) {
-  const res = await fetch(base + url, {
+  const res = await fetch(withToken(base + url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
     body: JSON.stringify(body ?? {}),
@@ -119,7 +136,7 @@ async function postBlob(url, body) {
 // 带登录令牌下载文件。<a href> 直链不带 Authorization 头会被全局鉴权拦成 401，
 // 必须 fetch 取 blob 后再触发浏览器保存。filename 缺省时从 Content-Disposition 解析。
 async function download(url, filename) {
-  const res = await fetch(base + url, {
+  const res = await fetch(withToken(base + url), {
     headers: { Authorization: `Bearer ${getToken()}` },
   });
   if (!res.ok) {

@@ -331,6 +331,9 @@ const visibleNavs = computed(() => {
 function logout() {
   localStorage.removeItem('wb_token');
   localStorage.removeItem('wb_user');
+  // fnOS 网关免登场景（v1.9.1）：退出后本标签页不再自动用 NAS 账号重登（sessionStorage 关标签即失效，
+  // 重新从飞牛桌面打开恢复免登）；手动账号密码登录成功时会在 enterSystem 里清掉该标记
+  if (location.pathname.startsWith('/app/')) sessionStorage.setItem('wb_fnos_off', '1');
   router.push('/login');
 }
 </script>

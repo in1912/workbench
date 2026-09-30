@@ -210,7 +210,8 @@ router.post('/auth/fnos-login', (req, res) => {
   if (!req.viaGateway) return res.status(401).json({ error: '仅飞牛 fnOS 网关入口可用' });
   const nodeCrypto = require('crypto');
   const uname = String(req.headers['x-trim-username'] || '').trim();
-  const isAdmin = String(req.headers['x-trim-isadmin'] || '') === 'true';
+  // 网关 isadmin 取值容错（v1.9.1）：不同 fnOS 版本见过 'true'/'1'/'True'，统一小写比较
+  const isAdmin = ['true', '1', 'yes'].includes(String(req.headers['x-trim-isadmin'] || '').toLowerCase());
   if (!/^[A-Za-z0-9_.-]{1,32}$/.test(uname)) {
     writeLoginLog({ username: 'fnos:' + uname.slice(0, 60), success: 0, reason: '免登失败（网关用户名不合法）', ip: clientIp(req), ua: req.headers['user-agent'] || '' });
     return res.status(401).json({ error: 'fnOS 免登失败：网关未提供有效用户名' });

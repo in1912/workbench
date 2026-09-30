@@ -82,6 +82,7 @@ async function requestDingCode() {
 }
 // 登录成功统一入口（账号密码 / 免登共用）
 function enterSystem(d) {
+  sessionStorage.removeItem('wb_fnos_off');   // 登录成功即解除「退出后不自动免登」标记
   localStorage.setItem('wb_token', d.token);
   localStorage.setItem('wb_user', JSON.stringify(d.user));
   // 主题随账号：登录即应用该账号保存的主题
@@ -196,7 +197,8 @@ onMounted(() => {
   }
   // 飞牛 fnOS 桌面内打开（统一网关 /app/... 前缀，v1.9.0）：NAS 登录态已被网关校验并注入可信用户头，
   // 先试免登直接进系统；失败（如直连 7777 端口无网关头）静默回退账号密码表单
-  if (location.pathname.startsWith('/app/')) {
+  // wb_fnos_off：用户在本标签页主动退出过，先给账号密码表单（关标签重开即恢复免登，v1.9.1）
+  if (location.pathname.startsWith('/app/') && !sessionStorage.getItem('wb_fnos_off')) {
     api.post('/auth/fnos-login', {})
       .then((d) => { if (d && d.token) enterSystem(d); })
       .catch(() => {});
