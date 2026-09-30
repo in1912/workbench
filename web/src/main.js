@@ -26,6 +26,17 @@ if (wbGatewayPrefix) {
         const t = localStorage.getItem('wb_token') || '';
         if (t && !url.includes('token=')) url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t);
         input = url;
+        // v1.9.6：网关把 Authorization 头当 NAS 令牌校验，带头一律拒（真机证实）。
+        // 各视图裸 fetch 手动加的头在这里统一剥掉，认证由上面的 ?token= 参数承担。
+        if (init && init.headers) {
+          if (init.headers instanceof Headers) init.headers.delete('Authorization');
+          else if (Array.isArray(init.headers)) init.headers = init.headers.filter(([k]) => String(k).toLowerCase() !== 'authorization');
+          else {
+            const c = { ...init.headers };
+            delete c.Authorization; delete c.authorization;
+            init.headers = c;
+          }
+        }
       }
     } catch { /* 任何解析异常都按原请求发出 */ }
     return origFetch(input, init);

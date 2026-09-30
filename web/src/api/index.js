@@ -3,6 +3,12 @@
 // 其余静态资源天然可迁移，这里补齐 API 这一处。常规部署（根路径）保持 '/api' 不变。
 const GATEWAY_PREFIX = (location.pathname.match(/^\/app\/[A-Za-z0-9_-]+/) || [''])[0];
 const base = GATEWAY_PREFIX + '/api';
+// v1.9.6：fnOS 网关会把 Authorization 头当 NAS 令牌校验，带头的业务请求一律被拒
+// （真机 70+ 样本证实：带头的首发全被拦回 200 "invalid token"，去头的重试全成功；
+// 而 sendBeacon 只带 ?token= 参数无头，全部穿透）。网关部署下一律不发 Authorization 头，
+// 认证由 ?token= 查询参数 + wb_token Cookie 双通道承担（服务端 resolveUser 已支持）。
+export const GATEWAY_ACTIVE = !!GATEWAY_PREFIX;
+const authHeaders = () => (GATEWAY_ACTIVE ? {} : { Authorization: `Bearer ${getToken()}` });
 
 // 兼容老内核 webview（iOS 钉钉内置浏览器等不支持 AbortSignal.timeout，2021 年前的 Safari 均无）：
 // 不打补丁的话该设备上全站请求直接抛 TypeError（表现为"钉钉免登未生效 / 登录失败"）。
@@ -55,7 +61,7 @@ async function request(method, url, body, retried = false) {
     opts.headers['X-HTTP-Method'] = 'PATCH';
   }
   const token = getToken();
-  if (token) opts.headers['Authorization'] = `Bearer ${token}`;
+  if (token && !GATEWAY_ACTIVE) opts.headers['Authorization'] = `Bearer ${token}`;
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
@@ -145,7 +151,7 @@ async function upload(url, fields = {}, files = []) {
   for (const f of files) fd.append(f.name, f.file, f.file.name);
   const res = await fetch(withToken(base + url), {
     method: 'POST',
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: authHeaders(),
     body: fd,
     signal: AbortSignal.timeout(300000),
   });
@@ -165,7 +171,7 @@ async function upload(url, fields = {}, files = []) {
 async function postBlob(url, body) {
   const res = await fetch(withToken(base + url), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body ?? {}),
     signal: AbortSignal.timeout(300000),
   });
@@ -186,7 +192,7 @@ async function postBlob(url, body) {
 // 必须 fetch 取 blob 后再触发浏览器保存。filename 缺省时从 Content-Disposition 解析。
 async function download(url, filename) {
   const res = await fetch(withToken(base + url), {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: authHeaders(),
   });
   if (!res.ok) {
     const d = await res.json().catch(() => ({}));
