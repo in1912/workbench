@@ -36,6 +36,12 @@ export function rawUrl(url) {
   return withToken(GATEWAY_PREFIX + url);
 }
 
+// 非 API 路径（智作平台 iframe 的 /zhizu/ 等）补网关前缀：常规部署前缀为空原样返回，
+// fnOS 网关下补成 /app/{appname}/zhizu/（v1.9.2 修复「智作平台 找不到/404」）。
+export function prefixUrl(p) {
+  return GATEWAY_PREFIX + p;
+}
+
 // 花生壳 HTTP 型映射会掐掉 PATCH 方法的连接（实测 GET/POST/PUT/DELETE 均可达、PATCH 必断）：
 // 所有 PATCH 实际改发 PUT + 还原头，服务端中间件在路由前还原为 PATCH，路由零改动。
 // 幂等方法网络层失败自动重试一次（中转杀连接/复用死套接字时，换新连接实测 100% 可达）；
@@ -55,8 +61,12 @@ async function request(method, url, body, retried = false) {
     opts.body = JSON.stringify(body);
   }
   let res;
+  // PATCH 还原双通道（v1.9.2）：X-HTTP-Method 头之外再追加 ?_method=PATCH 查询参数——
+  // fnOS 网关剥 Authorization 头的行为提示它可能也剥自定义头，查询参数任何网关都不动。
+  let full = withToken(base + url);
+  if (method === 'PATCH') full += (full.includes('?') ? '&' : '?') + '_method=PATCH';
   try {
-    res = await fetch(withToken(base + url), { ...opts, signal: AbortSignal.timeout(180000) });
+    res = await fetch(full, { ...opts, signal: AbortSignal.timeout(180000) });
   } catch (e) {
     if (!retried && NET_RETRY.has(method) && e && e.name !== 'AbortError') {
       await new Promise((r) => setTimeout(r, 500));

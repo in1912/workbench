@@ -512,11 +512,15 @@ onMounted(async () => {
   } catch {}
   if (me.value.role === 'admin') loadDashModules(); // 全局看板模块卡（依赖上面的角色）
   try { const b = await api.get('/auth/dingtalk-bind-status'); ddBound.value = { bound: !!b.bound, userid: b.userid || '' }; } catch {}
-  const d = await api.get('/settings');
+  // 两个聚合接口单独兜住（v1.9.2）：任一失败抛到 onMounted 外会把整页内容卸掉——
+  // 「设置闪一下就没了」的元凶。失败时用空对象继续，页面照常渲染。
+  let d = {};
+  try { d = await api.get('/settings'); } catch {}
   s.value = d;
   if (d.share) share.value = d.share;
   loadCalCfg();
-  const a = await api.get('/ai/config');
+  let a = {};
+  try { a = await api.get('/ai/config'); } catch {}
   try {
     const info = await api.get('/system-info');
     if (info.name) sys.value.name = info.name;

@@ -50,7 +50,7 @@ app.use(express.json({ limit: '12mb' })); // 家庭图床图片以 base64 JSON �
 // 花生壳 HTTP 型映射会直接掐掉 PATCH 方法的连接（实测 GET/POST/PUT/DELETE 均可达、PATCH 必断）；
 // 前端 api.patch 改发 PUT + X-HTTP-Method: PATCH 头，这里在路由分发前还原为 PATCH，全部 PATCH 路由零改动。
 app.use((req, res, next) => {
-  if (req.method === 'PUT' && req.headers['x-http-method'] === 'PATCH') req.method = 'PATCH';
+  if (req.method === 'PUT' && (req.headers['x-http-method'] === 'PATCH' || String(req.query._method || '').toUpperCase() === 'PATCH')) req.method = 'PATCH';
   next();
 });
 
@@ -74,7 +74,15 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();
   const user = auth.resolveUser(req);
-  if (!user) return res.status(401).json({ error: '未登录或会话已过期' });
+  if (!user) {
+    // 网关链路 401 取证（v1.9.2）：只记令牌「形态」不记内容，写 server.log 供真机排障
+    // （判断网关到底对 头/query/cookie 做了什么：剥头？追加同名参数变数组？连 cookie 也不转发？）
+    if (req.viaGateway) {
+      const tq = req.query.token;
+      console.log(`[fnos] 401 ${req.method} ${req.path} | 头=${(req.headers.authorization || '无').slice(0, 16)} | query=${tq === undefined ? '无' : Array.isArray(tq) ? `数组x${tq.length}` : '字符串'} | cookie=${/wb_token=/.test(req.headers.cookie || '') ? '有' : '无'}`);
+    }
+    return res.status(401).json({ error: '未登录或会话已过期' });
+  }
   const page = auth.pageForPath(req.path);
   const tab = page ? auth.tabForPath(page, req.path) : null;
   if (!auth.canAccess(user, page, tab)) {

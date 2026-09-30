@@ -211,10 +211,11 @@ async function refresh() {
     if (isBoard.value) {
       // 榜单：跳过缓存立即重抓当日（并刷新当日存档）
       const r = await api.get(`/news/hotboard?board=${BOARD_OF[cat.value]}&fresh=1`);
-      hotItems.value = r.items || [];
+      // items 恒为数组（服务端 v1.9.2 已保证；前端再兜一层防 length 崩溃）
+      hotItems.value = Array.isArray(r.items) ? r.items : [];
       hotMeta.value = r;
       date.value = '';
-      msg.value = `已刷新，共 ${r.items.length} 条${r.saved ? `，当日存档 ${r.saved} 条` : ''}`;
+      msg.value = `已刷新，共 ${hotItems.value.length} 条${r.saved ? `，当日存档 ${r.saved} 条` : ''}`;
       await loadDates();
     } else {
       const r = await api.post('/news/refresh', { category: cat.value });

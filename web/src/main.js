@@ -31,4 +31,17 @@ if (wbGatewayPrefix) {
   };
 }
 
-createApp(App).use(router).mount('#app');
+const app = createApp(App);
+// 页面级异常兜底（v1.9.2）：onMounted/setup 里未捕获的异步异常会让整页内容消失
+// （「首页/设置闪一下就没了」的现象）。统一接住：页面不再白屏，右下角红条提示 6 秒。
+app.config.errorHandler = (err) => {
+  console.error('[wb]', err);
+  try {
+    const d = document.createElement('div');
+    d.textContent = '页面出了点问题：' + (err && err.message ? err.message : String(err));
+    d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99999;background:#dc2626;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;max-width:70vw;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 6000);
+  } catch { /* 展示失败不影响主流程 */ }
+};
+app.use(router).mount('#app');

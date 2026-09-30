@@ -26,13 +26,18 @@ function createSession(userId) {
 }
 function resolveUser(req) {
   const header = req.headers.authorization || '';
-  // Bearer 头优先；<img> 等标签请求带不了自定义头，退回 ?token= 查询参数（富文本图片 URL 场景）。
-  // v1.9.1：fnOS 网关会把转发的 Authorization 头替换成 NAS 自己的凭证，单取头会把真令牌埋掉
-  // （免登成功但业务接口全 401）；改为逐个候选尝试——头查不到会话再试 query，两边都有效时头优先，
-  // 常规部署行为不变。
+  // 令牌多通道逐候选尝试（v1.9.2 定型）：
+  // ① Authorization: Bearer 头（常规部署主通道；fnOS 网关会替换成 NAS 自己的凭证，可能无效）
+  // ② ?token= 查询参数（<img> 直链场景；网关若追加同名参数，express 会解析成数组——逐个试）
+  // ③ wb_token Cookie（fnOS 网关连查询参数也改写时的最后兜底，登录时随响应下发）
+  // 任一候选命中有效会话即通过；都不行才 401。
   const candidates = [];
   if (header.startsWith('Bearer ')) candidates.push(header.slice(7));
-  if (req.query.token) candidates.push(String(req.query.token));
+  const q = req.query.token;
+  if (typeof q === 'string') candidates.push(q);
+  else if (Array.isArray(q)) candidates.push(...q.filter(Boolean).map(String));
+  const ck = /(?:^|;\s*)wb_token=([A-Za-z0-9]+)/.exec(req.headers.cookie || '');
+  if (ck) candidates.push(ck[1]);
   for (const token of candidates) {
     if (!token) continue;
     const row = db.prepare(

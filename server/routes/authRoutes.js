@@ -72,6 +72,13 @@ function writeLoginLog({ username, user_id: uid, success, reason, ip: ipIn, ua, 
 }
 
 // 登录（带防爆破锁：IP 熔断 → 账号永久锁 → 账号临时锁 → 密码校验；全程记流水）
+// 会话 Cookie 下发（v1.9.2 兜底通道）：fnOS 网关若连查询参数都改写，Cookie 仍可到达。
+// Path 按挂载前缀收窄（网关下 /app/qgworkbench/，只随本应用请求发送）；有效期与会话 7 天一致。
+function setSessionCookie(req, res, token) {
+  const p = (req.baseUrl || '') + '/';
+  res.setHeader('Set-Cookie', `wb_token=${token}; Path=${p}; Max-Age=${7 * 24 * 3600}; SameSite=Lax`);
+}
+
 router.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   const uname = String(username || '').slice(0, 100);
@@ -136,6 +143,7 @@ router.post('/auth/login', (req, res) => {
   writeLoginLog({ username: user.username, user_id: user.id, success: 1, reason: '登录成功', ip, ua });
   const token = auth.createSession(user.id);
   getTenantDb(user.id); // 登录即惰性建租户库（幂等）
+  setSessionCookie(req, res, token);
   res.json({
     token,
     user: {
@@ -164,6 +172,7 @@ router.post('/settings/theme', (req, res) => {
 // 登出
 router.post('/auth/logout', (req, res) => {
   auth.destroySession(req);
+  res.setHeader('Set-Cookie', `wb_token=; Path=${(req.baseUrl || '') + '/'}; Max-Age=0; SameSite=Lax`); // 清兜底 Cookie（v1.9.2）
   res.json({ ok: true });
 });
 
@@ -229,6 +238,7 @@ router.post('/auth/fnos-login', (req, res) => {
   }
   const token = auth.createSession(user.id);
   getTenantDb(user.id);
+  setSessionCookie(req, res, token);   // 网关下 Cookie 随本应用路径发送（v1.9.2 兜底）
   writeLoginLog({ username: user.username, user_id: user.id, success: 1, reason: '飞牛NAS免登' + (isAdmin ? '（管理员）' : ''), ip: clientIp(req), ua: req.headers['user-agent'] || '' });
   res.json({
     token,

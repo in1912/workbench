@@ -45,7 +45,7 @@ router.get('/system-info', (req, res) => {
   res.json({
     name: getSetting('system_name', '全能工作台'),
     name_en: getSetting('system_name_en', 'Workbench'),
-    version: getSetting('current_version', '') || 'v1.9.1',
+    version: getSetting('current_version', '') || 'v1.9.2',
   });
 });
 // 保存系统名称（管理员：系统级配置全员可见）
@@ -126,7 +126,8 @@ router.get('/news/hotboard', async (req, res) => {
     const board = ['realtime', 'movie', 'teleplay'].includes(req.query.board) ? req.query.board : 'realtime';
     const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : null;
     const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 60));
-    res.json(await newsService.getHotBoard(routedDb(req.tdb, 'news'), board, { date, limit, force: req.query.fresh === '1' }));
+    const r = await newsService.getHotBoard(routedDb(req.tdb, 'news'), board, { date, limit, force: req.query.fresh === '1' });
+    res.json({ items: [], ...r });   // items 恒为数组（v1.9.2）：外网抓取异常时不许缺键，前端 r.items.length 才不会炸
   } catch (e) {
     res.status(503).json({ error: '榜单获取失败：' + e.message });
   }

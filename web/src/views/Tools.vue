@@ -25,7 +25,8 @@
     <template v-if="tab==='zhizu'">
       <div class="zhizu-card">
         <div v-if="zhizuLoading" class="muted" style="padding:48px; text-align:center">智作平台加载中…（服务随工作台自动启动，首次约需几秒）</div>
-        <iframe v-show="!zhizuLoading" src="/zhizu/" class="zhizu-frame" title="智作平台" @load="zhizuLoading = false"></iframe>
+        <!-- src 补网关前缀（v1.9.2）：fnOS 网关下硬编码 /zhizu/ 会打到 NAS 根路径 404（「智作平台找不到」） -->
+        <iframe v-show="!zhizuLoading" :src="prefixUrl('/zhizu/')" class="zhizu-frame" title="智作平台" @load="zhizuLoading = false"></iframe>
       </div>
     </template>
 
@@ -249,7 +250,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { marked } from 'marked';
-import { api } from '../api';
+import { api, prefixUrl } from '../api';
 import { canTab, firstTab, TAB_DEFS } from '../tabs';
 import MonitorPanel from '../components/MonitorPanel.vue';
 import VibeVoiceTab from '../components/VibeVoiceTab.vue';
