@@ -199,7 +199,7 @@ const todos = ref([]);
 const events = ref([]);
 // 今日日程：严格只显示今天（开始日期=今天，或跨日日程覆盖今天）
 const todayEvents = computed(() =>
-  events.value.filter((e) => {
+  (events.value || []).filter((e) => {
     const s = String(e.start_time || '').slice(0, 10);
     if (!s) return false;
     const end = e.end_date || s;
@@ -489,12 +489,15 @@ onMounted(() => {
 
 async function loadOverview() {
   try {
+    // v1.9.4：响应缺键/被网关改写时全部兜成数组——此前 d.pendingKids 为 undefined 会让
+    // 首页「子女学习」卡 v-if 读 .length 直接崩（真机已捕获堆栈），其余字段同理防御
     const d = await api.get('/overview');
-    links.value = d.links;
-    todos.value = d.todos;
-    events.value = d.events; // 后端已过滤为"今天"（含进行中的跨日）
-    pendingKids.value = d.pendingKids;
-    news.value = (await api.get('/news?category=tech&limit=5')).items;
+    links.value = Array.isArray(d.links) ? d.links : [];
+    todos.value = Array.isArray(d.todos) ? d.todos : [];
+    events.value = Array.isArray(d.events) ? d.events : []; // 后端已过滤为"今天"（含进行中的跨日）
+    pendingKids.value = Array.isArray(d.pendingKids) ? d.pendingKids : [];
+    const n = await api.get('/news?category=tech&limit=5');
+    news.value = Array.isArray(n.items) ? n.items : [];
   } catch (e) { err.value = e.message; }
 }
 // ---------- 今日日程卡片：时间标签与跳转 ----------
@@ -530,7 +533,7 @@ function fmtHot(n) {
   return String(v);
 }
 // 首页只展示未完成待办：勾选完成后该项立即从今日待办消除
-const openTodos = computed(() => todos.value.filter((t) => !t.done));
+const openTodos = computed(() => (todos.value || []).filter((t) => !t.done));
 // 首页待办勾选：点击圆圈切换完成状态
 async function toggleTodo(t) {
   const next = !t.done;

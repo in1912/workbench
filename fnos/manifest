@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.3
+version=1.9.4
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=诊断版：前端页面异常自动上报服务端（设置→前端错误 可查最近 50 条，含出错文件行号/页面/用户，右下角红条点击可复制完整堆栈）；红条 4 秒去重不再连弹两条；电影/电视剧榜单缺"类型/演员"字段不再崩溃；历史日期列表加载失败不再阻断整页
+changelog=首页看板崩溃修复（真机堆栈已定位：子女学习卡读 undefined.length）——接口响应缺键/被网关改写时全部兜成数组不再崩；200 但非 JSON 的假成功响应不再被吞成空对象，改为报错并把响应片段上报到「设置→前端错误」，直接看到网关回了什么

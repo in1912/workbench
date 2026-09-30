@@ -80,7 +80,24 @@ async function request(method, url, body, retried = false) {
     if (!location.hash.includes('/login')) location.hash = '#/login';
     throw new Error('登录已过期，请重新登录');
   }
-  const data = await res.json().catch(() => ({}));
+  // v1.9.4：先读文本再解析。此前 res.json().catch(()=>({})) 会把「200 但非 JSON」的响应
+  // （fnOS 网关用自己的文本/错误页顶替业务响应，真机已捕获过）静默吞成 {}，当成功返回后
+  // 页面拿 undefined 去读 .length 直接崩（首页子女学习卡）。现在：解析失败原样抛错，
+  // 并把响应片段上报到「设置 → 前端错误」，直接看到网关到底回了什么。
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    const snippet = text.slice(0, 200).replace(/\s+/g, ' ');
+    try {
+      navigator.sendBeacon(rawUrl('/api/client-errors'), new Blob([JSON.stringify({
+        msg: `非JSON响应 ${method} ${url} → HTTP ${res.status}：${snippet}`,
+        stack: '', page: location.hash, ts: Date.now(),
+      })], { type: 'application/json' }));
+    } catch { /* 上报失败不影响本地 */ }
+    throw new Error(`接口响应异常（HTTP ${res.status}，非 JSON：${snippet}）`);
+  }
   if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
   return data;
 }
