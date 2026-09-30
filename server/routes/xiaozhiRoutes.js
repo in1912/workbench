@@ -1,10 +1,13 @@
 // 智能板（小智 Korvo2V3）路由（v1.9.11）
 // 权限：整组归 smarthome 页 xiaozhi tab（auth.js pageForPath + TAB_PATHS 两处已登记）。
 // /xiaozhi/bridge 在 index.js EXEMPT 免登录（板端固件无登录态，key 即凭证，照 /vibe/job 模式）；
+// /xiaozhi/firmware 同样 EXEMPT（v1.9.12：密钥或管理员，供无工具链环境从构建机代理取固件）；
 // 配置保存/密钥轮换/构建/烧录/串口探测为管理员操作；工具与固件下载有 tab 权限即可。
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { Readable } = require('stream');
+const auth = require('../auth');
 const svc = require('../services/xiaozhiService');
 const paths = require('../services/xiaozhiPaths');
 const builder = require('../services/xiaozhiBuilder');
@@ -59,6 +62,7 @@ router.put('/xiaozhi/config', (req, res) => {
       piid_play: pt(b.speaker.piid_play) || 1, piid_exec: pt(b.speaker.piid_exec) || 1,
     };
     for (const [k, v] of Object.entries(sp)) {
+      if (k === 'did') continue; // did 是纯数字字符串，走上面的正则；其余点位才要求整数
       if (v != null && !Number.isInteger(v)) return res.status(400).json({ error: `speaker.${k} 需为整数` });
     }
     patch.speaker = sp;
@@ -67,6 +71,11 @@ router.put('/xiaozhi/config', (req, res) => {
     const url = String(b.bridge.url || '').trim();
     if (url && !/^https?:\/\/[\w.:%-]+(:\d+)?(\/[\w./%:-]*)?$/.test(url)) return res.status(400).json({ error: '桥接地址格式不对（http(s)://…/api/xiaozhi/bridge）' });
     patch.bridge = { url };
+  }
+  if (b.helper) {
+    const url = String(b.helper.url || '').trim();
+    if (url && !/^https?:\/\/[\w.:%-]+(:\d+)?(\/[\w./%:-]*)?$/.test(url)) return res.status(400).json({ error: '构建机地址格式不对（http://局域网IP:3000）' });
+    patch.helper = { url };
   }
   if (b.paths) {
     const allow = ['srcDir', 'esptool', 'idfExportBat', 'idfGitDir', 'serialPort'];
@@ -180,11 +189,39 @@ router.get('/xiaozhi/tools/:name', (req, res) => {
 });
 
 // ---------- 固件下载（data 缓存优先，其次源码 build 目录；固件不入 git/升级包） ----------
-router.get('/xiaozhi/firmware', (req, res) => {
-  const d = paths.detect(svc.getConfig());
-  if (!d.firmware.available) return res.status(404).json({ error: '还没有可下载的固件（构建成功后自动提供）' });
-  res.download(d.firmware.path, 'xiaozhi-korvo2v3-merged.bin');
-});
+// EXEMPT（index.js）后全局中间件不再解析登录态，这里自带双通道凭证：
+// 桥接密钥（x-wb-key 头 / ?k=，供无工具链环境从构建机互取固件，两台机器密钥一致）或管理员令牌。
+// 本机无产物且配了 helper.url（构建机）时代理拉取并透传流。
+router.get('/xiaozhi/firmware', asyncH(async (req, res) => {
+  const k = req.get('x-wb-key') || req.query.k;
+  const user = auth.resolveUser(req);
+  const keyOk = !!(k && svc.bridgeKeyOk(req));
+  if (!keyOk && !(user && user.role === 'admin')) {
+    return res.status(403).json({ error: '固件下载需管理员登录或桥接密钥' });
+  }
+  const cfg = svc.getConfig();
+  const d = paths.detect(cfg);
+  if (d.firmware.available) return res.download(d.firmware.path, 'xiaozhi-korvo2v3-merged.bin');
+  const helper = String((cfg.helper && cfg.helper.url) || '').trim().replace(/\/+$/, '');
+  if (!helper) return res.status(404).json({ error: '本机没有固件产物（无工具链环境），也没配置构建机地址——管理员在「构建机地址」里填装了 ESP-IDF 的工作台地址' });
+  let r;
+  try {
+    r = await fetch(helper + '/api/xiaozhi/firmware?k=' + encodeURIComponent(svc.ensureBridgeKey()), {
+      signal: AbortSignal.timeout(120000),
+    });
+  } catch (e) {
+    return res.status(502).json({ error: `连不上构建机（${helper}）：${e.cause && e.cause.code ? e.cause.code : e.message}——确认那台电脑的工作台开着、地址没填错` });
+  }
+  if (!r.ok) {
+    let msg = 'HTTP ' + r.status;
+    try { msg = ((await r.text()) || '').slice(0, 200) || msg; } catch { /* 保底用状态码 */ }
+    return res.status(502).json({ error: `从构建机（${helper}）取固件失败：${msg}` });
+  }
+  res.setHeader('Content-Disposition', 'attachment; filename="xiaozhi-korvo2v3-merged.bin"');
+  const len = r.headers.get('content-length');
+  if (len) res.setHeader('Content-Length', len);
+  Readable.fromWeb(r.body).pipe(res);
+}));
 
 // ---------- 串口枚举 / 芯片探测 / 构建烧录（管理员） ----------
 router.get('/xiaozhi/ports', asyncH(async (req, res) => {

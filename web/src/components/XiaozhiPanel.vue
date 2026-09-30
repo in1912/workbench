@@ -93,10 +93,10 @@
         唤醒词在编译期写进固件（MultiNet 引擎，任意中文词都行，不用训练模型）。改完点「编译并烧录」，全程 5-15 分钟。
       </p>
 
-      <!-- 能力横幅：非 Windows/没装工具链 → 文档模式 -->
+      <!-- 能力横幅：非 Windows/没装工具链 → 文档模式（可从构建机取固件） -->
       <div v-if="!cap.canBuild" class="xz-cap xz-cap-warn">
-        ⚠️ 本机不具备编译条件（{{ capMiss }}）——这里降级为文档模式：可在「装机向导」下载固件到本地手动烧录，
-        或到装了 ESP-IDF 6.1 + 小智源码的电脑上打开本页操作。
+        ⚠️ 本机不具备编译条件（{{ capMiss }}）——编译要在装了 ESP-IDF 6.1 + 小智源码的 Windows 电脑上进行
+        （在那台电脑打开本页就是「⚡ 编译并烧录」一键模式）。这里配置「构建机地址」后可直接下载它编译好的固件来烧录。
       </div>
       <div v-else class="xz-cap xz-cap-ok">
         ✅ 工具链就绪：{{ cap.paths.srcDir }} · {{ cap.isWindows ? 'Windows 烧录可用' : '' }}
@@ -138,6 +138,29 @@
           <button class="btn" :disabled="!cap.canBuild || st.running" @click="startBuild(false)">仅编译（不烧录）</button>
           <button v-if="st.failed || st.done" class="btn ghost" :disabled="st.running" @click="resetBuild">清除记录</button>
           <span v-if="st.running" class="xz-muted">进行中：{{ st.steps && st.steps[st.stepIndex] && st.steps[st.stepIndex].label }}…</span>
+        </div>
+
+        <!-- 无工具链环境（NAS/容器）：从构建机取固件 + 烧录指引（v1.9.12） -->
+        <div v-if="!cap.canBuild" class="xz-helper">
+          <div class="xz-form">
+            <div class="xz-field">
+              <label>构建机地址（装了 ESP-IDF 的工作台，留空则本机无固件可取）</label>
+              <input v-model="form.helper.url" placeholder="http://192.168.110.100:3000" />
+            </div>
+          </div>
+          <div class="xz-actions">
+            <button class="btn primary" @click="dlFirmware">⬇ 下载固件镜像</button>
+            <button class="btn ghost" @click="saveHelper">保存地址</button>
+          </div>
+          <small class="xz-muted">
+            本机没有固件产物时自动向构建机取（它须开着工作台且已编译过固件；两边「桥接密钥」一致才认）。
+            固件内含密钥，仅管理员可下载。
+          </small>
+          <div class="xz-cmd" @click="copyCmd" title="点击复制">esptool --chip esp32s3 -p COM4 -b 921600 write-flash 0x0 xiaozhi-korvo2v3-merged.bin</div>
+          <small class="xz-muted">
+            烧前先跑 <b>flash-id</b> 确认芯片是 ESP32-S3（COM3 是别的板子，别烧错）；esptool/驱动在「装机向导」下载。
+            电脑直连烧录用装了工具链那台的「⚡ 编译并烧录」最省事。
+          </small>
         </div>
 
         <!-- 进度 + 日志 -->
@@ -267,6 +290,7 @@ const form = reactive({
   channel: 'direct',
   port: '',
   bridge: { url: '' },
+  helper: { url: '' },
   speaker: { did: '', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 },
 });
 const ports = ref([]);
@@ -291,6 +315,7 @@ function syncForm(c) {
   form.wake = { ...c.wake };
   form.channel = c.channel;
   form.bridge = { ...c.bridge };
+  form.helper = { url: (c.helper && c.helper.url) || '' };
   form.speaker = {
     did: c.speaker.did || '',
     siid_play: c.speaker.siid_play ?? '', aiid_play: c.speaker.aiid_play ?? 3,
@@ -320,6 +345,7 @@ async function saveConfig(extra = {}) {
     wake: { ...form.wake },
     channel: form.channel,
     bridge: { url: form.bridge.url.trim() },
+    helper: { url: form.helper.url.trim() },
     speaker: {
       did: String(form.speaker.did).trim(),
       siid_play: form.speaker.siid_play === '' ? null : Number(form.speaker.siid_play),
@@ -403,9 +429,18 @@ async function speakerTest(kind) {
 function dlTool(name) { api.download(`/xiaozhi/tools/${encodeURIComponent(name)}`, name === 'ch343-driver' ? 'ch343-driver.zip' : name).catch((e) => flashErr('下载失败：' + e.message)); }
 function dlFirmware() { api.download('/xiaozhi/firmware', 'xiaozhi-korvo2v3-merged.bin').catch((e) => flashErr('下载失败：' + e.message)); }
 
+// ---------- 无工具链环境：构建机地址保存 + 烧录命令复制 ----------
+function saveHelper() { saveConfig().then(() => flashOk('构建机地址已保存')).catch((e) => flashErr(e.message)); }
+function copyCmd() {
+  const text = 'esptool --chip esp32s3 -p COM4 -b 921600 write-flash 0x0 xiaozhi-korvo2v3-merged.bin';
+  (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+    .then(() => flashOk('烧录命令已复制'))
+    .catch(() => flashErr('复制失败，请手动选中命令复制'));
+}
+
 // ---------- 通道/地址变化自动保存（管理员；防抖 800ms，敲完地址才存） ----------
 let saveTimer = null;
-watch(() => [form.channel, form.bridge.url, form.speaker.did], () => {
+watch(() => [form.channel, form.bridge.url, form.helper.url, form.speaker.did], () => {
   if (!isAdmin) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => saveConfig().catch((e) => flashErr(e.message)), 800);
@@ -458,6 +493,8 @@ onBeforeUnmount(stopPoll);
 .xz-chip.done { background: rgba(30,158,104,.15); color: var(--ok, #1e9e68); }
 .xz-log { max-height: 260px; overflow: auto; background: #0b1020; color: #c9d6f0; border-radius: 8px; padding: 10px 12px; font: 12px/1.65 Consolas, monospace; }
 .xz-log-err { color: #ff9b9b; }
+.xz-helper { margin-top: 12px; padding: 12px; border: 1px dashed var(--border, #e5e7eb); border-radius: 10px; display: flex; flex-direction: column; gap: 8px; }
+.xz-cmd { background: #0b1020; color: #9fe8b8; border-radius: 8px; padding: 10px 12px; font: 12px/1.6 Consolas, monospace; cursor: pointer; word-break: break-all; }
 .xz-radios { display: flex; gap: 10px; flex-wrap: wrap; }
 .xz-radio { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; padding: 8px 12px; cursor: pointer; min-width: 240px; }
 .xz-radio input { margin-right: 6px; }

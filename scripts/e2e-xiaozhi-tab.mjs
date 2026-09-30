@@ -62,6 +62,13 @@ try {
   ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { wake: { pinyin: 'xiao yang yang', display: '小阳阳', threshold: 0 } } })).status === 400, '阈值越界（0）被拒 400');
   const put = await api('PUT', '/api/xiaozhi/config', { token: T, body: { wake: { pinyin: 'xiao yang yang', display: '小阳阳', threshold: 18 }, channel: 'speaker', bridge: { url: 'http://192.168.110.105:3000/api/xiaozhi/bridge' } } });
   ok(put.status === 200 && put.j.config.wake.threshold === 18 && put.j.config.channel === 'speaker', '合法配置保存成功（阈值/通道回读一致）');
+  const spPut = await api('PUT', '/api/xiaozhi/config', { token: T, body: { speaker: { did: '1149549826', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 } } });
+  ok(spPut.status === 200 && spPut.j.config.speaker.did === '1149549826', '智能屏配置保存成功（did 是数字字符串，不误报「需为整数」——v1.9.12 生产回归）');
+  ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { speaker: { did: 'abc' } } })).status === 400, '智能屏 did 非数字被拒');
+  ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { speaker: { did: '1149549826', aiid_play: 3.5 } } })).status === 400, '智能屏点位非整数被拒');
+  ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { helper: { url: 'javascript:x' } } })).status === 400, '非法构建机地址被拒');
+  const hp = await api('PUT', '/api/xiaozhi/config', { token: T, body: { helper: { url: 'http://127.0.0.1:9' } } });
+  ok(hp.status === 200 && hp.j.config.helper.url === 'http://127.0.0.1:9', '构建机地址保存回读一致');
   const cfg = await api('GET', '/api/xiaozhi/config', { token: T });
   ok(typeof cfg.j.bridge_key === 'string' && cfg.j.bridge_key.length === 32, 'admin 读配置带 32hex 桥接密钥');
   ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { bridge: { url: 'javascript:alert(1)' } } })).status === 400, '非法桥接 URL 被拒');
@@ -91,6 +98,18 @@ try {
   ok(pyR.status === 200 && (await pyR.text()).includes('import sys, time, serial'), 'serial_read.py 单文件下载');
   ok((await api('GET', '/api/xiaozhi/tools/..%2F..%2Fpackage.json', { token: T })).status === 404, '工具名白名单防路径穿越');
 
+  console.log('— 固件下载双通道（EXEMPT + key / 管理员；v1.9.12）');
+  ok((await fetch(`${B}/api/xiaozhi/firmware`)).status === 403, '无凭证下载固件 403');
+  ok((await fetch(`${B}/api/xiaozhi/firmware?k=deadbeef`)).status === 403, '错 key 下载固件 403');
+  const fwByKey = await fetch(`${B}/api/xiaozhi/firmware?k=${rot.j.bridge_key}`);
+  if (fwByKey.status === 200) {
+    const fwBuf = Buffer.from(await fwByKey.arrayBuffer());
+    ok(fwBuf.length > 1024 * 1024, `本机有固件产物，key 下载 200（${(fwBuf.length / 1048576).toFixed(1)} MB；代理分支留给无固件环境）`);
+  } else {
+    const j = await fwByKey.json().catch(() => ({}));
+    ok(fwByKey.status === 502 && /构建机/.test(j.error || ''), '本机无固件时向构建机代理（不可达 → 502 带指引）');
+  }
+
   console.log('— tab 权限矩阵（成员）');
   await api('POST', '/api/users', { token: T, body: { username: 'm1', password: 'm1-pass-123', role: 'user', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia'] } } });
   const mlg = await api('POST', '/api/auth/login', { body: { username: 'm1', password: 'm1-pass-123' } });
@@ -101,6 +120,7 @@ try {
   ok((await api('GET', '/api/xiaozhi/config', { token: MT })).j.bridge_key === undefined, '成员读配置不带桥接密钥');
   ok((await api('PUT', '/api/xiaozhi/config', { token: MT, body: { channel: 'direct' } })).status === 403, '成员改配置被管理员门禁拦下');
   ok((await api('GET', '/api/xiaozhi/ports', { token: MT })).status === 403, '成员枚举串口被拦');
+  ok((await fetch(`${B}/api/xiaozhi/firmware`, { headers: { Authorization: 'Bearer ' + MT } })).status === 403, '成员（非管理员）下载固件被拒（固件内含桥接密钥）');
 
   console.log('— 构建状态机（空转）');
   const st0 = await api('GET', '/api/xiaozhi/build/status', { token: MT });

@@ -18,6 +18,7 @@ const DEFAULT_CFG = {
   channel: 'direct', // direct | speaker —— 语音控米家的通道
   speaker: { did: '1149549826', siid_play: null, aiid_play: 3, siid_exec: null, aiid_exec: 4, piid_play: 1, piid_exec: 1 }, // siid 空=按 spec 自动探测
   bridge: { url: '' }, // 烧进固件的工作台桥接地址（含 /api/xiaozhi/bridge；空=构建时前端自动带当前访问地址）
+  helper: { url: '' }, // 构建机地址（v1.9.12：无工具链环境【如 NAS 容器】从这里取固件，LAN 内 Windows 工作台）
   paths: {}, // 能力探测路径覆盖（admin 在面板改：srcDir/esptool/idfExportBat/idfGitDir/serialPort）
 };
 
@@ -28,6 +29,7 @@ function getConfig() {
     wake: { ...DEFAULT_CFG.wake, ...(saved.wake || {}) },
     speaker: { ...DEFAULT_CFG.speaker, ...(saved.speaker || {}) },
     bridge: { ...DEFAULT_CFG.bridge, ...(saved.bridge || {}) },
+    helper: { ...DEFAULT_CFG.helper, ...(saved.helper || {}) },
     paths: { ...(saved.paths || {}) },
   };
 }
@@ -38,6 +40,7 @@ function saveConfig(patch) {
     wake: { ...cur.wake, ...(patch.wake || {}) },
     speaker: { ...cur.speaker, ...(patch.speaker || {}) },
     bridge: { ...cur.bridge, ...(patch.bridge || {}) },
+    helper: { ...cur.helper, ...(patch.helper || {}) },
     paths: { ...cur.paths, ...(patch.paths || {}) },
   };
   setSetting(db, CFG_KEY, next);

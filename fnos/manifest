@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.11
+version=1.9.12
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=智能家居新增「智能板」tab（小智 Korvo2V3 语音板全家桶）：① 装机向导（CH343 驱动/串口脚本下载、烧录指引、配网页与 xiaozhi.me 控制台页内嵌或一键新开、唤醒测试）；② 唤醒词在线改（拼音/显示名/灵敏度阈值）→ 一键编译并烧录回板子（自动探测串口芯片防烧错板，构建日志实时滚动，产物可下载）；③ 语音控米家：板子固件注册 self.workbench.* MCP 工具回连工作台桥接接口，对小智说话即可开关米家设备（双通道：直接 MIoT / 小爱智能屏转述，后者支持调温等自然语言指令，附试播/试执行）；④ 无 ESP-IDF 工具链的环境（如 NAS）自动降级为文档+工具下载模式。上一版（1.9.10）：cc-light 安装/刷机脚本修复
+changelog=智能板增强（接 1.9.11）：① 无工具链环境（NAS/容器）可配「构建机地址」，直接下载装了 ESP-IDF 的工作台编译好的固件来烧录（附可复制的 esptool 命令指引；固件下载走桥接密钥/管理员双通道）；② 修复智能屏配置保存误报「speaker.did 需为整数」（did 是纯数字字符串被错塞进整数校验，页面加载即触发报错）。上一版（1.9.11）：智能板 tab 全家桶（装机向导/唤醒词在线编译烧录/语音控米家双通道）
