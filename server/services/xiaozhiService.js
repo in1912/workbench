@@ -198,8 +198,21 @@ async function dispatch(op, body) {
       return { ok: true, message: `工作台在线，米家有 ${devices.length} 台可控设备`, devices: devices.length };
     }
     if (op === 'list_devices') {
-      const devices = await listDevicesForBridge();
-      return { ok: true, total: devices.length, devices, message: `共 ${devices.length} 台` };
+      // 回包瘦身（v1.9.13）：只发 AI 需要的名字/房间/状态。板子 WiFi 弱信号（RSSI -70 实测）下
+      // 14KB 全量列表要传 16 秒，会拖垮 MQTT 长连接——工具结果发不回云端，用户听到「发送失败」。
+      // did / sw.siid / sw.piid 是服务端内部解析数据（control 在服务端重新拉全量），不出网；
+      // 纯传感器（无开关无温湿度）整体省略——status 对它们本来也无话可说。
+      const all = await listDevicesForBridge();
+      const devices = [];
+      for (const d of all) {
+        if (!d.sw && d.t == null && d.h == null) continue;
+        const it = { name: d.name, room: d.room, on: d.sw ? d.sw.v : null };
+        if (d.t != null) it.t = d.t;
+        if (d.h != null) it.h = d.h;
+        devices.push(it);
+      }
+      const skipped = all.length - devices.length;
+      return { ok: true, total: devices.length, devices, message: `共 ${devices.length} 台可控设备${skipped ? `（另有 ${skipped} 台纯传感器未列出）` : ''}` };
     }
     if (op === 'control') return await controlDevice(b.device, b.action);
     if (op === 'status') return await deviceStatus(b.device);
