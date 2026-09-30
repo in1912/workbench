@@ -34,6 +34,7 @@ const fnosDir = path.join(ROOT, 'server', 'fnos');
 const srcFpk = fs.readdirSync(fnosDir).filter((f) => f.endsWith('.fpk')).sort().pop();
 const srcBuf = fs.readFileSync(path.join(fnosDir, srcFpk));
 const srcSha = crypto.createHash('sha256').update(srcBuf).digest('hex');
+const srcVer = 'v' + (srcFpk.match(/([\d.]+)\.fpk$/) || [])[1];   // 与 fnosRoutes 同源：文件名解析
 
 let browser;
 try {
@@ -43,7 +44,7 @@ try {
   // ---------- A. 管理员：info + 下载 ----------
   let r = await fetch(`${B}/api/fnos/info`, { headers: HA });
   let j = await r.json();
-  ck('A1 info 200 且带版本/大小/文件名', r.status === 200 && j.available === true && j.version === 'v1.9.8' && j.size === srcBuf.length && j.file === srcFpk, JSON.stringify(j).slice(0, 160));
+  ck('A1 info 200 且带版本/大小/文件名', r.status === 200 && j.available === true && j.version === srcVer && j.size === srcBuf.length && j.file === srcFpk, JSON.stringify(j).slice(0, 160));
 
   r = await fetch(`${B}/api/fnos/package`, { headers: HA });
   const buf = Buffer.from(await r.arrayBuffer());
@@ -79,7 +80,7 @@ try {
   const panel = p.locator('.fnos-panel');
   const cards = panel.locator('.card');
   ck('C2 下载按钮在面板第一张卡片', await cards.first().locator('button.primary', { hasText: '下载 fpk 安装包' }).count() === 1);
-  ck('C3 显示版本徽标与大小', await cards.first().locator('.badge.blue', { hasText: 'v1.9.8' }).count() === 1 && (await cards.first().innerText()).includes('MB'));
+  ck('C3 显示版本徽标与大小', await cards.first().locator('.badge.blue', { hasText: srcVer }).count() === 1 && (await cards.first().innerText()).includes('MB'));
   ck('C4 显示当前访问通道（内网直连 127.0.0.1）', (await cards.first().innerText()).includes('内网直连'));
   ck('C5 安装步骤内容渲染', (await cards.nth(1).innerText()).includes('应用中心'));
   await p.screenshot({ path: path.join(ROOT, 'Logs', 'e2e-fnos-tab.png'), fullPage: true });

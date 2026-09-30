@@ -23,13 +23,13 @@ set "PYW="
 where pythonw >nul 2>nul && for /f "delims=" %%i in ('where pythonw') do set "PYW=%%i"
 if not defined PYW for %%v in (313 312 311 310 39) do if not defined PYW if exist "%LOCALAPPDATA%\Programs\Python\Python%%v\pythonw.exe" set "PYW=%LOCALAPPDATA%\Programs\Python\Python%%v\pythonw.exe"
 if not defined PYW (
-  echo [X] pythonw not found. Install Python 3.9+ (64-bit) first, then run this again.
+  echo [X] pythonw not found. Install Python 3.9+ ^(64-bit^) first, then run this again.
   pause & exit /b 1
 )
 echo [1/13] Python found: %PYW%
 
 rem ---- 2. bleak dependency (offline wheels first, network fallback) ----
-set "PY=%PYW:pythonw.exe=python.exe}%"
+set "PY=%PYW:pythonw.exe=python.exe%"
 "%PY%" -c "import bleak" >nul 2>nul
 if errorlevel 1 (
   echo [2/13] Installing bleak ...
@@ -52,7 +52,7 @@ if errorlevel 1 (
 )
 
 rem ---- 4. start daemon now ----
-tasklist /FI "IMAGENAME eq pythonw.exe" | find /i "pythonw" >nul && netstat -ano | find "127.0.0.1:7878" >nul && (
+tasklist /FI "IMAGENAME eq pythonw.exe" | "%SystemRoot%\System32\find.exe" /i "pythonw" >nul && netstat -ano | "%SystemRoot%\System32\find.exe" "127.0.0.1:7878" >nul && (
   echo [4/13] Daemon seems already running.
 ) || (
   start "" "%PYW%" "%~dp0daemon.py"
