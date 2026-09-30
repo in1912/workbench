@@ -1,0 +1,3 @@
+#!/bin/bash
+# upgrade_callback：无额外动作（数据生命周期由 fnOS @appdata 卷管理；卸载不主动删数据）
+exit 0

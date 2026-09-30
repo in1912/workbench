@@ -194,6 +194,13 @@ onMounted(() => {
           : '钉钉免登未生效：' + (e.message || '请直接账号密码登录');
       });
   }
+  // 飞牛 fnOS 桌面内打开（统一网关 /app/... 前缀，v1.9.0）：NAS 登录态已被网关校验并注入可信用户头，
+  // 先试免登直接进系统；失败（如直连 7777 端口无网关头）静默回退账号密码表单
+  if (location.pathname.startsWith('/app/')) {
+    api.post('/auth/fnos-login', {})
+      .then((d) => { if (d && d.token) enterSystem(d); })
+      .catch(() => {});
+  }
 });
 
 async function login() {

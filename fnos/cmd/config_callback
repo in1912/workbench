@@ -1,0 +1,3 @@
+#!/bin/bash
+# 配置变更：重新生成 etc/workbench.env（向导字段同名覆盖，见 install_callback）
+exec "$(dirname "$0")/install_callback"

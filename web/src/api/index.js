@@ -1,4 +1,8 @@
-const base = '/api';
+// 飞牛 fnOS 统一网关嵌入（v1.9.0）：页面挂在 /app/{appname} 前缀下时，API 请求也必须带同款前缀，
+// 否则 fetch('/api/..') 会打到 NAS 域名根路径（fnOS 自己的接口）。哈希路由 + vite base './'，
+// 其余静态资源天然可迁移，这里补齐 API 这一处。常规部署（根路径）保持 '/api' 不变。
+const GATEWAY_PREFIX = (location.pathname.match(/^\/app\/[A-Za-z0-9_-]+/) || [''])[0];
+const base = GATEWAY_PREFIX + '/api';
 
 // 兼容老内核 webview（iOS 钉钉内置浏览器等不支持 AbortSignal.timeout，2021 年前的 Safari 均无）：
 // 不打补丁的话该设备上全站请求直接抛 TypeError（表现为"钉钉免登未生效 / 登录失败"）。

@@ -1,0 +1,14 @@
+{
+  ".url": {
+    "qgworkbench.main": {
+      "title": "全能工作台",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/qgworkbench",
+      "gatewaySocket": "app.sock",
+      "url": "/app/qgworkbench",
+      "allUsers": true
+    }
+  }
+}

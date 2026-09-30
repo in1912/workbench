@@ -1,0 +1,86 @@
+#!/bin/bash
+# 全能工作台 fnOS 生命周期主脚本：start / stop / status
+# 运行身份为包用户（见 config/privilege）；数据持久化在 @appdata（$TRIM_PKGVAR）。
+APPDEST="${TRIM_APPDEST:-/var/apps/qgworkbench/target}"
+PKGVAR="${TRIM_PKGVAR:-/var/apps/qgworkbench/var}"
+PKGETC="${TRIM_PKGETC:-/var/apps/qgworkbench/etc}"
+PORT="${TRIM_SERVICE_PORT:-7777}"
+PID_FILE="$PKGVAR/workbench.pid"
+LOG_DIR="$PKGVAR/logs"
+SOCK="$APPDEST/app.sock"
+
+err_log() { [ -n "$TRIM_TEMP_LOGFILE" ] && echo "$1" > "$TRIM_TEMP_LOGFILE"; }
+
+# fnOS Node 运行时（manifest install_dep_apps=nodejs_v22）；找不到时回退系统 PATH 的 node
+NODE_BIN="/var/apps/nodejs_v22/target/bin/node"
+[ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ]; then
+  err_log "未找到 Node.js：请确认应用中心已安装 nodejs_v22 运行时。"
+  exit 1
+fi
+
+# node:sqlite 需 Node >= 22.5；22.5.0 ~ 22.12.x 还需 --experimental-sqlite 旗标，动态判断
+NODE_FLAGS="--no-warnings"
+NODE_VER="$("$NODE_BIN" -v | tr -d 'v')"          # 如 22.13.1
+NODE_MAJOR="${NODE_VER%%.*}"
+NODE_REST="${NODE_VER#*.}"; NODE_MINOR="${NODE_REST%%.*}"
+if [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 13 ]; then
+  NODE_FLAGS="$NODE_FLAGS --experimental-sqlite"
+fi
+
+# 安装向导收集的配置（见 cmd/install_callback 写出的 etc/workbench.env）
+[ -f "$PKGETC/workbench.env" ] && . "$PKGETC/workbench.env"
+
+pid_of() { [ -f "$PID_FILE" ] && cat "$PID_FILE" 2>/dev/null; }
+
+case "$1" in
+  start)
+    mkdir -p "$PKGVAR/data" "$LOG_DIR"
+    cd "$APPDEST" || { err_log "应用目录不存在：$APPDEST"; exit 1; }
+    # 已在运行则不重复拉起（fnOS 重入式调用是正常的）
+    OLD_PID="$(pid_of)"
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+      echo "全能工作台已在运行（PID $OLD_PID）"; exit 0
+    fi
+    nohup env \
+      PORT="$PORT" \
+      DATA_DIR="$PKGVAR/data" \
+      DB_FILE="workbench.sqlite" \
+      FNOS_APP_SOCK="$SOCK" \
+      FNOS_PREFIX="/app/qgworkbench" \
+      DEFAULT_ADMIN="$DEFAULT_ADMIN" \
+      DEFAULT_ADMIN_PASSWORD="$DEFAULT_ADMIN_PASSWORD" \
+      FNOS_AUTO_USER_PAGES="$FNOS_AUTO_USER_PAGES" \
+      TZ="${TZ:-Asia/Shanghai}" \
+      "$NODE_BIN" $NODE_FLAGS server/index.js >> "$LOG_DIR/server.log" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "全能工作台已启动（PID $(cat "$PID_FILE")，端口 $PORT，网关 $SOCK）"
+    ;;
+
+  status)
+    PID="$(pid_of)"
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then exit 0; fi
+    exit 3
+    ;;
+
+  stop)
+    PID="$(pid_of)"
+    if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+      rm -f "$PID_FILE"; exit 0
+    fi
+    kill "$PID" 2>/dev/null
+    for _ in $(seq 1 20); do    # 优雅退出最多等 10 秒
+      kill -0 "$PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
+    rm -f "$PID_FILE" "$SOCK"
+    echo "全能工作台已停止"
+    ;;
+
+  *)
+    err_log "用法: main {start|stop|status}"
+    exit 1
+    ;;
+esac
+exit 0

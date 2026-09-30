@@ -65,7 +65,7 @@ app.use((req, res, next) => {
 // 注意：req.path 在挂载于 /api 的中间件中是相对路径（如 /auth/login、/health）
 // 匹配规则：全等，或 req.path 以 条目+/ 开头
 // （v1.8.0：mbti/dep/pro 测试中心免登录前缀已随「私有项目」页移除，迁至独立项目 Private_Mini）
-const EXEMPT = ['/auth/login', '/health', '/tile', '/map-static', '/system-info', '/dingtalk/bind/callback', '/auth/dingtalk-info', '/auth/dingtalk/login',
+const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-static', '/system-info', '/dingtalk/bind/callback', '/auth/dingtalk-info', '/auth/dingtalk/login',
   '/monitor/agent/config', '/monitor/agent/shot',
   '/clipboard/agent-register', '/clipboard/agent-push', // 剪贴板采集代理（key+uid 即凭证：登记/推送，v1.6.2）
   '/vibe/client-download', '/vibe/client-register', '/vibe/job', // 录音转写客户端（key 即凭证：引擎下发/登记回连/拉取模式领任务回传结果）
@@ -148,6 +148,34 @@ if (webDist) {
 }
 
 const PORT = process.env.PORT || 3000;
+
+// ---------- 飞牛 fnOS 统一网关（v1.9.0）：/app/{appname} 前缀 + Unix Socket ----------
+// fnOS 桌面入口 /app/qgworkbench 的请求经 NAS 登录态校验后，转发到应用 target/app.sock，
+// 并注入可信用户头（X-Trim-Username/Userid/Isadmin）。这里把整套 app 挂到前缀下（剥前缀复用全部路由与静态资源），
+// 并打 viaGateway 标记——该标记只在网关链路上设置，直连 TCP 端口伪造 X-Trim 头无效。
+// 免登开号逻辑见 routes/authRoutes.js 的 /auth/fnos-login（只认 viaGateway 请求）。
+const FNOS_PREFIX = process.env.FNOS_PREFIX || '';
+const FNOS_APP_SOCK = process.env.FNOS_APP_SOCK || '';
+if (FNOS_PREFIX && FNOS_APP_SOCK) {
+  const gatewayApp = express();
+  gatewayApp.use(FNOS_PREFIX, (req, res, next) => { req.viaGateway = true; next(); }, app);
+  try { fs.unlinkSync(FNOS_APP_SOCK); } catch { /* 首次启动无残留 socket */ }
+  const gwSrv = http.createServer(gatewayApp);
+  gwSrv.listen(FNOS_APP_SOCK, () => {
+    try { fs.chmodSync(FNOS_APP_SOCK, 0o666); } catch { /* Windows/权限差异，尽力而为 */ }
+    console.log(`[fnos] 统一网关已监听: ${FNOS_APP_SOCK}（前缀 ${FNOS_PREFIX}）`);
+  });
+  gwSrv.on('error', (e) => console.warn('[fnos] 网关 Socket 监听失败（不影响 TCP 端口服务）:', e.message));
+}
+// 本地调试/线上诊断：FNOS_GATEWAY_TCP_PORT=4001 时把同一套网关入口挂到 TCP 端口，
+// 可用 curl 带 X-Trim-* 头直接验证免登全链路（不经 Unix Socket）
+if (FNOS_PREFIX && process.env.FNOS_GATEWAY_TCP_PORT) {
+  const dbgApp = express();
+  dbgApp.use(FNOS_PREFIX, (req, res, next) => { req.viaGateway = true; next(); }, app);
+  dbgApp.listen(Number(process.env.FNOS_GATEWAY_TCP_PORT), () => {
+    console.log(`[fnos] 网关调试端口: http://localhost:${process.env.FNOS_GATEWAY_TCP_PORT}${FNOS_PREFIX}/`);
+  });
+}
 
 // ---------- HTTPS（自签名证书支持）：data/ssl/cert.pem + key.pem 存在即启用 ----------
 // 同一端口 HTTP/HTTPS 自适应：前置 net 服务嗅探首字节（TLS 握手 = 0x16），

@@ -1,0 +1,36 @@
+[
+  {
+    "stepTitle": "应用配置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "管理员账号密码仅对全新空库生效；已建库后如需改密，请在应用内「设置 → 用户管理」操作。NAS 成员默认权限对之后新免登开号的成员生效。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_admin_user",
+        "label": "初始管理员用户名",
+        "initValue": "admin",
+        "rules": [
+          { "required": true, "message": "请输入管理员用户名" }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_admin_pass",
+        "label": "初始管理员密码（仅空库生效）",
+        "initValue": ""
+      },
+      {
+        "type": "radio",
+        "field": "wizard_nas_perm",
+        "label": "NAS 普通成员首次免登自动开号的默认权限",
+        "initValue": "all",
+        "options": [
+          { "label": "开放全部页面", "value": "all" },
+          { "label": "无任何权限（管理员事后分配）", "value": "none" }
+        ]
+      }
+    ]
+  }
+]

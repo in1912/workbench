@@ -200,6 +200,46 @@ router.post('/auth/dingtalk/login', async (req, res) => {
     res.status(401).json({ error: '钉钉免登失败：' + e.message });
   }
 });
+// ---------- 飞牛 fnOS 统一网关免登（v1.9.0） ----------
+// 请求经 fnOS 网关（Unix Socket）转发：NAS 登录态已校验，X-Trim-* 为网关注入的可信身份头。
+// 仅 viaGateway 标记的请求可用（该标记只在网关/调试挂载链路上设置，直连 TCP 端口伪造头无效）。
+// NAS 用户名在工作台不存在时自动开号：NAS 管理员→工作台 admin；普通成员→user（默认全页面，
+// 装机环境变量 FNOS_AUTO_USER_PAGES=none 可改为默认无权限，由管理员事后在用户管理里分配）。
+// 开号密码哈希为随机值：密码通道不可登，只能走网关免登（管理员可改密开通密码登录）。
+router.post('/auth/fnos-login', (req, res) => {
+  if (!req.viaGateway) return res.status(401).json({ error: '仅飞牛 fnOS 网关入口可用' });
+  const nodeCrypto = require('crypto');
+  const uname = String(req.headers['x-trim-username'] || '').trim();
+  const isAdmin = String(req.headers['x-trim-isadmin'] || '') === 'true';
+  if (!/^[A-Za-z0-9_.-]{1,32}$/.test(uname)) {
+    writeLoginLog({ username: 'fnos:' + uname.slice(0, 60), success: 0, reason: '免登失败（网关用户名不合法）', ip: clientIp(req), ua: req.headers['user-agent'] || '' });
+    return res.status(401).json({ error: 'fnOS 免登失败：网关未提供有效用户名' });
+  }
+  let user = db.prepare('SELECT * FROM users WHERE username=? AND (is_bot IS NULL OR is_bot=0)').get(uname);
+  if (!user) {
+    const role = isAdmin ? 'admin' : 'user';
+    const pages = (!isAdmin && process.env.FNOS_AUTO_USER_PAGES === 'none') ? '["__none__"]' : '[]';
+    const randomPass = nodeCrypto.randomBytes(24).toString('hex');
+    db.prepare('INSERT INTO users(username,password_hash,role,allowed_pages,allowed_tabs) VALUES(?,?,?,?,?)')
+      .run(uname, auth.hashPassword(randomPass), role, pages, '{}');
+    user = db.prepare('SELECT * FROM users WHERE username=?').get(uname);
+    getTenantDb(user.id);
+    console.log(`[auth] fnOS 用户 ${uname} 自动开号（角色 ${role}）`);
+  }
+  const token = auth.createSession(user.id);
+  getTenantDb(user.id);
+  writeLoginLog({ username: user.username, user_id: user.id, success: 1, reason: '飞牛NAS免登' + (isAdmin ? '（管理员）' : ''), ip: clientIp(req), ua: req.headers['user-agent'] || '' });
+  res.json({
+    token,
+    user: {
+      id: user.id, username: user.username, role: user.role,
+      display_name: user.display_name || '', nickname: user.nickname || '',
+      allowed_pages: JSON.parse(user.allowed_pages || '[]'),
+      allowed_tabs: JSON.parse(user.allowed_tabs || '{}'),
+    },
+    theme: getSetting(getTenantDb(user.id), 'theme', '') || '',
+  });
+});
 // 绑定：登录后在钉钉内打开本页，前端静默取免登码调这里，把当前账号与钉钉 userid 关联
 router.post('/auth/dingtalk/bind', async (req, res) => {
   try {

@@ -1,0 +1,24 @@
+#!/bin/bash
+# 安装完成：把向导收集的初始配置落到 etc/workbench.env（cmd/main 每次启动前 source）
+PKGETC="${TRIM_PKGETC:-/var/apps/qgworkbench/etc}"
+mkdir -p "$PKGETC"
+
+# 向导变量可能未定义（跳过向导/重装），全部给安全默认：
+# - 管理员账号密码仅首次建空库时生效（server/auth.js initAdmin），之后改密走「设置→用户管理」
+# - FNOS_AUTO_USER_PAGES=all：NAS 普通成员首次免登自动开号并开放全部页面；none=开号但无权限（管理员事后分配）
+ADMIN_USER="${wizard_admin_user:-admin}"
+ADMIN_PASS="${wizard_admin_pass:-}"
+NAS_PERM="${wizard_nas_perm:-all}"
+[ "$NAS_PERM" != "none" ] && NAS_PERM="all"
+
+umask 077
+cat > "$PKGETC/workbench.env" <<EOF
+# 全能工作台初始配置（安装向导生成；可重复执行覆盖）
+DEFAULT_ADMIN="$ADMIN_USER"
+DEFAULT_ADMIN_PASSWORD="$ADMIN_PASS"
+FNOS_AUTO_USER_PAGES="$NAS_PERM"
+EOF
+chmod 600 "$PKGETC/workbench.env" 2>/dev/null
+
+echo "install_callback: 已写入 $PKGETC/workbench.env（初始管理员=$ADMIN_USER，NAS 成员默认权限=$NAS_PERM）"
+exit 0

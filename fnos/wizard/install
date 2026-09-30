@@ -1,0 +1,37 @@
+[
+  {
+    "stepTitle": "初始配置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "全能工作台自带多成员账号体系。这里设置初始管理员（仅首次建库生效，之后请在应用内「设置 → 用户管理」修改）。飞牛桌面打开的应用会按 NAS 账号自动免登并自动开号。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_admin_user",
+        "label": "初始管理员用户名",
+        "initValue": "admin",
+        "rules": [
+          { "required": true, "message": "请输入管理员用户名" },
+          { "pattern": "^[A-Za-z0-9_-]{1,32}$", "message": "仅限字母/数字/下划线/中划线，最长 32 位" }
+        ]
+      },
+      {
+        "type": "password",
+        "field": "wizard_admin_pass",
+        "label": "初始管理员密码（留空则为 admin123，登录后请立即修改）",
+        "initValue": ""
+      },
+      {
+        "type": "radio",
+        "field": "wizard_nas_perm",
+        "label": "NAS 普通成员首次免登自动开号的默认权限",
+        "initValue": "all",
+        "options": [
+          { "label": "开放全部页面（家庭共用推荐，可随时在应用内收紧）", "value": "all" },
+          { "label": "无任何权限（管理员在应用内逐个分配）", "value": "none" }
+        ]
+      }
+    ]
+  }
+]
