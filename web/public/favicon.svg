@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 261.76 226.69">
-  <!-- 全能工作台 favicon：Vue 官方标志的单色版（内外双 V 以 evenodd 镂空，跟随明暗标签栏均可辨） -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- 全能工作台 favicon：与首页一致的 dashboard 四方块图标（Material Icons 同形），跟随明暗标签栏均可辨 -->
   <style>
-    @media (prefers-color-scheme: dark) { .v { fill: #4fc08d; } }
+    @media (prefers-color-scheme: dark) { .d { fill: #4f7cf7; } }
   </style>
-  <path class="v" fill="#35495e" fill-rule="evenodd" d="M161.096.001l-30.225 52.351L100.647.001H-.005l130.877 226.688L261.749.001zM161.096.001l-30.225 52.351L100.647.001H52.346l78.526 136.01L209.398.001z"/>
+  <path class="d" fill="#2d5fd9" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
 </svg>

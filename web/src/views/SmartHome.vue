@@ -112,12 +112,16 @@
       </div>
 
       <div class="card">
-        <img class="cc-demo" :src="ccDemoImg" alt="成品示例：ESP32-C3 红绿灯" title="成品示例" />
-        <h3 style="margin:0 0 8px">Agent红绿灯 — AI Agent 状态指示灯（九家：Claude Code / Codex CLI / WorkBuddy / CodeBuddy / Cursor / DeepSeek Harness / Hermes / Gemini CLI / Qwen Code）</h3>
-        <div class="muted" style="font-size:13px; line-height:1.8; margin-bottom:10px">
-          ESP32-C3 SuperMini 开发板 + 三色红绿灯模块。AI 干什么，灯就显示什么——<b>一块板子同时兼容九家 agent</b>（见下方「① 多 agent 兼容说明」），<b>Windows / macOS 都能装</b>（下载包见本页顶部）：
-          <b>全程蓝牙（BLE）通讯</b>，USB 只在刷固件时用一次，之后板子插任意 USB 电源即可，电脑端守护进程自动扫描连接（蓝牙名 <b>Agent light</b>）。<br />
-          链路：各家钩子/插件 → 转发器（send.js / workbuddy-forward.mjs / cursor-forward.mjs / gemini-qwen-forward.mjs / dsh·hermes 插件直发）→ UDP（本机 7878）→ daemon.py → 蓝牙 → 板子。板子断电重启会自动重连并续上最后灯态。
+        <div class="cc-intro-row">
+          <div style="flex:1; min-width:0">
+            <h3 style="margin:0 0 8px">Agent红绿灯 — AI Agent 状态指示灯（九家：Claude Code / Codex CLI / WorkBuddy / CodeBuddy / Cursor / DeepSeek Harness / Hermes / Gemini CLI / Qwen Code）</h3>
+            <div class="muted" style="font-size:13px; line-height:1.8; margin-bottom:0">
+              ESP32-C3 SuperMini 开发板 + 三色红绿灯模块。AI 干什么，灯就显示什么——<b>一块板子同时兼容九家 agent</b>（见下方「① 多 agent 兼容说明」），<b>Windows / macOS 都能装</b>（下载包见本页顶部）：
+              <b>全程蓝牙（BLE）通讯</b>，USB 只在刷固件时用一次，之后板子插任意 USB 电源即可，电脑端守护进程自动扫描连接（蓝牙名 <b>Agent light</b>）。<br />
+              链路：各家钩子/插件 → 转发器（send.js / workbuddy-forward.mjs / cursor-forward.mjs / gemini-qwen-forward.mjs / dsh·hermes 插件直发）→ UDP（本机 7878）→ daemon.py → 蓝牙 → 板子。板子断电重启会自动重连并续上最后灯态。
+            </div>
+          </div>
+          <img class="cc-demo" :src="ccDemoImg" alt="成品示例：ESP32-C3 红绿灯" title="成品示例" />
         </div>
         <div class="cc-note">
           <b>为什么蓝牙设置里搜不到「Agent light」？</b>（正常现象，不是故障）<br />
@@ -1092,9 +1096,10 @@ onBeforeUnmount(() => {
 .sh-events { margin-top: 6px; }
 
 /* Agent红绿灯 tab（v1.8.1）：灯效表 / 步骤 / 下载清单 */
-/* 成品示例图：浮在介绍卡片右上角，标题/简介环绕，宽表格自动排到图下方 */
-.cc-demo { float: right; width: 150px; max-width: 40%; margin: 2px 0 10px 16px; border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,.12); }
-@media (max-width: 640px) { .cc-demo { width: 104px; margin-left: 10px; } }
+/* 成品示例图：与标题+简介并排（图贴文字右侧, 不悬浮）；说明框与表格照常整行排在下方 */
+.cc-intro-row { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+.cc-demo { flex-shrink: 0; width: 150px; max-width: 40%; border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,.12); }
+@media (max-width: 640px) { .cc-demo { width: 104px; } .cc-intro-row { gap: 10px; } }
 .cc-note { border: 1px solid rgba(79, 124, 247, .4); background: rgba(79, 124, 247, .08); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.8; margin: 0 0 12px; }
 .cc-dl-group { font-size: 13.5px; margin: 2px 0 6px; color: var(--text); border-left: 3px solid rgba(79, 124, 247, .6); padding-left: 8px; }
 .cc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
