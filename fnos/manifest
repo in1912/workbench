@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.10
+version=1.9.11
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=cc-light（Agent红绿灯）安装/刷机脚本修复：cc-light-install.cmd 与 flash-firmware.cmd 在 if 块内 echo 括号未转义，Windows 双击即闪退（报「此时不应有 first。」）；已转义修复并加固 find 调用（绝对路径防 PATH 抢占）；上一版（1.9.9）：设置页新增「飞牛应用」tab：fpk 安装包在线下载（内网/外网地址自动跟随当前访问通道），附安装步骤与基本介绍；fpk 随仓库与升级包分发：v1.9.6 后网关层已通（笔记等全部正常），但真机上服务端访问 open-meteo 定位接口报 fetch failed（NAS 出网/DNS 受限）导致天气地区仍保存不了。本版内置全国地级市+知名县级市坐标库（约 400 条，含省名/简称别名、市区省后缀自动剥离），国内城市定位零外网依赖、即填即存；库外城市（境外/小县城）走 open-meteo 在线兜底，失败时报错带原因码（ENOTFOUND/ETIMEDOUT 等）便于排查 NAS 网络；天气数据接口失败同样带原因码
+changelog=智能家居新增「智能板」tab（小智 Korvo2V3 语音板全家桶）：① 装机向导（CH343 驱动/串口脚本下载、烧录指引、配网页与 xiaozhi.me 控制台页内嵌或一键新开、唤醒测试）；② 唤醒词在线改（拼音/显示名/灵敏度阈值）→ 一键编译并烧录回板子（自动探测串口芯片防烧错板，构建日志实时滚动，产物可下载）；③ 语音控米家：板子固件注册 self.workbench.* MCP 工具回连工作台桥接接口，对小智说话即可开关米家设备（双通道：直接 MIoT / 小爱智能屏转述，后者支持调温等自然语言指令，附试播/试执行）；④ 无 ESP-IDF 工具链的环境（如 NAS）自动降级为文档+工具下载模式。上一版（1.9.10）：cc-light 安装/刷机脚本修复

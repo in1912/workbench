@@ -5,6 +5,7 @@
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
       <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">参数翻译</button>
       <button v-if="canTab('smarthome','cclight')" :class="{active: tab==='cclight'}" @click="switchTab('cclight')">Agent红绿灯</button>
+      <button v-if="canTab('smarthome','xiaozhi')" :class="{active: tab==='xiaozhi'}" @click="switchTab('xiaozhi')">智能板</button>
       <button v-if="canTab('smarthome','settings')" :class="{active: tab==='settings'}" @click="switchTab('settings')">设置</button>
     </div>
 
@@ -273,6 +274,9 @@
       </div>
     </template>
 
+    <!-- ==================== 智能板 tab（v1.9.11：小智 Korvo2V3 装机/唤醒词/语音控米家） ==================== -->
+    <XiaozhiPanel v-else-if="tab==='xiaozhi'" />
+
     <!-- ==================== 设置 tab ==================== -->
     <template v-else-if="tab==='settings'">
       <div class="card">
@@ -504,6 +508,7 @@ import { api } from '../api';
 import QRCode from 'qrcode';
 import { zh, TERM_GROUPS } from '../miotTerms';
 import ccDemoImg from '../assets/cclight-demo.png';
+import XiaozhiPanel from '../components/XiaozhiPanel.vue';
 
 const route = useRoute();
 const router = useRouter();

@@ -94,6 +94,9 @@ function pageForPath(p) {
   if (p.startsWith('/mihome')) return 'smarthome';
   // Agent红绿灯（CC-LIGHT）说明与程序下载归智能家居页 cclight tab（v1.8.1）
   if (p.startsWith('/cclight')) return 'smarthome';
+  // 智能板（小智 Korvo2V3，v1.9.11）：装机/唤醒词/桥接归智能家居页 xiaozhi tab；
+  // /xiaozhi/bridge 在 index.js EXEMPT 免登录（板端固件回连，key 即凭证），不经过这里
+  if (p.startsWith('/xiaozhi')) return 'smarthome';
   // 业务系统改名「推送任务」并入效率工具页（2026-09 v1.7.0）
   if (p.startsWith('/business')) return 'tools';
   if (p.startsWith('/ai')) return 'ai';
@@ -216,6 +219,7 @@ const TAB_PATHS = {
     ['mijia', []],
     ['terms', []],
     ['cclight', ['/cclight']],
+    ['xiaozhi', ['/xiaozhi']],
     ['settings', ['/mihome/bind', '/mihome/unbind']],
   ],
 };

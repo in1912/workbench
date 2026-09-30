@@ -90,6 +90,8 @@ export const TAB_DEFS = {
     { key: 'terms', label: '参数翻译' },
     // Agent红绿灯（v1.8.1）：ESP32-C3 三色灯 = Claude Code 状态指示（使用说明 + 刷机 + 文件下载）
     { key: 'cclight', label: 'Agent红绿灯' },
+    // 智能板（v1.9.11）：小智 Korvo2V3 语音板 = 装机向导 + 唤醒词编译烧录 + 语音控米家
+    { key: 'xiaozhi', label: '智能板' },
     { key: 'settings', label: '设置' },
   ],
 };

@@ -23,6 +23,7 @@ const sslRoutes = require('./routes/sslRoutes');
 const monitorRoutes = require('./routes/monitorRoutes');
 const mihomeRoutes = require('./routes/mihomeRoutes');
 const ccLightRoutes = require('./routes/ccLightRoutes');
+const xiaozhiRoutes = require('./routes/xiaozhiRoutes');
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
 const scheduler = require('./scheduler');
@@ -71,6 +72,7 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
   '/clipboard/agent-register', '/clipboard/agent-push', // 剪贴板采集代理（key+uid 即凭证：登记/推送，v1.6.2）
   '/vibe/client-download', '/vibe/client-register', '/vibe/job', // 录音转写客户端（key 即凭证：引擎下发/登记回连/拉取模式领任务回传结果）
   '/mihome/callback', // 米家 OAuth 回跳（小米浏览器重定向落地，无工作台登录态；只认 state 会话 + 一次性 code）
+  '/xiaozhi/bridge', // 智能板桥接（v1.9.11：板端固件 MCP 工具回连，key 即凭证，照 /vibe/job 模式）
   '/pets/desktop']; // 桌面宠物（key 即凭证：state/frame/action）
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();
@@ -111,6 +113,7 @@ app.use('/api', wishRoutes);
 app.use('/api', monitorRoutes);
 app.use('/api', mihomeRoutes);
 app.use('/api', ccLightRoutes);
+app.use('/api', xiaozhiRoutes);
 app.use('/api', fnosRoutes);
 app.use('/api/ssl', sslRoutes);
 
