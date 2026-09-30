@@ -1,0 +1,11 @@
+{
+  "name": "dsh-esp32-light",
+  "version": "0.1.0",
+  "description": "Agent light (ESP32-C3) status light for DeepSeek Harness - sends MODE:<word> to local daemon UDP 7878",
+  "main": "dist/index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""CC-LIGHT 蓝牙守护进程 (Windows, Python + bleak)
+"""CC-LIGHT 蓝牙守护进程 (Windows / macOS, Python + bleak)
 
 职责:
   1. BLE 扫描并连接开发板 (广播名 Agent light, Nordic UART Service)
-  2. 本机 UDP 127.0.0.1:7878 接收指示灯命令 (来自 Claude Code hooks)
+  2. 本机 UDP 127.0.0.1:7878 接收指示灯命令 (来自各家 CLI 的 hooks)
      → 经蓝牙写入开发板; 断线期间记下最后模式, 重连后自动恢复
-  3. 看门狗: busy>30分钟 / thinking,ai>15分钟 无变化 → 自动 off (防止钩子
-     丢失事件导致灯态卡死)
+  3. 看门狗: busy>30分钟 / thinking,ai>15分钟 / alarm>30分钟 / success>10分钟
+     无变化 → 自动 off (防止钩子丢失事件导致灯态卡死; Codex 无会话结束事件,
+     绿灯靠 success 超时自动熄灭)
   4. 状态落地 status.json, 日志 daemon.log (超 300KB 自动截断)
 
-用法: pythonw daemon.py   (开机计划任务自动拉起, 也可手动前台运行调试)
+用法: Windows 用 pythonw daemon.py (计划任务自动拉起); macOS 用 python3 daemon.py
+      (LaunchAgent 自动拉起); 均可手动前台运行调试。
+      macOS 首次运行会弹「xx想要使用蓝牙」权限框, 允许一次即可。
 """
 import asyncio
 import json
@@ -29,7 +32,8 @@ UDP_PORT = 7878
 
 MODES = {"demo", "thinking", "ai", "busy", "success",
          "error", "alarm", "traffic", "all", "off"}
-STALE_SEC = {"busy": 1800, "thinking": 900, "ai": 900, "alarm": 1800}
+STALE_SEC = {"busy": 1800, "thinking": 900, "ai": 900, "alarm": 1800,
+             "success": 600}
 
 
 def now():
@@ -195,7 +199,7 @@ async def udp_server():
 
 async def main():
     global _loop
-    _loop = asyncio.get_event_loop()
+    _loop = asyncio.get_running_loop()
     log("=== CC-LIGHT daemon start (pid {}) ===".format(os.getpid()))
     await asyncio.gather(ble_loop(), watchdog(), udp_server())
 

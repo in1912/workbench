@@ -4,7 +4,8 @@ rem  CC-LIGHT / Agent light - UNINSTALL
 rem  Put this file in the same folder as daemon.py, double-click.
 rem  Does: 1) turn board off  2) stop running daemon
 rem        3) delete autostart task "CC-Light-Daemon"
-rem        4) remove Claude Code hooks (if Node.js present)
+rem        4) remove Claude Code / Codex / WorkBuddy / CodeBuddy / Cursor /
+rem           DeepSeek Harness / Hermes / Gemini CLI / Qwen Code hooks
 rem  The folder itself can be deleted afterwards by hand.
 rem ============================================================
 setlocal
@@ -24,8 +25,16 @@ rem ---- 3. delete autostart task ----
 schtasks /Delete /TN "CC-Light-Daemon" /F >nul 2>nul
 if errorlevel 1 (echo [2/3] Autostart task not found.) else (echo [2/3] Autostart task deleted.)
 
-rem ---- 4. remove Claude Code hooks ----
+rem ---- 4. remove hooks (Claude Code, then Codex CLI) ----
 where node >nul 2>nul && node "%~dp0install-hooks.js" --remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --codex-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --workbuddy-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --codebuddy-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --cursor-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --dsh-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --hermes-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --gemini-remove
+where node >nul 2>nul && node "%~dp0install-hooks.js" --qwen-remove
 echo [3/3] Hooks removed (if they were installed).
 
 echo.

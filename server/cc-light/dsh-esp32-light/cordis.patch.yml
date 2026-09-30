@@ -1,0 +1,6 @@
+# Agent light (ESP32-C3) status light — one plugin row over the profile root.
+# The plugin sends MODE:<word> UDP packets to the local daemon (127.0.0.1:7878)
+# which drives the BLE board; failures are swallowed, never blocking the agent.
+- insert:
+    - id: esp32-light
+      name: 'dsh-esp32-light'

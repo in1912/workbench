@@ -1,9 +1,10 @@
-// CC-LIGHT 指示灯命令发送器 (Claude Code hooks 入口, 兼手动测试)
+// CC-LIGHT 指示灯命令发送器 (Claude Code / Codex CLI hooks 入口, 兼手动测试)
 // 用法:
 //   node send.js <mode>       直接指定模式 (demo/thinking/ai/busy/success/error/alarm/traffic/all/off)
 //   node send.js post         PostToolUse: 读 stdin 钩子 JSON → 命令失败=error, 否则=ai
-//   node send.js notify       Notification: 读 stdin JSON → 涉及权限确认=alarm
+//   node send.js notify       Notification(Claude): 读 stdin JSON → 涉及权限确认=alarm
 // 说明: 只发 UDP 给本机守护进程(daemon.py), 不等回复, 快进快出, 不阻塞工具调用。
+//       两个 CLI 的事件 JSON 同构(tool_response 等字段同名), post 对两者通用。
 'use strict';
 const dgram = require('dgram');
 const PORT = 7878;
@@ -34,12 +35,12 @@ if (arg === 'post') {
     let m = 'ai';
     try {
       const j = JSON.parse(raw || '{}');
-      const tr = j.tool_response;
+      const tr = j.tool_response ?? j.tool_result;   // Claude 字段 / WorkBuddy 字段
       const txt = typeof tr === 'string' ? tr : JSON.stringify(tr || '');
       if (
         /"is_error"\s*:\s*true/.test(txt) ||
         /"error"\s*:/.test(txt) ||
-        /Exit code [1-9]\d*/.test(txt) ||
+        /Exit code [1-9]\d*/i.test(txt) ||
         /command not found/i.test(txt) ||
         /Traceback \(most recent call last\)/.test(txt) ||
         /SyntaxError:|IndentationError:|ModuleNotFoundError:|FileNotFoundError:/.test(txt)
