@@ -104,6 +104,7 @@
         <h3>天气</h3>
         <div class="form-row"><label>城市</label><input v-model="cityInput" placeholder="如：宁波 / 上海" /></div>
         <button class="primary" @click="geocode" style="margin-bottom:10px">保存并定位城市</button>
+        <div class="muted" style="margin:-4px 0 8px; font-size:12px">内置全国地级市坐标库，国内城市离线即可定位（无需服务器访问外网）；区县/境外城市走在线定位</div>
         <div class="muted" v-if="s.weather.lat">当前：{{ s.weather.city }}（{{ s.weather.lat }}, {{ s.weather.lon }}）</div>
         <div class="muted" style="margin-top:6px">也可直接填写经纬度后保存：</div>
         <div class="row" style="margin-top:6px">
