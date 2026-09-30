@@ -45,8 +45,34 @@ router.get('/system-info', (req, res) => {
   res.json({
     name: getSetting('system_name', '全能工作台'),
     name_en: getSetting('system_name_en', 'Workbench'),
-    version: getSetting('current_version', '') || 'v1.9.2',
+    version: getSetting('current_version', '') || 'v1.9.3',
   });
+});
+
+// ---------- 前端错误上报（v1.9.3 诊断：全局 errorHandler sendBeacon 上来，内存环存最近 50 条） ----------
+// 无 SSH 环境排障用：设置页「前端错误上报」卡可查（仅管理员）。不上报则空，零开销。
+const CLIENT_ERRORS = [];
+router.post('/client-errors', (req, res) => {
+  const { msg, stack, page, ts } = req.body || {};
+  if (!msg) return res.status(400).json({ error: '缺少错误信息' });
+  CLIENT_ERRORS.unshift({
+    ts: Number(ts) || Date.now(),                    // 前端发生时刻（误差=时钟差）
+    at: new Date().toLocaleString('zh-CN', { hour12: false }), // 服务端接收时刻
+    user: req.user.username, page: String(page || ''), msg: String(msg).slice(0, 300),
+    stack: String(stack || '').split('\n').slice(0, 6).join(' ⏎ ').slice(0, 600),
+  });
+  if (CLIENT_ERRORS.length > 50) CLIENT_ERRORS.length = 50;
+  console.log(`[wb-client] ${req.user.username} ${page || ''} | ${String(msg).slice(0, 120)}`);
+  res.json({ ok: true });
+});
+router.get('/client-errors', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可查看' });
+  res.json({ errors: CLIENT_ERRORS });
+});
+router.delete('/client-errors', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可操作' });
+  CLIENT_ERRORS.length = 0;
+  res.json({ ok: true });
 });
 // 保存系统名称（管理员：系统级配置全员可见）
 router.post('/settings/system', (req, res) => {

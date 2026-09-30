@@ -9,6 +9,7 @@
       <button v-if="isAdmin" :class="{ active: tab === 'ssl' }" @click="tab = 'ssl'">SSL 自签名</button>
       <button v-if="isAdmin" :class="{ active: tab === 'upgrade' }" @click="tab = 'upgrade'">升级管理</button>
       <button v-if="isAdmin" :class="{ active: tab === 'logs' }" @click="tab = 'logs'">登录日志</button>
+      <button v-if="isAdmin" :class="{ active: tab === 'clienterr' }" @click="tab = 'clienterr'; loadClientErrors()">前端错误</button>
       <!-- 用户管理（原独立页并入，2026-09 v1.7.0）：仅管理员 -->
       <button v-if="isAdmin" :class="{ active: tab === 'users' }" @click="tab = 'users'">用户管理</button>
       <button :class="{ active: tab === 'multi' }" @click="tab = 'multi'">多平台</button>
@@ -400,6 +401,25 @@
     <SslPanel v-if="isAdmin && tab === 'ssl'" />
     <!-- 登录日志 + IP 黑名单 tab（仅管理员；v1.3.4） -->
     <LoginLogsPanel v-if="isAdmin && tab === 'logs'" />
+    <!-- 前端错误上报 tab（仅管理员；v1.9.3 诊断——全局 errorHandler 自动上报的页面脚本异常） -->
+    <div v-if="isAdmin && tab === 'clienterr'" class="card">
+      <h3>前端错误上报</h3>
+      <div class="muted" style="font-size:12.5px; margin-bottom:10px">页面脚本异常会自动上报到这里（内存环存最近 50 条、应用重启清零）。页面右下角弹红条时，来这里看具体出错位置；「清空」后可重新收集。</div>
+      <div class="row" style="margin-bottom:10px">
+        <button class="primary" @click="loadClientErrors">刷新</button>
+        <button class="small" @click="clearClientErrors">清空</button>
+      </div>
+      <div v-if="!clientErrors.length" class="muted">暂无前端错误上报（页面一切正常）</div>
+      <div v-for="(e, i) in clientErrors" :key="i" class="card" style="margin-bottom:8px; padding:10px 12px">
+        <div class="row" style="gap:8px; flex-wrap:wrap">
+          <span class="badge red">{{ e.at }}</span>
+          <span class="badge">{{ e.user }}</span>
+          <span class="badge blue">{{ e.page }}</span>
+        </div>
+        <div style="margin-top:6px; font-size:13.5px"><b>{{ e.msg }}</b></div>
+        <div class="muted" style="margin-top:4px; font-size:12px; word-break:break-all; white-space:pre-line">{{ e.stack }}</div>
+      </div>
+    </div>
     <!-- 多平台 tab（分享访问/电视版；地址配置仅管理员可见，自 family-learning v3.0 移植） -->
     <MultiPanel v-if="tab === 'multi'" :is-admin="isAdmin" />
     <!-- 用户管理 tab（原独立页整页并入，2026-09 v1.7.0；组件内部按管理员角色拦截） -->
@@ -420,6 +440,17 @@ import { probeLocalBase } from '../utils/localBase';
 import { setSysInfo } from '../sysname';
 
 const tab = ref('general');
+
+// 前端错误上报（v1.9.3 诊断）：全局 errorHandler sendBeacon 上来的客户端异常，仅管理员可看
+const clientErrors = ref([]);
+async function loadClientErrors() {
+  try { clientErrors.value = (await api.get('/client-errors')).errors || []; }
+  catch (e) { msg.value = '读取失败：' + e.message; msgType.value = 'err'; }
+}
+async function clearClientErrors() {
+  try { await api.del('/client-errors'); clientErrors.value = []; msg.value = '已清空'; msgType.value = 'ok'; }
+  catch (e) { msg.value = '清空失败：' + e.message; msgType.value = 'err'; }
+}
 
 const s = ref({ email: { refresh_minutes: 20, smtp_port: 465, smtp_tls: 1, trash_keep_days: 30 }, weather: {}, news_sources: { tech: [], life: [], local: [] }, share: { news: true, holiday: true, amap_key: true, ai_config: true } });
 const ai = ref({ model: '', base_url: '', api_key: '', vision_model: '', vision_base_url: '', vision_api_key: '' });

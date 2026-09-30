@@ -68,10 +68,10 @@
             <div style="padding:8px 10px">
               <a :href="h.url" target="_blank" rel="noopener" style="font-size:14.5px; font-weight:600; color:var(--text); text-decoration:none">{{ h.word }}</a>
               <div class="row" style="gap:6px; margin-top:6px; flex-wrap:wrap">
-                <span v-if="h.extra['类型']" class="badge blue">类型：{{ h.extra['类型'] }}</span>
+                <span v-if="h.extra?.['类型']" class="badge blue">类型：{{ h.extra['类型'] }}</span>
                 <span class="meta">指数 {{ fmtHot(h.hotScore) }}</span>
               </div>
-              <div v-if="h.extra['演员']" class="d" style="margin-top:5px; font-size:12.5px">演员：{{ h.extra['演员'] }}</div>
+              <div v-if="h.extra?.['演员']" class="d" style="margin-top:5px; font-size:12.5px">演员：{{ h.extra['演员'] }}</div>
               <div class="d muted board-desc" style="margin-top:5px; font-size:12.5px" :title="h.desc">{{ h.desc }}</div>
             </div>
           </div>
@@ -187,13 +187,16 @@ async function load() {
 }
 
 async function loadDates() {
-  if (isBoard.value) {
-    const d = await api.get(`/news/hotboard/dates?board=${BOARD_OF[cat.value]}`);
+  // 历史日期列表非关键数据：失败只留空列表，不许把异常抛出去打断整页加载
+  try {
+    if (isBoard.value) {
+      const d = await api.get(`/news/hotboard/dates?board=${BOARD_OF[cat.value]}`);
+      dates.value = (d.dates || []).filter((x) => x !== today);
+      return;
+    }
+    const d = await api.get('/news/dates');
     dates.value = (d.dates || []).filter((x) => x !== today);
-    return;
-  }
-  const d = await api.get('/news/dates');
-  dates.value = (d.dates || []).filter((x) => x !== today);
+  } catch { dates.value = []; }
 }
 
 async function switchCat(c) {
