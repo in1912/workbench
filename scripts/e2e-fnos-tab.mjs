@@ -29,9 +29,17 @@ srv.stdout.on('data', () => {});
 srv.stderr.on('data', (d) => console.error('[srv-err]', String(d).slice(0, 200)));
 await sleep(3000);
 
-// 源 fpk（server/fnos/ 内最新）做一致性基准
+// 源 fpk（server/fnos/ 内最新）做一致性基准（数字段比较，与 fnosRoutes.latestFpk 同源——字典序会错排 1.9.10 < 1.9.9）
 const fnosDir = path.join(ROOT, 'server', 'fnos');
-const srcFpk = fs.readdirSync(fnosDir).filter((f) => f.endsWith('.fpk')).sort().pop();
+const verOf = (f) => ((f.match(/([\d.]+)\.fpk$/) || [])[1] || '').split('.').filter((x) => x !== '').map(Number);
+const srcFpk = fs.readdirSync(fnosDir).filter((f) => f.endsWith('.fpk')).sort((a, b) => {
+  const va = verOf(a), vb = verOf(b);
+  for (let i = 0; i < Math.max(va.length, vb.length); i++) {
+    const d = (va[i] || 0) - (vb[i] || 0);
+    if (d) return d;
+  }
+  return a.localeCompare(b);
+}).pop();
 const srcBuf = fs.readFileSync(path.join(fnosDir, srcFpk));
 const srcSha = crypto.createHash('sha256').update(srcBuf).digest('hex');
 const srcVer = 'v' + (srcFpk.match(/([\d.]+)\.fpk$/) || [])[1];   // 与 fnosRoutes 同源：文件名解析

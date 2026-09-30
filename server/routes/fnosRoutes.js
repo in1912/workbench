@@ -9,11 +9,21 @@ const path = require('path');
 const router = express.Router();
 const DIR = path.join(__dirname, '..', 'fnos');
 
-// 目录下最新的 fpk（文件名含版本号，字典序最大即最新；无则返回 null）
+// 目录下最新的 fpk（文件名含版本号；按数字段比较——字典序会把 1.9.10 排到 1.9.9 前面；无则返回 null）
 function latestFpk() {
   try {
-    const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.fpk')).sort();
-    return files.length ? files[files.length - 1] : null;
+    const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.fpk'));
+    if (!files.length) return null;
+    const ver = (f) => ((f.match(/([\d.]+)\.fpk$/) || [])[1] || '').split('.').filter((x) => x !== '').map(Number);
+    files.sort((a, b) => {
+      const va = ver(a), vb = ver(b);
+      for (let i = 0; i < Math.max(va.length, vb.length); i++) {
+        const d = (va[i] || 0) - (vb[i] || 0);
+        if (d) return d;
+      }
+      return a.localeCompare(b);   // 版本号并列时按文件名定先后
+    });
+    return files[files.length - 1];
   } catch {
     return null;
   }
