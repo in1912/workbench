@@ -18,6 +18,7 @@
 //       node install-hooks.js --gemini-remove  移除 Gemini CLI 钩子
 //       node install-hooks.js --qwen           安装/更新 Qwen Code 钩子 (~/.qwen/settings.json hooks 段)
 //       node install-hooks.js --qwen-remove    移除 Qwen Code 钩子
+//       node install-hooks.js --all            一键全装: 检测到哪家 CLI 就装哪家(缺的跳过, 不逐个询问)
 // 说明: 写入前自动备份原文件; 只增删本工具的条目, 其他配置原样保留。
 //       Claude/Codex 钩子命令按本文件实际位置拼 send.js 绝对路径,
 //       换电脑/换文件夹后重跑一次安装即可(会自动替换旧路径条目)。
@@ -58,6 +59,7 @@ const MODE =
   ARG === '--gemini-remove' ? 'gemini-remove' :
   ARG === '--qwen' ? 'qwen' :
   ARG === '--qwen-remove' ? 'qwen-remove' :
+  ARG === '--all' ? 'all' :
   ARG === '--remove' ? 'claude-remove' : 'claude';
 
 // send.js 绝对路径(正斜杠 + 引号, 兼容带空格的文件夹)
@@ -164,6 +166,7 @@ function writeJson(file, cfg, installing) {
 // ---------- Claude Code: ~/.claude/settings.json ----------
 if (MODE.startsWith('claude')) {
   const cfg = readJson(CLAUDE, 'settings.json');
+  if (MODE === 'claude') fs.mkdirSync(path.dirname(CLAUDE), { recursive: true });   // 无 .claude 目录时兜底(装好钩子, CLI 装后即用)
   const hooks = cfg.hooks || {};
   stripOurs(hooks);
   if (MODE === 'claude') {
@@ -499,4 +502,32 @@ if (MODE.startsWith('claude')) {
       console.log('      PostToolUseFailure/StopFailure 为独立失败事件(精准红灯); 钩子已开 async 后台执行。');
     }
   }
+
+// ---------- 一键全装: 检测到哪家 CLI 就装哪家(缺的跳过), 不逐个询问 ----------
+// 实现: 依次以子进程跑本安装器的各分支(stdio 直通, 各分支自带检测与提示)。
+} else if (MODE === 'all') {
+  const WB_INST = path.join(HOME, '.workbuddy', 'plugins', 'installed_plugins.json');
+  const STEPS = [
+    { label: 'Claude Code', flag: '', ok: () => true },
+    { label: 'Codex CLI', flag: '--codex', ok: () => fs.existsSync(CODEX_DIR) },
+    { label: 'WorkBuddy', flag: '--workbuddy', ok: () => fs.existsSync(WB_INST) },
+    { label: 'CodeBuddy Code', flag: '--codebuddy', ok: () => fs.existsSync(CODEBUDDY_DIR) },
+    { label: 'Cursor', flag: '--cursor', ok: () => fs.existsSync(CURSOR_DIR) },
+    { label: 'DeepSeek Harness', flag: '--dsh', ok: () => cp.spawnSync('dsh', ['--version'], { shell: true }).status === 0 },
+    { label: 'Hermes', flag: '--hermes', ok: () => fs.existsSync(path.join(HOME, '.hermes')) },
+    { label: 'Gemini CLI', flag: '--gemini', ok: () => fs.existsSync(GEMINI_DIR) },
+    { label: 'Qwen Code', flag: '--qwen', ok: () => fs.existsSync(QWEN_DIR) },
+  ];
+  let i = 0;
+  for (const s of STEPS) {
+    i++;
+    if (!s.ok()) { console.log('[' + i + '/9] ' + s.label + ' 未检测到, 跳过。'); continue; }
+    console.log('[' + i + '/9] ' + s.label + ' —— 安装中 ...');
+    const r = cp.spawnSync(process.execPath, [__filename, s.flag], { stdio: 'inherit' });
+    if (r.status !== 0) console.log('      (' + s.label + ' 返回 ' + r.status + ', 继续下一家)');
+  }
+  console.log('');
+  console.log('一键全装结束。生效提醒:');
+  console.log('  Codex: 打开 codex → 输 /hooks → 方向键选中本工具钩子 → Trust 信任一次(不做灯不亮), 新开会话。');
+  console.log('  WorkBuddy / dsh: 完全重启一次才加载;  Cursor / Gemini / Qwen / CodeBuddy: 新会话即生效。');
 }

@@ -26,6 +26,7 @@ const FILES = [
   { name: 'flash-firmware.cmd', desc: 'Windows 一键刷机：自动装 esptool/mpremote（优先用包内 wheels 离线装）→ 输 COM 号 → 擦除 → 刷 MicroPython → 传 main.py → 重启板子——需 USB 数据线连板子' },
   { name: 'cc-light-install.cmd', desc: 'Windows 一键安装：自动找 Python、缺 bleak 自动装（有 wheels 时离线装）、注册开机自启、启动守护进程；有 Node 时依次检测询问安装九家 agent 钩子——与程序文件放同一文件夹双击' },
   { name: 'cc-light-uninstall.cmd', desc: 'Windows 一键卸载：熄灯 + 停守护进程 + 删开机自启任务 + 卸载九家 agent 钩子' },
+  { name: 'cc-light-install-all.cmd', desc: 'Windows 一键全装钩子（--all）：检测到哪家 CLI 就装哪家、缺的跳过、无需逐个 Y/N, 幂等可重复跑; 不动守护进程' },
   { name: 'install-hooks.js', desc: '钩子安装器：九家 agent 通吃（Claude/Codex/Cursor/CodeBuddy/Gemini/Qwen 配置文件 + WorkBuddy 本地插件 + dsh 插件包 + Hermes Python 插件）, Windows/macOS 通用, 自动备份；--remove / --codex-remove / --workbuddy-remove / --codebuddy-remove / --cursor-remove / --dsh-remove / --hermes-remove / --gemini-remove / --qwen-remove 卸载' },
   { name: 'start-daemon.cmd', desc: '守护进程一键启动（双击；优先用 PATH 里的 pythonw）' },
   { name: 'cc-light-install.command', desc: 'macOS 一键安装（LaunchAgent 自启 + 逐家询问钩子；双击或 bash 执行）' },

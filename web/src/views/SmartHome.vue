@@ -98,6 +98,7 @@
         <div class="row" style="gap:8px; flex-wrap:wrap">
           <button class="primary" @click="ccDlPack">📦 打包下载（Windows，cc-light.zip 约 10MB，推荐——含安装/卸载/刷机脚本 + 九家 agent 适配器 + 刷机工具离线安装包 wheels）</button>
           <button class="primary" @click="ccDl('cc-light-install.cmd')">⬇ 下载安装批处理</button>
+          <button class="primary" @click="ccDl('cc-light-install-all.cmd')">⬇ 下载一键全装钩子脚本</button>
           <button class="primary" @click="ccDl('cc-light-uninstall.cmd')">⬇ 下载卸载脚本</button>
         </div>
         <div class="cc-dl-group" style="margin-top:10px">🍎 macOS 环境</div>
@@ -164,6 +165,15 @@
             </tbody>
           </table>
         </div>
+        <div class="cc-note" style="margin-top:12px; border-color:rgba(227,138,10,.55); background:rgba(227,138,10,.08)">
+          <b>⚠️ 重点：Codex CLI 装完钩子必须「信任」一次，否则灯永远不亮（装了没反应的头号原因）</b><br />
+          这一步<b>不是 Windows 命令、也没有图形开关</b>，是在 <b>codex 程序自己的对话界面里</b>用键盘完成的：
+          ① 终端运行 <code>codex</code>（不带参数，进入它的对话界面）→ ② 在输入框输入 <code>/hooks</code> 回车，弹出钩子管理面板 →
+          ③ 用<b>方向键</b>选中本工具的钩子条目（命令是 <code>node …\send.js …</code> 那几条，未信任的会标注 untrusted / 待审核）→
+          ④ 回车 → 选 <b>Trust / 信任</b>（有的版本叫 Review → Trust）确认 → ⑤ 退出后<b>新开</b>一个 codex 会话，灯即联动。<br />
+          输 <code>/hooks</code> 没反应 = codex 版本太老（钩子功能 2026 年 9 月才有），先升级：<code>npm i -g @openai/codex</code>。
+          信任<b>只需做一次</b>，之后重装/升级钩子、换文件夹都不用再做（换电脑需重做）。
+        </div>
         <div class="muted" style="font-size:12.5px; line-height:1.9; margin-top:10px">
           <b>各家安装要点</b>：① <b>Claude Code</b>——双击 cc-light-install.cmd 时回答 Y 即可，新会话生效；② <b>Codex CLI</b>——先 <code>npm i -g @openai/codex</code>
           并登录过一次（存在 <code>~/.codex</code>），装完钩子<b>必须</b>在 codex 里 <code>/hooks</code> 信任；③ <b>WorkBuddy</b>——启动过一次（存在 <code>~/.workbuddy</code>），
@@ -205,7 +215,8 @@
         </ol>
         <div class="muted" style="font-size:12.5px; margin-top:6px">
           手动方式（不想一键装）：<code>start-daemon.cmd</code> 只启动守护进程、不注册自启；九家钩子单独用
-          <code>node install-hooks.js</code> / <code>--codex</code> / <code>--workbuddy</code> / <code>--codebuddy</code> / <code>--cursor</code> / <code>--dsh</code> / <code>--hermes</code> / <code>--gemini</code> / <code>--qwen</code>（卸载对应加 <code>-remove</code>）。
+          <code>node install-hooks.js</code> / <code>--codex</code> / <code>--workbuddy</code> / <code>--codebuddy</code> / <code>--cursor</code> / <code>--dsh</code> / <code>--hermes</code> / <code>--gemini</code> / <code>--qwen</code>（卸载对应加 <code>-remove</code>）。<br />
+          <b>不想逐家敲命令</b>：双击 <code>cc-light-install-all.cmd</code>（或 <code>node install-hooks.js --all</code>）——自动检测装了哪些 CLI，<b>检测到哪家就装哪家、缺的跳过、无需逐个回答 Y/N</b>，结束打印各家生效提醒（macOS 同理跑 <code>node install-hooks.js --all</code>）。
           不需要了双击 <code>cc-light-uninstall.cmd</code> 一键卸载（九家钩子全清）。
         </div>
       </div>

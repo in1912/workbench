@@ -43,6 +43,7 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = AI CLI 工作状态室外灯（**�
 | `install-hooks.js` | 九家钩子安装器（自动备份；`--remove` / `--codex-remove` / `--workbuddy-remove` / `--codebuddy-remove` / `--cursor-remove` / `--dsh-remove` / `--hermes-remove` / `--gemini-remove` / `--qwen-remove` 卸载） |
 | `start-daemon.cmd` | 守护进程手动启动（双击） |
 | `cc-light-install.cmd` / `cc-light-uninstall.cmd` | Windows 一键安装 / 卸载（装守护进程 + 逐家询问装钩子 / 全部清理） |
+| `cc-light-install-all.cmd` | Windows 一键全装钩子（`--all`：检测到哪家 CLI 就装哪家、缺的跳过、无需逐个 Y/N；不动守护进程） |
 | `cc-light-install.command` / `cc-light-uninstall.command` / `flash-firmware-mac.command` | macOS 一键安装 / 卸载 / 刷机（LaunchAgent 自启；见下方「macOS 安装」） |
 | `wheels/` | esptool + mpremote + bleak 全依赖离线 wheel 包（刷机/安装脚本优先用它，没网也能装；仅随 Windows 打包 zip 附带） |
 | `ESP32_GENERIC_C3-*.bin` | MicroPython 固件备份 |
@@ -59,6 +60,7 @@ ESP32-C3 SuperMini + 三色红绿灯模块 = AI CLI 工作状态室外灯（**�
 ## 一键安装 / 卸载（推荐，Windows）
 
 - **安装**：`cc-light-install.cmd` 与 daemon.py 等文件放同一文件夹（打包下载解压后即满足），双击——自动找 Python（3.9+ 64 位）、缺 bleak 自动装（有 `wheels/` 时离线装）、注册开机自启任务 `CC-Light-Daemon`、立即启动守护进程；装了 Node.js 会依次检测并询问：Claude Code → Codex（`~/.codex`）→ WorkBuddy（`~/.workbuddy/plugins`）→ CodeBuddy（`~/.codebuddy`）→ Cursor（`~/.cursor`）→ DeepSeek Harness（`dsh` 命令）→ Hermes（`~/.hermes`）→ Gemini CLI（`~/.gemini`）→ Qwen Code（`~/.qwen`）；最后自动读 daemon.log 验证并显示连接结果。Node.js 无需单独安装——用 Claude Code CLI 的机器已自带
+- **一键全装钩子**（不想逐家回答 Y/N）：双击 `cc-light-install-all.cmd`（= `node install-hooks.js --all`）——自动检测装了哪些 CLI，检测到哪家就装哪家、缺的跳过、不会重复堆积（幂等），结束打印各家生效提醒；已装过旧版本钩子的机器直接跑它即可补齐。macOS 同理：`node install-hooks.js --all`
 - **卸载**：双击 `cc-light-uninstall.cmd`——先发熄灯命令、停守护进程、删自启任务、卸载九家钩子；文件夹随后手动删除即可（板上固件保留，以后想用再跑安装脚本）
 
 ## macOS 安装（苹果电脑专用包）
@@ -126,7 +128,14 @@ Codex CLI 从 2026 年 9 月起支持生命周期钩子（`~/.codex/hooks.json`�
 
 1. 装 Codex CLI（`npm i -g @openai/codex`）并登录过一次（`~/.codex` 已生成）
 2. 双击 `cc-light-install.cmd` 检测到 Codex 时回答 Y；或手动 `node install-hooks.js --codex`
-3. **关键一步——信任钩子**：Codex 出于安全要求，新钩子必须人工信任后才执行。打开 codex → 输入 `/hooks` → Review → **Trust**。**没做这一步 = 灯对 codex 无反应**（「装了却没效果」的头号原因）
+3. **关键一步——信任钩子**：Codex 出于安全要求，新钩子必须人工信任后才执行。**没做这一步 = 灯对 codex 无反应**（「装了却没效果」的头号原因）。操作（全键盘，在 codex 界面里做，不是 Windows 命令）：
+   1. 终端运行 `codex`（不带参数，进入它的对话界面）
+   2. 在输入框输入 `/hooks` 回车 → 弹出钩子管理面板，未信任的钩子会标注 untrusted / 待审核
+   3. **方向键**选中本工具的钩子条目（命令是 `node …\send.js …` 那几条）→ 回车
+   4. 选 **Trust / 信任**（有的版本叫 Review → Trust）确认
+   5. 退出后**新开**一个 codex 会话，灯即联动
+   - 输 `/hooks` 没反应 = codex 版本太老（钩子功能 2026 年 9 月才有），先 `npm i -g @openai/codex` 升级
+   - 信任只需做一次；重装/升级钩子、换文件夹都不用再做，换电脑需重做
 4. 新开 codex 会话测试
 
 **与 Claude Code 的区别**：配置在独立文件 `~/.codex/hooks.json`；无 Notification → 权限等待由 **PermissionRequest** 触发警灯；无 SessionEnd → 会话结束不灭灯，靠看门狗兜底；PreToolUse 只拦 Bash / apply_patch / MCP 工具。
