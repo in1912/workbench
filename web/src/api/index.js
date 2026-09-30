@@ -84,19 +84,41 @@ async function request(method, url, body, retried = false) {
   // （fnOS 网关用自己的文本/错误页顶替业务响应，真机已捕获过）静默吞成 {}，当成功返回后
   // 页面拿 undefined 去读 .length 直接崩（首页子女学习卡）。现在：解析失败原样抛错，
   // 并把响应片段上报到「设置 → 前端错误」，直接看到网关到底回了什么。
+  // v1.9.5 自愈：本应用 200 恒为 JSON，200 非 JSON 必是网关代答（请求从未到达服务端，
+  // 重发无重复副作用）——去掉我们附加的 token 参数与 Authorization 头再试一次（wb_token
+  // Cookie 通道兜底认证）；网关签名 invalid token（NAS 会话失效）时给出重登指引文案。
   const text = await res.text();
   let data;
   try {
     data = JSON.parse(text);
   } catch {
     const snippet = text.slice(0, 200).replace(/\s+/g, ' ');
-    try {
-      navigator.sendBeacon(rawUrl('/api/client-errors'), new Blob([JSON.stringify({
-        msg: `非JSON响应 ${method} ${url} → HTTP ${res.status}：${snippet}`,
-        stack: '', page: location.hash, ts: Date.now(),
-      })], { type: 'application/json' }));
-    } catch { /* 上报失败不影响本地 */ }
-    throw new Error(`接口响应异常（HTTP ${res.status}，非 JSON：${snippet}）`);
+    const report = (m) => {
+      try {
+        navigator.sendBeacon(rawUrl('/api/client-errors'), new Blob([JSON.stringify({
+          msg: m, stack: '', page: location.hash, ts: Date.now(),
+        })], { type: 'application/json' }));
+      } catch { /* 上报失败不影响本地 */ }
+    };
+    if (res.status === 200 && !snippet.startsWith('<')) {
+      try {
+        const h2 = { ...opts.headers };
+        delete h2.Authorization; // 只留 Content-Type / X-HTTP-Method；认证走 wb_token Cookie
+        const r2 = await fetch(base + url, { ...opts, headers: h2, signal: AbortSignal.timeout(180000) });
+        const t2 = await r2.text();
+        if (r2.status === 200) {
+          const d2 = JSON.parse(t2); // 仍非 JSON 会抛，落入下方统一报错
+          report(`网关假200自愈：${method} ${url} 无token重试成功；首次返回「${snippet}」`);
+          return d2;
+        }
+      } catch { /* 自愈未成，按原样报错 */ }
+    }
+    report(`非JSON响应 ${method} ${url} → HTTP ${res.status}：${snippet}`);
+    throw new Error(
+      snippet.includes('invalid token')
+        ? 'NAS 会话已失效（网关拒绝了请求）：请打开 NAS 网页重新登录后刷新本页，或从飞牛桌面重新进入应用'
+        : `接口响应异常（HTTP ${res.status}，非 JSON：${snippet}）`
+    );
   }
   if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
   return data;

@@ -545,9 +545,11 @@ onMounted(async () => {
   try { const b = await api.get('/auth/dingtalk-bind-status'); ddBound.value = { bound: !!b.bound, userid: b.userid || '' }; } catch {}
   // 两个聚合接口单独兜住（v1.9.2）：任一失败抛到 onMounted 外会把整页内容卸掉——
   // 「设置闪一下就没了」的元凶。失败时用空对象继续，页面照常渲染。
+  // v1.9.5：/settings 被网关拦截时 d={}，直接 s.value=d 会把默认子对象冲掉，
+  // 模板读 s.weather.city 直接崩（真机捕获 reading 'city'/'lat'）——与初始默认值合并。
   let d = {};
   try { d = await api.get('/settings'); } catch {}
-  s.value = d;
+  s.value = { ...s.value, ...d, weather: (d && d.weather) || s.value.weather || {} };
   if (d.share) share.value = d.share;
   loadCalCfg();
   let a = {};
