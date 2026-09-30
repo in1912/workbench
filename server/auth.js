@@ -110,6 +110,7 @@ function pageForPath(p) {
   if (p.startsWith('/wish')) return 'learning'; // 心愿卡
   if (p.startsWith('/upgrade')) return 'upgrade';
   if (p.startsWith('/users')) return 'settings'; // 用户管理并入「设置」页 tab（v1.7.0，路由内部再限管理员）
+  if (p.startsWith('/fnos')) return 'settings'; // 飞牛应用 fpk 下载归「设置」页飞牛应用 tab（v1.9.9）
   if (p.startsWith('/settings') || p.startsWith('/roles')) return 'settings';
   return null;
 }
@@ -196,6 +197,8 @@ const TAB_PATHS = {
   settings: [
     // 用户管理并入「设置」页（2026-09 v1.7.0）：/users 端点路由内部再限管理员
     ['users', ['/users']],
+    // 飞牛应用 fpk 下载（v1.9.9）：设置页「飞牛应用」tab
+    ['fnos', ['/fnos']],
   ],
   pets: [
     // 主查看 tab（宠物列表/喂养/悬浮窗）：整页共享端点不绑路径，空数组=仅作授权表勾选项

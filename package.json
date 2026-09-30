@@ -1,6 +1,6 @@
 {
   "name": "personal-workbench",
-  "version": "1.9.8",
+  "version": "1.9.9",
   "private": true,
   "description": "自托管个人工作台：信息聚合、任务、家庭、学习、AI",
   "main": "server/index.js",

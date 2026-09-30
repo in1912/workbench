@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.8
+version=1.9.9
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=城市定位离线化：v1.9.6 后网关层已通（笔记等全部正常），但真机上服务端访问 open-meteo 定位接口报 fetch failed（NAS 出网/DNS 受限）导致天气地区仍保存不了。本版内置全国地级市+知名县级市坐标库（约 400 条，含省名/简称别名、市区省后缀自动剥离），国内城市定位零外网依赖、即填即存；库外城市（境外/小县城）走 open-meteo 在线兜底，失败时报错带原因码（ENOTFOUND/ETIMEDOUT 等）便于排查 NAS 网络；天气数据接口失败同样带原因码
+changelog=设置页新增「飞牛应用」tab：fpk 安装包在线下载（内网/外网地址自动跟随当前访问通道），附安装步骤与基本介绍；fpk 随仓库与升级包分发：v1.9.6 后网关层已通（笔记等全部正常），但真机上服务端访问 open-meteo 定位接口报 fetch failed（NAS 出网/DNS 受限）导致天气地区仍保存不了。本版内置全国地级市+知名县级市坐标库（约 400 条，含省名/简称别名、市区省后缀自动剥离），国内城市定位零外网依赖、即填即存；库外城市（境外/小县城）走 open-meteo 在线兜底，失败时报错带原因码（ENOTFOUND/ETIMEDOUT 等）便于排查 NAS 网络；天气数据接口失败同样带原因码
