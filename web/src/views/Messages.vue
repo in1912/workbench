@@ -44,7 +44,18 @@
                 <span v-else-if="m.mine && !curIsSelf" class="muted" style="margin-left:4px">未读</span>
               </div>
               <div v-if="m.subject" style="font-size:13px; font-weight:600; margin-bottom:2px">{{ m.subject }}</div>
-              <div class="rich" style="font-size:13px; word-break:break-word" v-html="displayHtml(m.content)"></div>
+              <!-- 语音条（v1.9.24）：点击播放（可重复播放，微信式）；下方常驻转写文字/转写按钮 -->
+              <div v-if="m.is_voice" class="voice-msg" :class="{ playing: playingId === m.id }" @click="playVoice(m)">
+                <span class="vm-icon">{{ playingId === m.id ? '⏸' : '▶' }}</span>
+                <span class="vm-bar" :style="{ width: (36 + Math.min(120, Math.ceil(m.voice_secs || 1) * 4)) + 'px' }"></span>
+                <span class="vm-secs">{{ Math.ceil(m.voice_secs || 1) }}"</span>
+              </div>
+              <div v-else class="rich" style="font-size:13px; word-break:break-word" v-html="displayHtml(m.content)"></div>
+              <div v-if="m.is_voice" class="vm-text">
+                <template v-if="m.voice_text">{{ m.voice_text }}</template>
+                <button v-else-if="m.voice_state === 'pending'" class="vm-tag" disabled>转写中…</button>
+                <button v-else class="vm-tag" @click="retranscribe(m)">未转写 · 点我转文字</button>
+              </div>
             </div>
             <div v-if="!msgs.length" class="empty" style="padding:30px 0">暂无沟通记录，发第一条消息吧</div>
           </div>
@@ -57,9 +68,40 @@
         <!-- 发送区（随时可用） -->
         <div class="form-row"><label>收件人（可搜索、多选、含自己{{ contacts.some((u) => u.is_bot) ? '，含钉钉机器人' : '' }}）</label><UserPicker v-model="recipients" :users="contacts" multiple include-bots placeholder="搜索并选择收件人…" /></div>
         <div class="form-row"><label>主题（可选）</label><input v-model="draft.subject" placeholder="消息主题" @keyup.enter="send" /></div>
-        <div class="form-row"><label>内容</label><textarea v-model="draft.content" rows="3" placeholder="输入消息内容…（Ctrl+Enter 发送）" @keydown.ctrl.enter="send"></textarea></div>
-        <button class="primary" :disabled="sending" @click="send">{{ sending ? '发送中...' : '发送' }}</button>
+        <div class="form-row"><label>内容（文字，或用下方按钮录语音）</label><textarea v-model="draft.content" rows="3" placeholder="输入消息内容…（Ctrl+Enter 发送）" @keydown.ctrl.enter="send"></textarea></div>
+        <div class="row" style="align-items:center; gap:10px; flex-wrap:wrap; margin-top:2px">
+          <button v-if="!recording" class="btn" :disabled="recBusy" @click="startRec">🎤 录语音</button>
+          <template v-else>
+            <span class="rec-live"><i></i> 录音中 {{ recSecs }}"（上限 60"，到时自动发送）</span>
+            <button class="btn" @click="stopRec(true)">✔ 发送语音</button>
+            <button class="btn ghost" @click="stopRec(false)">取消</button>
+          </template>
+          <span v-if="recBusy" class="muted" style="font-size:12px">语音处理中…</span>
+          <span style="flex:1"></span>
+          <button class="primary" :disabled="sending || recording" @click="send">{{ sending ? '发送中...' : '发送' }}</button>
+        </div>
       </div>
+    </div>
+
+    <!-- 电脑桌面通知（v1.9.24）：装一个常驻代理，右下角弹窗=网页弹窗同款；点击=已读+打开消息页 -->
+    <div class="card" style="margin-top:14px">
+      <h3>电脑桌面通知（可选）</h3>
+      <p class="muted" style="font-size:13px; margin:0 0 10px">
+        在你的 Windows 电脑上装一个小代理（双击即装，无需管理员权限，随系统自动启动）：有新消息时从屏幕右下角弹窗提醒，
+        内容与网页右下角弹窗一致；<b>点击弹窗任意位置 = 标记已读并自动打开浏览器进入消息页</b>。
+        脚本按你当前打开工作台的网络路径内嵌地址——内网打开装的就是内网地址，外网打开装的就是外网地址（当前：<b>{{ locationOrigin }}</b>）。
+      </p>
+      <div class="row" style="align-items:center; gap:10px; flex-wrap:wrap">
+        <button class="btn" @click="dlAgent('install')">下载安装脚本（notify-setup.cmd）</button>
+        <button class="btn ghost" @click="dlAgent('uninstall')">下载卸载脚本</button>
+        <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer">
+          <input type="checkbox" v-model="autoplay" @change="saveAutoplay" /> 语音消息弹出时自动播放声音
+        </label>
+      </div>
+      <p class="muted" style="font-size:12px; margin:10px 0 0">
+        安装：下载后直接双击运行（SmartScreen 提示时选「更多信息 → 仍要运行」）；卸载随时双击卸载脚本即可。
+        代理只连接你自己的工作台地址，语音消息在弹窗的同时直接播放（上面的勾选控制，默认开）。
+      </p>
     </div>
   </div>
 </template>
@@ -227,6 +269,152 @@ async function markAllRead() {
 }
 
 onMounted(loadContacts);
+
+// ---------- 语音消息（v1.9.24）：录音 → 重采样 16k 单声道 PCM16 WAV → base64 上传 ----------
+// WAV 是刻意选择：桌面代理 SoundPlayer 任意 Windows 直接可播 + 转写引擎原生输入格式，无需解码器
+const recording = ref(false);
+const recSecs = ref(0);
+const recBusy = ref(false);
+let mediaStream = null;
+let mediaRec = null;
+let recChunks = [];
+let recTimer = null;
+let recT0 = 0;
+let recSend = false; // 停止时是否发送（false=取消）
+async function startRec() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { flash('当前浏览器不支持录音', 'err'); return; }
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { flash('无法访问麦克风：' + (e.message || e.name), 'err'); return; }
+  recChunks = [];
+  try { mediaRec = new MediaRecorder(mediaStream); } catch { flash('录音组件初始化失败', 'err'); stopTracks(); return; }
+  mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+  mediaRec.onstop = onRecStop;
+  mediaRec.start();
+  recording.value = true;
+  recSecs.value = 0;
+  recT0 = Date.now();
+  recTimer = setInterval(() => {
+    recSecs.value = Math.floor((Date.now() - recT0) / 1000);
+    if (recSecs.value >= 60) stopRec(true); // 60 秒到点自动发送
+  }, 250);
+}
+function stopTracks() {
+  if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+  mediaRec = null;
+}
+function stopRec(sendIt) {
+  if (!mediaRec || mediaRec.state === 'inactive') { recording.value = false; return; }
+  recSend = sendIt;
+  clearInterval(recTimer);
+  recTimer = null;
+  try { mediaRec.stop(); } catch { /* 已经停了 */ }
+}
+async function onRecStop() {
+  const sendIt = recSend;
+  recSend = false;
+  const blob = new Blob(recChunks, { type: (mediaRec && mediaRec.mimeType) || 'audio/webm' });
+  const secs = Math.max(1, Math.min(60, Math.round((Date.now() - recT0) / 1000)));
+  stopTracks();
+  recording.value = false;
+  if (!sendIt) return; // 取消
+  if (blob.size < 500) { flash('录音太短，请重录', 'err'); return; }
+  if (!recipients.value.length) { flash('请先选择收件人', 'err'); return; }
+  recBusy.value = true;
+  try {
+    const wavB64 = await encodeWav16k(blob);
+    const targets = recipients.value.map(Number);
+    await api.post('/messages/voice', { to_users: targets, subject: draft.value.subject.trim(), wav_b64: wavB64, secs });
+    draft.value.subject = '';
+    flash('语音已发送（服务器会自动转文字，稍后刷新可见）');
+    if (cur.value && targets.includes(cur.value)) await refreshTail();
+    else await loadContacts();
+  } catch (e) { flash('语音发送失败：' + e.message, 'err'); }
+  recBusy.value = false;
+}
+// webm/opus 解码 → 混单声道 → 线性重采样 16k → PCM16 WAV → base64
+async function encodeWav16k(blob) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ac = new AC();
+  try {
+    const aud = await ac.decodeAudioData(await blob.arrayBuffer());
+    let mono = aud.getChannelData(0);
+    if (aud.numberOfChannels > 1) {
+      const c2 = aud.getChannelData(1);
+      mono = new Float32Array(mono.length);
+      for (let i = 0; i < mono.length; i++) mono[i] = (mono[i] + c2[i]) / 2;
+    }
+    const ratio = aud.sampleRate / 16000;
+    const outN = Math.max(1, Math.floor(mono.length / ratio));
+    const out = new Float32Array(outN);
+    for (let i = 0; i < outN; i++) {
+      const p = i * ratio;
+      const i0 = Math.floor(p);
+      const i1 = Math.min(i0 + 1, mono.length - 1);
+      const f = p - i0;
+      out[i] = mono[i0] * (1 - f) + mono[i1] * f;
+    }
+    const pcm = new Int16Array(out.length);
+    for (let i = 0; i < out.length; i++) {
+      const s = Math.max(-1, Math.min(1, out[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    const header = new ArrayBuffer(44);
+    const v = new DataView(header);
+    const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    ws(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); ws(8, 'WAVE'); ws(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    ws(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+    const u8 = new Uint8Array(header.byteLength + pcm.length * 2);
+    u8.set(new Uint8Array(header), 0);
+    u8.set(new Uint8Array(pcm.buffer), 44);
+    let bin = '';
+    for (let i = 0; i < u8.length; i += 8192) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+    return btoa(bin);
+  } finally { ac.close(); }
+}
+
+// ---------- 语音播放（单实例复用，可重复播放）+ 手动转文字 ----------
+let audioEl = null;
+const playingId = ref(0);
+function playVoice(m) {
+  if (playingId.value === m.id && audioEl) { audioEl.pause(); playingId.value = 0; return; }
+  if (audioEl) { audioEl.pause(); audioEl = null; }
+  const token = localStorage.getItem('wb_token') || '';
+  audioEl = new Audio(`/api/messages/voice/${m.id}?token=${encodeURIComponent(token)}`);
+  audioEl.onended = () => { playingId.value = 0; };
+  audioEl.onerror = () => { playingId.value = 0; flash('语音播放失败', 'err'); };
+  playingId.value = m.id;
+  audioEl.play().catch(() => { playingId.value = 0; flash('语音播放失败', 'err'); });
+}
+async function retranscribe(m) {
+  if (m.voice_state === 'pending') return;
+  m.voice_state = 'pending';
+  try {
+    const r = await api.post(`/messages/voice/${m.id}/transcribe`, {});
+    m.voice_text = r.voice_text || '';
+    m.voice_state = 'done';
+  } catch (e) { m.voice_state = 'failed'; flash('转写失败：' + e.message, 'err'); }
+}
+
+// ---------- 电脑桌面通知卡（v1.9.24） ----------
+const autoplay = ref(true);
+const locationOrigin = (typeof location !== 'undefined' ? location.origin : '');
+async function loadAgentPrefs() {
+  try { autoplay.value = !!(await api.get('/messages/agent/prefs')).autoplay; } catch { /* 默认开 */ }
+}
+async function saveAutoplay() {
+  try {
+    await api.put('/messages/agent/prefs', { autoplay: autoplay.value });
+    flash(autoplay.value ? '语音消息将在电脑弹窗时自动播放声音' : '已关闭自动播放');
+  } catch (e) { flash('保存失败：' + e.message, 'err'); }
+}
+function dlAgent(t) {
+  api.download(`/messages/agent/script?type=${t}`, t === 'install' ? 'notify-setup.cmd' : 'notify-uninstall.cmd')
+    .catch((e) => flash('下载失败：' + e.message, 'err'));
+}
+onMounted(loadAgentPrefs);
 </script>
 
 <style scoped>
@@ -234,6 +422,25 @@ onMounted(loadContacts);
 .badge.red { background: #e5484d; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 11px; }
 .bubble { max-width: 78%; margin-bottom: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg3); }
 .bubble.mine { margin-left: auto; background: rgba(79, 124, 247, 0.14); border-color: rgba(79, 124, 247, 0.35); }
+/* 语音条（微信式）：播放条随秒数变长，点击播放/暂停 */
+.voice-msg { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; cursor: pointer; user-select: none; background: rgba(128, 128, 128, 0.1); }
+.voice-msg:hover { background: rgba(128, 128, 128, 0.18); }
+.bubble.mine .voice-msg { background: rgba(79, 124, 247, 0.12); }
+.bubble.mine .voice-msg:hover { background: rgba(79, 124, 247, 0.2); }
+.vm-icon { font-size: 15px; line-height: 1; }
+.bubble.mine .vm-icon { transform: scaleX(-1); } /* 自己发的：喇叭朝左（微信习惯） */
+.vm-bar { height: 14px; border-radius: 7px; background: repeating-linear-gradient(135deg, rgba(79, 124, 247, 0.65) 0 3px, rgba(79, 124, 247, 0.3) 3px 6px); min-width: 36px; }
+.vm-secs { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.voice-msg.playing .vm-bar { background: repeating-linear-gradient(135deg, #1e9e68 0 3px, rgba(30, 158, 104, 0.45) 3px 6px); }
+/* 语音转写文字 / 转写按钮 */
+.vm-text { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; color: var(--text); opacity: 0.92; }
+.vm-tag { border: 1px dashed rgba(79, 124, 247, 0.5); background: transparent; color: rgba(79, 124, 247, 0.9); font-size: 12px; padding: 3px 10px; border-radius: 999px; cursor: pointer; }
+.vm-tag:hover { background: rgba(79, 124, 247, 0.12); }
+.vm-tag[disabled] { cursor: default; opacity: 0.6; }
+/* 录音中的呼吸红点 */
+.rec-live { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #e5484d; }
+.rec-live i { width: 10px; height: 10px; border-radius: 50%; background: #e5484d; animation: recblink 1s infinite; }
+@keyframes recblink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (max-width: 720px) {
   .grid { grid-template-columns: 1fr !important; }
 }

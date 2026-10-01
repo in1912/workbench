@@ -45,7 +45,10 @@
         </div>
         <div style="font-size:13px; font-weight:600; margin-bottom:2px">{{ t.subject || '（无主题）' }}</div>
         <div class="muted" style="font-size:11.5px; margin-bottom:4px">{{ t.from_name }} · {{ t.created_at }}</div>
-        <div style="font-size:12.5px; white-space:pre-wrap; word-break:break-word; max-height:96px; overflow:hidden">{{ plainText(t.content) }}</div>
+        <div style="font-size:12.5px; white-space:pre-wrap; word-break:break-word; max-height:96px; overflow:hidden">
+          <template v-if="t.is_voice">🎤 语音 {{ Math.ceil(t.voice_secs || 1) }}"<span v-if="t.voice_text"> · {{ t.voice_text.slice(0, 80) }}</span></template>
+          <template v-else>{{ plainText(t.content) }}</template>
+        </div>
       </div>
     </div>
 

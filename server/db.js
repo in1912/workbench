@@ -1139,6 +1139,16 @@ addCol(db, 'users', 'fail_count', 'INTEGER NOT NULL DEFAULT 0');
 addCol(db, 'users', 'locked_until', "TEXT DEFAULT ''");
 addCol(db, 'users', 'lock_permanent', 'INTEGER NOT NULL DEFAULT 0');
 addCol(db, 'messages', 'ext_id', "TEXT DEFAULT ''");
+// 短消息语音条（v1.9.24，主库）：is_voice=1 时 content 为空、语音文件按 id 存 data/messages-voice/<id>.wav；
+// voice_secs=时长秒；voice_state=pending/done/failed（自动转文字状态）；voice_text=转写文字
+addCol(db, 'messages', 'is_voice', 'INTEGER NOT NULL DEFAULT 0');
+addCol(db, 'messages', 'voice_secs', 'REAL DEFAULT 0');
+addCol(db, 'messages', 'voice_state', "TEXT DEFAULT ''");
+addCol(db, 'messages', 'voice_text', "TEXT DEFAULT ''");
+// 桌面通知代理（v1.9.24）：notify_key=每用户接入密钥（下载安装脚本时生成，key+uid 即凭证，照剪贴板代理模式）；
+// notify_autoplay=语音消息弹窗时自动播放（默认 1）
+addCol(db, 'users', 'notify_key', "TEXT DEFAULT ''");
+addCol(db, 'users', 'notify_autoplay', 'INTEGER NOT NULL DEFAULT 1');
 // 打字喂养：pet_logs 标记该次互动来自「打字口令」（配额与按钮互动分开统计）
 addCol(db, 'pet_logs', 'typed', 'INTEGER DEFAULT 0');
 // 宠物死亡：累计生病次数达阈值 / 长期没喂饭 → 去世（保留为墓碑记录，admin/主人可删）

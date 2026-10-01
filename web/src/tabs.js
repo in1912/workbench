@@ -94,7 +94,8 @@ export const TAB_DEFS = {
     // Agent红绿灯（v1.8.1 起的本页子 tab）：ESP32-C3 三色灯指示九家 AI Agent 状态；
     // 面板内部再分 功能介绍/下载安装包/安装步骤 三段（CcLightPanel，localStorage 记忆，无独立权限键）
     { key: 'cclight', label: 'Agent红绿灯' },
-    { key: 'settings', label: '设置' },
+    // v1.9.24 改名「米家设置」（内容就是小米账号绑定/解绑，避免与全局设置混淆）
+    { key: 'settings', label: '米家设置' },
   ],
 };
 

@@ -29,20 +29,23 @@ function richImageIds(s) {
 // 发一条消息（允许发给自己：to_user === from_user 为"写给自己的备忘"，同样入库留存）。
 // 接收人在自己租户配置里绑定并启用钉钉时，异步同步转发一份（失败仅记日志，不影响站内消息）。
 // 内容含图片时：文字先行（[图片N] 占位），随后逐图经媒体上传单独推送
-function send(d, { from_user, to_user, subject = '', content = '', module = 'message', ref_id = null, ext_id = '' }) {
+// v1.9.24 语音条：is_voice=1 时 content 空、语音文件按消息 id 存 data/messages-voice/<id>.wav（由路由写入）
+function send(d, { from_user, to_user, subject = '', content = '', module = 'message', ref_id = null, ext_id = '', is_voice = 0, voice_secs = 0 }) {
   if (!to_user) return null;
   const sText = String(subject || '');
   const cText = String(content || '');
-  const r = d.prepare('INSERT INTO messages(from_user,to_user,subject,content,module,ref_id,ext_id) VALUES(?,?,?,?,?,?,?)')
-    .run(Number(from_user), Number(to_user), sText, cText, module, ref_id, String(ext_id || ''));
+  const r = d.prepare('INSERT INTO messages(from_user,to_user,subject,content,module,ref_id,ext_id,is_voice,voice_secs) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(Number(from_user), Number(to_user), sText, cText, module, ref_id, String(ext_id || ''), is_voice ? 1 : 0, Math.max(0, Number(voice_secs) || 0));
   const botFrom = isBot(d, from_user);
   const botTo = isBot(d, to_user);
+  // 语音条在钉钉侧的替身文案（语音本体与转写文字在工作台消息页看）
+  const pushText = is_voice ? `[语音消息 ${Math.max(1, Math.round(Number(voice_secs) || 0))} 秒]（到工作台「短消息」页播放/看转写文字）` : cText;
   setImmediate(async () => {
     // 发给钉钉机器人 = 在消息页回复机器人会话：走机器人通道发回钉钉（惰性 require 防循环依赖）。
     // 发不出去时回执一条站内提示进会话——此前静默失败，用户以为发出去了（v1.2.9 修）
     if (botTo) {
       const stream = require('./dingtalkStreamService');
-      stream.robotReply(from_user, cText)
+      stream.robotReply(from_user, pushText)
         .then((ok) => {
           if (ok !== false || !stream.botId()) return;
           send(d, {
@@ -64,7 +67,7 @@ function send(d, { from_user, to_user, subject = '', content = '', module = 'mes
     if (botFrom) return;
     const label = MODULE_LABELS[module] || '站内消息';
     const who = Number(from_user) === Number(to_user) ? '自己的备忘' : userName(d, Number(from_user)) + ' 发来消息';
-    const text = richToPlain(`【个人工作台·${label}】${who}` + (sText ? `\n主题：${sText}` : '') + `\n${cText}`);
+    const text = richToPlain(`【个人工作台·${label}】${who}` + (sText ? `\n主题：${sText}` : '') + `\n${pushText}`);
     try {
       const ok = await dingtalk.notifyUser(d, to_user, text);
       // 文字推送成功且内容带图：逐图上传媒体后以 sampleImage 补推（图片顺序即 [图片N] 顺序）
@@ -166,4 +169,104 @@ function markAllRead(d, meId) {
   d.prepare("UPDATE messages SET read_at=datetime('now','localtime') WHERE to_user=? AND read_at IS NULL").run(Number(meId));
 }
 
-module.exports = { send, userName, isBot, listContacts, conversation, unread, markRead, markAllRead, MODULE_LABELS, richToPlain, richImageIds };
+// ---------- 语音条（v1.9.24）：文件定位 + 自动转文字（复用「录音转写」模块配置的引擎） ----------
+// 语音文件按消息 id 命名存 data/messages-voice/<id>.wav（发送路由写入；消息永久留存故不需要清理）
+function voiceFile(id) {
+  const { dataDir } = require('../db');
+  const path = require('path');
+  return path.join(dataDir, 'messages-voice', `${Number(id)}.wav`);
+}
+
+const VOICE_SYSTEM = 'You are a helpful assistant that transcribes audio input into text output in JSON format.';
+
+// 长转写 POST（node:http 直连）：与 vibeRoutes 同结论——本地引擎转写完才发响应头，
+// undici fetch 的 5 分钟 headersTimeout 会掐断，http.request 无内建超时
+function voicePostJson(url, body, timeoutMs) {
+  const http = require('http');
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+      let buf = '';
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve(JSON.parse(buf)); } catch (e) { reject(new Error('转写服务响应解析失败：' + e.message)); }
+        } else reject(new Error(`转写服务返回 ${res.statusCode}：${buf.slice(0, 300)}`));
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`转写服务超时（${Math.round(timeoutMs / 60000)} 分钟）`)));
+    req.end(body);
+  });
+}
+
+// 模型返回 content → 纯文本（剥 ```json 围栏、截最外层 []、容错取 utterance 的 Content 字段）
+function voiceTextOf(content) {
+  let t = String(content || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const i = t.indexOf('['), j = t.lastIndexOf(']');
+  if (i >= 0 && j > i) t = t.slice(i, j + 1);
+  try {
+    const arr = JSON.parse(t);
+    if (Array.isArray(arr)) {
+      return arr.map((x) => String(x && (x.Content ?? x.text) || '').trim()).filter(Boolean).join('\n');
+    }
+  } catch { /* 非数组：整段当文本 */ }
+  return t;
+}
+
+// 转写一条语音消息（成功/失败都会把 voice_state 落库，返回转写文字）。
+// 引擎选择跟随「录音转写」页的全局配置：server 模式按 server_engine（whisper 首选/vibeasr）；
+// custom 模式直连配置地址；client 拉取模式跑不了（任务队列绑定 vibe_records，与消息表耦合太深）。
+async function transcribeVoice(d, id) {
+  const row = d.prepare('SELECT * FROM messages WHERE id=?').get(Number(id) || 0);
+  if (!row || !row.is_voice) throw new Error('不是语音消息');
+  if (row.voice_text) return row.voice_text;
+  const fs = require('fs');
+  const file = voiceFile(row.id);
+  if (!fs.existsSync(file)) throw new Error('语音文件缺失');
+  const { getSetting } = require('../db');
+  const s = getSetting(d, 'vibe_settings', {}) || {};
+  const mode = ['server', 'custom'].includes(s.engine_mode) ? s.engine_mode : (s.base_url ? 'custom' : 'server');
+  if (mode === 'client') throw new Error('转写算力是「客户端拉取」模式，短消息语音无法自动转文字：请在「录音转写」页改用服务器引擎或自定义服务');
+  let base, model;
+  if (mode === 'custom') {
+    base = String(s.base_url || '').replace(/\/+$/, '');
+    if (!base) throw new Error('未配置转写服务地址（录音转写页 → 算力来源）');
+    model = String(s.model || 'vibevoice');
+  } else if (s.server_engine === 'vibeasr') {
+    const vp = require('./vibeasrPaths'), vs = require('./vibeasrService');
+    if (!vp.engineReady()) throw new Error('VibeASR 服务器引擎未安装（「录音转写」页可一键安装）');
+    await vs.ensureReady();
+    base = `http://127.0.0.1:${vp.PORT}`; model = 'vibevoice';
+  } else {
+    const wp = require('./whisperPaths'), ws = require('./whisperService');
+    if (!wp.engineReady()) throw new Error('Whisper 服务器引擎未安装（「录音转写」页可一键安装）');
+    await ws.ensureReady(['auto', 'zh', 'en', 'yue', 'ja', 'ko'].includes(s.whisper_lang) ? s.whisper_lang : 'auto');
+    base = `http://127.0.0.1:${wp.PORT}`; model = 'whisper-large-v3-turbo';
+  }
+  d.prepare("UPDATE messages SET voice_state='pending' WHERE id=?").run(row.id);
+  try {
+    const buf = fs.readFileSync(file);
+    const dataUrl = `data:audio/wav;base64,${buf.toString('base64')}`;
+    const dur = Math.max(0, Number(row.voice_secs) || 0);
+    const prompt = `This is a ${dur.toFixed(2)} seconds audio, please transcribe it with these keys: Start time, End time, Speaker ID, Content`;
+    const body = JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: VOICE_SYSTEM },
+        { role: 'user', content: [{ type: 'audio_url', audio_url: { url: dataUrl } }, { type: 'text', text: prompt }] },
+      ],
+      max_tokens: 8192, temperature: 0, top_p: 1, stream: false,
+    });
+    const resp = await voicePostJson(base + '/v1/chat/completions', body, 5 * 60 * 1000);
+    const text = voiceTextOf(resp.choices?.[0]?.message?.content ?? '').trim();
+    if (!text) throw new Error('模型未返回转写内容');
+    d.prepare("UPDATE messages SET voice_state='done', voice_text=? WHERE id=?").run(text.slice(0, 5000), row.id);
+    return text;
+  } catch (e) {
+    d.prepare("UPDATE messages SET voice_state='failed' WHERE id=?").run(row.id);
+    throw e;
+  }
+}
+
+module.exports = { send, userName, isBot, listContacts, conversation, unread, markRead, markAllRead, MODULE_LABELS, richToPlain, richImageIds, voiceFile, transcribeVoice };
