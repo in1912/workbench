@@ -203,8 +203,11 @@ router.get('/xiaozhi/video', (req, res) => {
   const url = `http://${b.ip}:81/video?k=${encodeURIComponent(svc.ensureBridgeKey())}`;
   const upstream = httpGet(url, (r) => {
     if (r.statusCode !== 200) {
-      res.status(502).json({ error: `板子视频服务无响应（HTTP ${r.statusCode}）——需已烧录 v1.9.18 固件` });
-      r.resume(); // 丢弃余下数据
+      const bits = [];
+      r.on('data', (d) => { if (bits.length < 4) bits.push(d); }); // 收几块就够辨认身份
+      r.on('end', () => res.status(502).json({
+        error: `板子视频服务无响应（HTTP ${r.statusCode}，${r.headers['server'] || r.headers['content-type'] || '无头'}：${Buffer.concat(bits).toString('latin1').slice(0, 80)}）——需已烧录 v1.9.18 固件`,
+      }));
       return;
     }
     res.writeHead(200, {
@@ -222,28 +225,38 @@ router.get('/xiaozhi/video', (req, res) => {
 });
 
 // POST /xiaozhi/chat {on:1|0}：转发到板子 /chat（触发 StartListening/StopListening，毫秒级——比 poll 快得多）
+// v1.9.21 改用 node http.get（与 /video 同一客户端同一解析器）：undici fetch 在生产容器（Node 22）里
+// 打这个端点稳定报 "Invalid status code: undefined"，而 http.get 能正常解析——错误路径也能带出
+// 状态行/响应头/正文片段，排障不再瞎猜。
+function boardHttpGet(url, timeoutMs) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    const done = (ok, data) => { if (!done.ran) { done.ran = true; clearTimeout(timer); resolve({ ok, ...data }); } };
+    const timer = setTimeout(() => done(false, { stage: 'timeout' }), timeoutMs);
+    const upstream = httpGet(url, (r) => {
+      r.on('data', (d) => chunks.push(d));
+      r.on('end', () => done(true, { statusCode: r.statusCode, headers: r.headers, body: Buffer.concat(chunks).toString('latin1').slice(0, 400) }));
+      r.on('error', (e) => done(false, { stage: 'read', err: e.message }));
+    });
+    upstream.on('error', (e) => done(false, { stage: 'connect', err: e.message }));
+  });
+}
 router.post('/xiaozhi/chat', asyncH(async (req, res) => {
   const b = svc.getBoardInfo();
   if (!b.ip) return res.status(503).json({ error: '还不知道板子的 IP——板子连着网并已烧录 v1.9.18 固件后会自动登记（最多等 1 分钟）' });
   const on = (req.body || {}).on ? 1 : 0;
-  try {
-    const r = await fetch(`http://${b.ip}:81/chat?k=${encodeURIComponent(svc.ensureBridgeKey())}&on=${on}`, {
-      signal: AbortSignal.timeout(4000),
-    });
-    const t = await r.text();
-    // 板端 {ok,message} 原样透传；非 JSON 一律不透传（v1.9.21 实测：登记的 IP 若是端口转发改写出的 127.0.0.1，
-    // 这一步会打到 NAS 上别的服务，回 HTML 错误页——原样透传就成了「HTTP 502 非 JSON」的天书）
-    let parsed = null;
-    try { parsed = JSON.parse(t); } catch { /* 非 JSON，走下面的统一提示 */ }
-    if (parsed && typeof parsed === 'object') return res.status(r.statusCode).json(parsed);
-    res.status(502).json({
-      ok: false,
-      error: `板子对话接口回了非预期内容（HTTP ${r.statusCode}）——多半是登记到的 IP「${b.ip}」不是板子本体` +
-        '（生产端口转发会改写来源地址）。请确认板子已烧录 v1.9.20+ 固件（poll 自报 IP），稍等 1 分钟再试。',
-    });
-  } catch (e) {
-    res.status(502).json({ ok: false, error: `连不上板子（${b.ip}:81）：${e.message}——板子离线或固件未升级` });
+  const r = await boardHttpGet(`http://${b.ip}:81/chat?k=${encodeURIComponent(svc.ensureBridgeKey())}&on=${on}`, 4000);
+  if (!r.ok) {
+    return res.status(502).json({ ok: false, error: `连不上板子（${b.ip}:81，${r.stage}${r.err ? '：' + r.err : ''}）——板子离线或固件未升级` });
   }
+  let parsed = null;
+  try { parsed = JSON.parse(r.body); } catch { /* 非 JSON，走统一提示 */ }
+  if (parsed && typeof parsed === 'object') return res.status(r.statusCode).json(parsed);
+  res.status(502).json({
+    ok: false,
+    error: `板子对话接口回了非预期内容（HTTP ${r.statusCode}，${(r.headers && r.headers['content-type']) || '无类型'}：${(r.body || '').slice(0, 80)}）` +
+      `——多半是登记到的 IP「${b.ip}」不是板子本体（生产端口转发会改写来源地址）。请确认板子已烧录 v1.9.20+ 固件（poll 自报 IP），稍等 1 分钟再试。`,
+  });
 }));
 
 // GET /xiaozhi/board：板子 IP / 在线状态（面板显示与排障）
