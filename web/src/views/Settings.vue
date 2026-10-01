@@ -101,6 +101,17 @@
         </div>
       </div>
 
+      <!-- 智能家居视频路径（v1.9.26）：智能家居页「视频中心」tab 的根目录（与学习页视频教学的目录各自独立） -->
+      <div class="card" v-if="isAdmin">
+        <h3>智能家居视频路径</h3>
+        <div class="muted" style="font-size:12px; margin-bottom:8px">「智能家居 → 视频中心」tab 浏览播放此目录里的视频/音频（mp4 · flv · mp3 等，支持 PotPlayer/VLC 外部播放器联动）。与「学习 → 视频教学」的学习目录互不影响。Docker/NAS 部署：填容器内路径（先把 NAS 目录映射进容器，如宿主机 /vol2/1000/家庭视频 映射为 /videos 后填 /videos）；Windows 直跑填本机目录（如 D:\家庭视频）。</div>
+        <div class="row">
+          <input v-model="vcRoot.dir" placeholder="D:\家庭视频（Docker 填容器内路径，如 /videos）" class="grow" />
+          <button class="primary" @click="saveVcRoot">保存路径</button>
+        </div>
+        <div v-if="vcRoot.ok === false" class="muted" style="font-size:12px; margin-top:8px; color:var(--red)">当前路径在服务器上不可访问，请核对后再保存</div>
+      </div>
+
       <div class="card">
         <h3>天气</h3>
         <div class="form-row"><label>城市</label><input v-model="cityInput" placeholder="如：宁波 / 上海" /></div>
@@ -571,6 +582,7 @@ onMounted(async () => {
   try { const fd = await api.get('/settings/files-dir'); filesDir.value = { dir: fd.dir || '' }; } catch {}
   try { const ur = await api.get('/settings/upload-root'); uploadRoot.value = { dir: ur.dir || '' }; } catch {}
   try { const lb = await api.get('/settings/local-base'); localBase.value = { base: lb.base || '' }; } catch {}
+  try { if (isAdmin.value) { const vc = await api.get('/vc/config'); vcRoot.value = { dir: vc.root || '', ok: !!vc.root_ok }; } } catch {}
   try { if (isAdmin.value) { const la = await api.get('/settings/lan-addrs'); lanAddrs.value = la.addrs || []; } } catch {}
   try { if (isAdmin.value) { const dl = await api.get('/dingtalk/login-config'); ddLogin.value = { corp_id: dl.corp_id || '', app_key: dl.app_key || '', app_secret: dl.app_secret || '' }; } } catch {}
   // 免登是否已启用（管理员参数齐=启用），状态行展示用
@@ -747,6 +759,17 @@ async function saveLocalBase() {
     try { sessionStorage.removeItem('wb_local_base'); } catch { /* 换地址后重新探测 */ }
     probeLocalBase(true);   // 立即重测新地址：可达则徽标/学习页通道即时切换
     flash(localBase.value.base ? '本地直连已启用：' + localBase.value.base + '（不可达时自动回落公网）' : '已停用本地直连，全部走当前访问地址');
+  } catch (e) { flash('保存失败：' + e.message, 'err'); }
+}
+
+// 智能家居视频路径（v1.9.26，仅管理员）：智能家居页「视频中心」tab 的根目录，与视频教学目录独立
+const vcRoot = ref({ dir: '', ok: null });
+async function saveVcRoot() {
+  try {
+    await api.post('/vc/settings', { root: vcRoot.value.dir.trim() });
+    const c = await api.get('/vc/config');
+    vcRoot.value.ok = c.root_ok;
+    flash(c.root_ok ? '智能家居视频路径已保存：' + c.root : (vcRoot.value.dir ? '已保存，但该路径当前在服务器上不可访问（Docker 部署需填容器内路径）' : '已清空，「视频中心」tab 将提示未配置'));
   } catch (e) { flash('保存失败：' + e.message, 'err'); }
 }
 

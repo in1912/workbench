@@ -87,6 +87,8 @@ function pageForPath(p) {
   if (p.startsWith('/tts/manage') || p.startsWith('/tts/engine')) return 'tools';
   if (p.startsWith('/tts')) return null;
   if (p.startsWith('/vstudy')) return 'learning'; // 视频教学（目录/播放/记录/设置/学时流水）归学习页
+  // 视频中心（v1.9.26）：vstudy 的精简版（无学年学科/学时/注意力），归智能家居页 videocenter tab
+  if (p.startsWith('/vc')) return 'smarthome';
   if (p.startsWith('/clipboard') || p.startsWith('/links')) return 'tools';
   // mbti/dep/pro 测试中心接口 v1.8.0 已随「私有项目」页卸载（迁至独立项目 Private_Mini），不再映射
   if (p.startsWith('/monitor')) return 'tools'; // Computer monitoring (v1.3.5): Tools page last tab, bound to tools page permission (otherwise any logged-in user could read screenshots)
@@ -224,6 +226,9 @@ const TAB_PATHS = {
     // 面板内 功能介绍/下载安装包/安装步骤 三段为纯 UI 子页，无独立权限键
     ['cclight', ['/cclight']],
     ['settings', ['/mihome/bind', '/mihome/unbind']],
+    // 视频中心（v1.9.26）：本页最后一个 tab——/vc 整块（tree/file/progress/extplayer/config/settings/fs-probe）；
+    // 其中 /vc/settings 是全家配置，路由内部再限管理员（无 vstudy 那样的独立受限子 tab）
+    ['videocenter', ['/vc']],
   ],
 };
 

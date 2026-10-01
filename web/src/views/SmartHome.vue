@@ -9,6 +9,8 @@
       <button v-if="canTab('smarthome','settings')" :class="{active: tab==='settings'}" @click="switchTab('settings')">米家设置</button>
       <!-- 参数翻译（v1.9.24 更名「米家参数翻译」并移到米家设置之后） -->
       <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">米家参数翻译</button>
+      <!-- 视频中心（v1.9.26）：本页最后一个 tab——视频教学的精简版（目录树+播放+进度记忆，无学年学科/点检/文档） -->
+      <button v-if="canTab('smarthome','videocenter')" :class="{active: tab==='videocenter'}" @click="switchTab('videocenter')">视频中心</button>
     </div>
 
     <div v-if="err" class="msg err">{{ err }}</div>
@@ -98,6 +100,9 @@
 
     <!-- ==================== Agent红绿灯 tab（v1.9.23 放回本页：功能介绍/下载安装包/安装步骤三段，见 CcLightPanel） ==================== -->
     <CcLightPanel v-else-if="tab==='cclight'" />
+
+    <!-- ==================== 视频中心 tab（v1.9.26，本页最后一个 tab） ==================== -->
+    <VideoCenterPanel v-else-if="tab==='videocenter'" />
 
     <!-- ==================== 设置 tab ==================== -->
     <template v-else-if="tab==='settings'">
@@ -331,6 +336,7 @@ import QRCode from 'qrcode';
 import { zh, TERM_GROUPS } from '../miotTerms';
 import XiaozhiPanel from '../components/XiaozhiPanel.vue';
 import CcLightPanel from '../components/CcLightPanel.vue';
+import VideoCenterPanel from '../components/VideoCenterPanel.vue';
 
 const route = useRoute();
 const router = useRouter();

@@ -889,6 +889,23 @@ CREATE TABLE IF NOT EXISTS vstudy_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_vstudy_ledger ON vstudy_ledger(user_id, id DESC);
 
+-- ---------- 视频中心（智能家居页 tab，v1.9.26）：vstudy 的精简复制版 ----------
+-- 无学年/学科、无学时记账/注意力点检，只保留进度记忆（断点续播）；
+-- 一人一文件一行（UNIQUE upsert），position 取历史最大值
+CREATE TABLE IF NOT EXISTS vc_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  user_name TEXT NOT NULL DEFAULT '',
+  path TEXT NOT NULL,
+  ext TEXT DEFAULT '',
+  duration_sec REAL DEFAULT 0,
+  position_sec REAL DEFAULT 0,
+  watched_sec REAL DEFAULT 0,
+  opened_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(user_id, path)
+);
+
 -- ---------- 练琴录音（录音文件落全局上传路径，有效时长由有权限成员确认） ----------
 CREATE TABLE IF NOT EXISTS piano_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

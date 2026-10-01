@@ -118,8 +118,8 @@ try {
 
   await p.goto(`${B}/#/smart-home?tab=cclight`);
   await p.waitForSelector('.page-title');
-  ck('C1 智能家居页 5 个 tab，Agent红绿灯在智能板之后', (await p.locator('h2.page-title').innerText()) === '智能家居'
-    && (await p.locator('.tabs button').allInnerTexts()).join('|') === '米家|智能板|Agent红绿灯|米家设置|米家参数翻译', await p.locator('.tabs').innerText());
+  ck('C1 智能家居页 6 个 tab（v1.9.26 起末尾多「视频中心」），Agent红绿灯在智能板之后', (await p.locator('h2.page-title').innerText()) === '智能家居'
+    && (await p.locator('.tabs button').allInnerTexts()).join('|') === '米家|智能板|Agent红绿灯|米家设置|米家参数翻译|视频中心', await p.locator('.tabs').innerText());
   ck('C2 Agent红绿灯按钮处于激活态', (await p.locator('.tabs button.active').innerText()) === 'Agent红绿灯');
 
   await p.waitForSelector('.ccp-tabs button');

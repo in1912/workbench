@@ -1,6 +1,9 @@
 // 视频教学：NAS 学习目录浏览（目录树 + 流媒体 Range 播放 + 文档在线预览）+ 学习记录 + 设置。
 // 权限：目录/文件/进度/记录为页内共享端点（数据按人隔离）；设置写操作（/vstudy/settings/*）归「视频教学设置」tab。
 // 路径安全：所有文件访问都被关在配置的 NAS 根目录内（resolve 后必须仍以根目录开头，防 ../ 逃逸）。
+// v1.9.26 视频中心（智能家居页 tab）：同一路由文件按 scope 服务两套目录——
+//   vstudy（setting vstudy_root，学年/学科/学时/注意力全功能）与 vc（setting vc_root，纯目录树+播放+进度记忆）。
+//   tree/file/extplayer/fs-probe/config/settings 用 express 数组路径双挂；进度/记录各自独立表，互不掺和。
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -24,11 +27,13 @@ const MIME = {
 const DEFAULT_YEARS = ['2025-2026 学年', '2026-2027 学年'];
 const DEFAULT_SUBJECTS = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '政治'];
 
-function rootDir() { return String(getSetting(db, 'vstudy_root', '') || '').trim(); }
+// scope：'vstudy'（学习页视频教学）或 'vc'（智能家居页视频中心）；按请求路径前缀区分
+function scopeOf(req) { return req.path.startsWith('/vc') ? 'vc' : 'vstudy'; }
+function rootDir(scope = 'vstudy') { return String(getSetting(db, scope === 'vc' ? 'vc_root' : 'vstudy_root', '') || '').trim(); }
 
 // 把前端传来的相对路径安全拼进根目录；越界/根未配置返回 null
-function resolveInRoot(rel) {
-  const root = rootDir();
+function resolveInRoot(rel, scope = 'vstudy') {
+  const root = rootDir(scope);
   if (!root) return null;
   const full = path.resolve(root, '.' + path.sep + String(rel || '').replace(/\\/g, '/').replace(/^\/+/, ''));
   const normRoot = path.resolve(root) + path.sep;
@@ -37,31 +42,38 @@ function resolveInRoot(rel) {
 }
 
 // ---------- 设置（全局配置，主库存放） ----------
-router.get('/vstudy/config', (req, res) => {
-  res.json({
-    root: rootDir(),
-    root_ok: (() => { const r = rootDir(); return !!r && fs.existsSync(r); })(),
-    years: getSetting(db, 'vstudy_years', null) || DEFAULT_YEARS,
-    subjects: getSetting(db, 'vstudy_subjects', null) || DEFAULT_SUBJECTS,
-  });
+router.get(['/vstudy/config', '/vc/config'], (req, res) => {
+  const scope = scopeOf(req);
+  const r = rootDir(scope);
+  const j = { root: r, root_ok: !!r && fs.existsSync(r) };
+  if (scope === 'vstudy') {
+    j.years = getSetting(db, 'vstudy_years', null) || DEFAULT_YEARS;
+    j.subjects = getSetting(db, 'vstudy_subjects', null) || DEFAULT_SUBJECTS;
+  }
+  res.json(j);
 });
 
-// 保存设置：{ root?, years?, subjects?}；root 变更时校验目录存在可读
-router.post('/vstudy/settings', (req, res) => {
+// 保存设置：{ root?, years?, subjects?}（vc 只认 root）；root 变更时校验目录存在可读
+router.post(['/vstudy/settings', '/vc/settings'], (req, res) => {
+  const scope = scopeOf(req);
+  // vc 的路径是全家配置且没有 vstudy 那样的受限子 tab——路由内限管理员（设置页卡片本就仅管理员可见）
+  if (scope === 'vc' && (!req.user || req.user.role !== 'admin')) return res.status(403).json({ error: '仅管理员可修改' });
   const b = req.body || {};
   if (b.root !== undefined) {
     const r = String(b.root || '').trim();
     if (r && !fs.existsSync(r)) return res.status(400).json({ error: `目录不存在或不可访问：${r}。Docker/NAS 部署时这里填「容器内路径」——NAS 上的目录需先在 Docker 里映射进容器（例如宿主机 /vol2/1000/媛媛学习 映射为 /study，然后这里填 /study）；\\\\NAS\\share 之类的网络路径在容器内无法访问。Windows 直跑则填本机目录（如 D:\\学习资料）` });
-    setSetting(db, 'vstudy_root', r);
+    setSetting(db, scope === 'vc' ? 'vc_root' : 'vstudy_root', r);
   }
-  if (Array.isArray(b.years)) setSetting(db, 'vstudy_years', b.years.map((s) => String(s).trim()).filter(Boolean));
-  if (Array.isArray(b.subjects)) setSetting(db, 'vstudy_subjects', b.subjects.map((s) => String(s).trim()).filter(Boolean));
+  if (scope === 'vstudy') {
+    if (Array.isArray(b.years)) setSetting(db, 'vstudy_years', b.years.map((s) => String(s).trim()).filter(Boolean));
+    if (Array.isArray(b.subjects)) setSetting(db, 'vstudy_subjects', b.subjects.map((s) => String(s).trim()).filter(Boolean));
+  }
   res.json({ ok: true });
 });
 
 // ---------- 路径探针（管理员）：Docker 部署时帮用户找到容器内真实可见的映射路径 ----------
 // 只返回存在性与一层目录结构，不读任何文件内容；Windows 本机直跑同样可用（从盘符根起探）
-router.get('/vstudy/fs-probe', (req, res) => {
+router.get(['/vstudy/fs-probe', '/vc/fs-probe'], (req, res) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可探测' });
   const raw = String(req.query.path || '').trim();
   const p = raw ? path.resolve(raw) : (process.platform === 'win32' ? path.resolve('/') : '/');
@@ -80,9 +92,10 @@ router.get('/vstudy/fs-probe', (req, res) => {
 });
 
 // ---------- 目录树（懒加载一层） ----------
-router.get('/vstudy/tree', (req, res) => {
-  const full = resolveInRoot(req.query.dir || '');
-  if (!full) return res.status(400).json({ error: rootDir() ? '路径越界' : '尚未配置学习目录，请先到「视频教学设置」填写 NAS 路径' });
+router.get(['/vstudy/tree', '/vc/tree'], (req, res) => {
+  const scope = scopeOf(req);
+  const full = resolveInRoot(req.query.dir || '', scope);
+  if (!full) return res.status(400).json({ error: rootDir(scope) ? '路径越界' : scope === 'vc' ? '尚未配置视频目录，请先到「设置 → 智能家居视频路径」填写 NAS 路径' : '尚未配置学习目录，请先到「视频教学设置」填写 NAS 路径' });
   let names;
   try { names = fs.readdirSync(full); }
   catch (e) { return res.status(400).json({ error: '读取目录失败：' + e.message }); }
@@ -96,13 +109,16 @@ router.get('/vstudy/tree', (req, res) => {
     entries.push({ name, is_dir: isDir, ext, size, kind: isDir ? 'dir' : MEDIA_EXTS.includes(ext) ? 'media' : DOC_EXTS.includes(ext) ? 'doc' : 'other' });
   }
   entries.sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, 'zh'));
-  res.json({ dir: String(req.query.dir || ''), entries });
+  // 视频中心只列目录与媒体文件（无文档预览，列出来点了也没反应）
+  const out = scope === 'vc' ? entries.filter((e) => e.is_dir || e.kind === 'media') : entries;
+  res.json({ dir: String(req.query.dir || ''), entries: out });
 });
 
 // ---------- 外部播放器联动注册脚本（potplayer:// vlc:// 协议，写 HKCU 免管理员） ----------
 // 页面「PotPlayer / VLC 播放」按钮首次使用前下载双击：自动探测已装播放器并注册协议，
 // 之后点按钮浏览器即调起本地播放器直接播服务器直链（?token= 鉴权 + Range 均已支持）。
-router.get('/vstudy/extplayer', (req, res) => {
+// 协议注册是全局幂等的：视频中心与视频教学共用同一份脚本（脚本内容完全一致，装一次两个页面都能用）。
+router.get(['/vstudy/extplayer', '/vc/extplayer'], (req, res) => {
   const p = path.join(__dirname, '..', 'vstudy-extplayer.cmd');
   if (!fs.existsSync(p)) return res.status(404).json({ error: '脚本缺失' });
   res.download(p, 'register-external-player.cmd');
@@ -112,14 +128,14 @@ router.get('/vstudy/extplayer', (req, res) => {
 // 本地直连：页面源（公网域名）与文件源（局域网地址）不同源——媒体元素加载不受限，
 // 但 flv.js（fetch+Range）与文档解析（fetch+Authorization）跨源读取需要 CORS 放行。
 // 鉴权仍在 ?token=，无 token 的跨源请求拿不到内容，放行 * 无泄露面。
-router.options('/vstudy/file', (req, res) => {
+router.options(['/vstudy/file', '/vc/file'], (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Range, Content-Type');
   res.status(204).end();
 });
-router.get('/vstudy/file', (req, res) => {
-  const full = resolveInRoot(req.query.path || '');
+router.get(['/vstudy/file', '/vc/file'], (req, res) => {
+  const full = resolveInRoot(req.query.path || '', scopeOf(req));
   if (!full) return res.status(400).json({ error: '路径越界或未配置根目录' });
   let st;
   try { st = fs.statSync(full); } catch { return res.status(404).json({ error: '文件不存在' }); }
@@ -274,6 +290,36 @@ router.post('/vstudy/progress', (req, res) => {
     settleSessionLedger(sid); // 中途结转：未入账 ≥5 分钟即落一笔生效流水
   }
   res.json({ ok: true });
+});
+
+// ---------- 视频中心进度（vc_records：无会话/学时，只做进度记忆断点续播） ----------
+// POST：前端周期性小增量上报（与 /vstudy/progress 同节奏，upsert 一人一文件一行）
+router.post('/vc/progress', (req, res) => {
+  const b = req.body || {};
+  const p = String(b.path || '');
+  if (!p) return res.status(400).json({ error: '缺少 path' });
+  const dur = Math.max(0, Number(b.duration_sec) || 0);
+  const pos = Math.max(0, Math.min(Number(b.position_sec) || 0, dur || 1e9));
+  const delta = Math.max(0, Math.min(Number(b.watched_sec) || 0, 3600)); // 单次增量封顶 1 小时，防脏数据
+  const user = db.prepare('SELECT display_name, username FROM users WHERE id=?').get(req.user.id);
+  db.prepare(`
+    INSERT INTO vc_records(user_id, user_name, path, ext, duration_sec, position_sec, watched_sec, opened_at, updated_at)
+    VALUES(?,?,?,?,?,?,?,datetime('now','localtime'),datetime('now','localtime'))
+    ON CONFLICT(user_id, path) DO UPDATE SET
+      duration_sec = MAX(vc_records.duration_sec, excluded.duration_sec),
+      position_sec = MAX(vc_records.position_sec, excluded.position_sec),
+      watched_sec  = vc_records.watched_sec + excluded.watched_sec,
+      updated_at   = datetime('now','localtime')
+  `).run(req.user.id, (user && (user.display_name || user.username)) || '', p, String(b.ext || ''), dur, pos, delta);
+  res.json({ ok: true });
+});
+
+// GET ?path=：打开文件前查上次进度（断点续播——前端 position>30s 且 <95% 时长则 seek 过去）
+router.get('/vc/progress', (req, res) => {
+  const p = String(req.query.path || '');
+  if (!p) return res.status(400).json({ error: '缺少 path' });
+  const r = db.prepare('SELECT duration_sec, position_sec, watched_sec, updated_at FROM vc_records WHERE user_id=? AND path=?').get(req.user.id, p);
+  res.json({ record: r || null });
 });
 
 // ---------- 学习会话（历史学习列表的数据源：每打开一个文件 = 一次会话） ----------
