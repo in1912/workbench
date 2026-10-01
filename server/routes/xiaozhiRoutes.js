@@ -6,6 +6,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const httpGet = require('http').get; // MJPEG 长连接代理（板子是纯 http 内网地址）
 const { Readable } = require('stream');
 const auth = require('../auth');
 const svc = require('../services/xiaozhiService');
@@ -106,6 +107,7 @@ router.post('/xiaozhi/bridge-key/reset', (req, res) => {
 router.post('/xiaozhi/bridge', (req, res) => {
   if (!svc.bridgeKeyOk(req)) return res.status(403).json({ ok: false, message: '桥接密钥不对（轮换后需重烧固件）' });
   const op = String((req.body || {}).op || '');
+  if (op === 'poll') svc.noteBoardIp(req.socket.remoteAddress); // 板子 25s 一poll，顺手刷新 IP（v1.9.18 视频对话直达用）
   svc.dispatch(op, req.body)
     .then((r) => res.json(r))
     .catch((e) => res.status(503).json({ ok: false, message: '桥接处理失败：' + e.message }));
@@ -133,16 +135,33 @@ router.post('/xiaozhi/device-control', asyncH(async (req, res) => {
   res.json(await svc.dispatch('control', { device: did, action })); // did 精确匹配直达（resolveDevice 首选 did 全等）
 }));
 
-// ---------- 设备别名登记（v1.9.16：did → 别名；语音解析真名/别名同等匹配） ----------
-router.put('/xiaozhi/device-alias', (req, res) => {
+// ---------- 设备别名登记（v1.9.16：did → 别名；v1.9.18 别名接管本名 + 保存校验） ----------
+// 校验（v1.9.18，真实踩坑：两台本名都叫「门口台灯」，别名又登记成本名/两台同别名——照样分不开）：
+// 别名=本名起不到接管作用、别名与其它设备的别名重复则两台同抢一个叫法，都在保存时拦下。
+const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+router.put('/xiaozhi/device-alias', asyncH(async (req, res) => {
   if (!adminOnly(req, res)) return;
+  const did = String(req.body?.did || '').trim();
+  const alias = String(req.body?.alias || '').trim();
+  if (alias) {
+    let devices = [];
+    try { devices = await svc.listDevicesForBridge(); } catch { /* 未绑米家等：跳过交叉校验，仅做格式检查 */ }
+    const me = devices.find((d) => String(d.did) === did);
+    if (me && normName(alias) === normName(me.name)) {
+      return res.status(400).json({ error: `别名「${alias}」和设备本名相同——起不到消歧作用，请换一个不同的叫法` });
+    }
+    const clash = devices.find((d) => String(d.did) !== did && d.alias && normName(d.alias) === normName(alias));
+    if (clash) {
+      return res.status(400).json({ error: `别名「${alias}」已被「${clash.room === '未分区' ? '' : clash.room + '的'}${clash.name}」占用——两台同别名还是分不开，请换个名字` });
+    }
+  }
   try {
-    const aliases = svc.setDeviceAlias(req.body?.did, req.body?.alias);
+    const aliases = svc.setDeviceAlias(did, alias);
     res.json({ ok: true, device_aliases: aliases });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
-});
+}));
 
 // ---------- 摄像头照片（v1.9.17） ----------
 // 上传：板子固件 POST 二进制 JPEG（index.js EXEMPT + 桥接密钥，同 bridge 的 key 即凭证模式）。
@@ -173,6 +192,53 @@ router.post('/xiaozhi/photo-request', (req, res) => {
   svc.setPhotoPending();
   res.json({ ok: true, message: '已请求拍照——板子最迟约 30 秒内上传（须已烧录 v1.9.17 固件并连着网）' });
 });
+
+// ---------- 视频对话（v1.9.18）：工作台代理板子 81 端口的 MJPEG 流与对话指令 ----------
+// 代理的必要性：生产页是 https，直连板子 http://IP:81 会被浏览器当混合内容拦掉；板端校验桥接密钥，
+// 由服务端注入 key——密钥不出网到浏览器。板子 IP 来自 poll 时记录的 remoteAddress。
+// GET /xiaozhi/video：MJPEG 流（<img> 走 ?token= 查询参数，同家庭图床/照片先例）
+router.get('/xiaozhi/video', (req, res) => {
+  const b = svc.getBoardInfo();
+  if (!b.ip) return res.status(503).json({ error: '还不知道板子的 IP——板子连着网并已烧录 v1.9.18 固件后会自动登记（最多等 1 分钟）' });
+  const url = `http://${b.ip}:81/video?k=${encodeURIComponent(svc.ensureBridgeKey())}`;
+  const upstream = httpGet(url, (r) => {
+    if (r.statusCode !== 200) {
+      res.status(502).json({ error: `板子视频服务无响应（HTTP ${r.statusCode}）——需已烧录 v1.9.18 固件` });
+      r.resume(); // 丢弃余下数据
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': r.headers['content-type'] || 'multipart/x-mixed-replace;boundary=frame',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no', // 过反代/网关时禁缓冲，流式推帧
+    });
+    r.pipe(res);
+  });
+  upstream.on('error', (e) => {
+    if (res.headersSent) return res.end();
+    res.status(502).json({ error: `连不上板子视频服务（${b.ip}:81）：${e.message}——板子离线或固件未升级` });
+  });
+  req.on('close', () => upstream.destroy()); // 网页关掉 <img>（断流）即拆上游连接，板子停止推帧省 CPU
+});
+
+// POST /xiaozhi/chat {on:1|0}：转发到板子 /chat（触发 StartListening/StopListening，毫秒级——比 poll 快得多）
+router.post('/xiaozhi/chat', asyncH(async (req, res) => {
+  const b = svc.getBoardInfo();
+  if (!b.ip) return res.status(503).json({ error: '还不知道板子的 IP——板子连着网并已烧录 v1.9.18 固件后会自动登记（最多等 1 分钟）' });
+  const on = (req.body || {}).on ? 1 : 0;
+  try {
+    const r = await fetch(`http://${b.ip}:81/chat?k=${encodeURIComponent(svc.ensureBridgeKey())}&on=${on}`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    const t = await r.text();
+    res.status(r.statusCode).type('json').send(t); // 板端 {ok,message} 原样透传
+  } catch (e) {
+    res.status(502).json({ ok: false, error: `连不上板子（${b.ip}:81）：${e.message}——板子离线或固件未升级` });
+  }
+}));
+
+// GET /xiaozhi/board：板子 IP / 在线状态（面板显示与排障）
+router.get('/xiaozhi/board', (req, res) => res.json(svc.getBoardInfo()));
 
 // ---------- 智能屏动作点位自动探测 + 试播/转述测试（登录 + tab 即可） ----------
 router.post('/xiaozhi/speaker-probe', asyncH(async (req, res) => {

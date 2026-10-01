@@ -93,6 +93,10 @@ try {
   const dc = await api('POST', '/api/xiaozhi/device-control', { token: T, body: { did: '123456789', action: 'on' } });
   ok(dc.status === 200 && dc.j.ok === false, '快捷开关走 control 链（未绑米家 → 业务 JSON 优雅降级不 500）');
 
+  console.log('— 视频对话无 IP 时的指引（v1.9.18）');
+  ok((await api('POST', '/api/xiaozhi/chat', { token: T, body: { on: 1 } })).status === 503, 'chat 无板子 IP → 503 带登记指引');
+  ok((await fetch(`${B}/api/xiaozhi/video?token=${T}`)).status === 503, 'video 无板子 IP → 503 带登记指引');
+
   console.log('— 摄像头照片（v1.9.17：上传 key 即凭证 + 相册 + poll 消费）');
   const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 0x3b)]);
   const upNoKey = await fetch(`${B}/api/xiaozhi/photo`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpg });
@@ -119,6 +123,14 @@ try {
   ok(poll1.status === 200 && poll1.j.ok === true && poll1.j.photo_requested === true, '板子轮询 poll 拿到拍照指令（pending 消费）');
   const poll2 = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll' } });
   ok(poll2.status === 200 && poll2.j.photo_requested === false, '再次 poll 无指令（pending 已清）');
+
+  console.log('— 视频对话（v1.9.18：poll 登记 IP + 代理错误路径）');
+  const bd = await api('GET', '/api/xiaozhi/board', { token: T });
+  ok(bd.status === 200 && bd.j.ip === '127.0.0.1' && bd.j.online === true, 'poll 登记板子 IP + 在线判定（e2e 里即 127.0.0.1）');
+  const chatBad = await api('POST', '/api/xiaozhi/chat', { token: T, body: { on: 1 } });
+  ok(chatBad.status === 502 && /连不上板子/.test(chatBad.j.error || ''), 'chat 板端（127.0.0.1:81）不可达 → 502 带指引');
+  ok((await fetch(`${B}/api/xiaozhi/video?token=${T}`)).status === 502, 'video 代理板端不可达 → 502');
+  ok((await fetch(`${B}/api/xiaozhi/video`)).status === 401, '无登录态取视频流 401');
 
   console.log('— 桥接（EXEMPT + key）');
   const noKey = await api('POST', '/api/xiaozhi/bridge', { body: { op: 'ping' } });

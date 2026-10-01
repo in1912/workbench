@@ -104,7 +104,8 @@ async function listDevicesForBridge(fresh = false) {
 }
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
-const namesOf = (d) => [d.name, d.alias].filter(Boolean); // 真名/别名同等参与匹配
+// 别名接管（v1.9.18）：登记了别名的设备只认别名，本名退出匹配——重名设备给其中一台起别名即可消歧
+const namesOf = (d) => (d.alias ? [d.alias] : [d.name]).filter(Boolean);
 // 名称→设备解析：did 精确 > 名称/别名全等 > 唯一子串（含 房间+名称/别名 组合）；多义时返回候选让 AI 追问
 function resolveDevice(devices, query) {
   const raw = String(query || '').trim();
@@ -121,12 +122,17 @@ function resolveDevice(devices, query) {
     if (sub.length === 1) hit = sub[0];
     else if (sub.length > 1) return { error: ambiguous(sub, raw) };
   }
-  if (!hit) return { error: `没有找到叫「${raw}」的设备，可以说“列出家里的设备”查看全部名称` };
+  if (!hit) {
+    // 喊了被别名顶替的本名：直接告诉用户新叫法（v1.9.18，重名消歧的引导）
+    const renamed = devices.find((d) => d.alias && (norm(d.name) === q || norm(d.name).includes(q)));
+    if (renamed) return { error: `「${renamed.name}」已登记语音别名，请叫它「${renamed.alias}」` };
+    return { error: `没有找到叫「${raw}」的设备，可以说“列出家里的设备”查看全部名称` };
+  }
   return { device: hit };
 }
 function ambiguous(list, raw) {
-  const names = list.slice(0, 5).map((d) => `${d.room}的${d.name}${d.alias ? `（也叫${d.alias}）` : ''}`);
-  return `「${raw}」匹配到多台：${names.join('、')}${list.length > 5 ? ' 等' : ''}，请说完整名称`;
+  const names = list.slice(0, 5).map((d) => `${d.room}的${d.alias || d.name}${d.alias ? '' : '（无别名）'}`);
+  return `「${raw}」匹配到多台：${names.join('、')}${list.length > 5 ? ' 等' : ''}——给其中一台登记语音别名后可消歧`;
 }
 
 // ---------- 开关控制：direct 走 setProp；无开关点位/失败时若配有智能屏则转述兜底 ----------
@@ -253,6 +259,22 @@ function photoPath(file) {
   return p;
 }
 
+// ---------- 板子 IP（v1.9.18 视频对话）：bridge 请求的 remoteAddress 即板子内网地址 ----------
+// 板子直连内网 NAS（桥接地址填内网是既定部署），socket 远端可信；每次 poll 刷新，供视频流/对话指令直达板子 81 端口。
+const BOARD_IP_KEY = 'xiaozhi_device_ip';
+const BOARD_SEEN_KEY = 'xiaozhi_device_ip_seen_at';
+function noteBoardIp(ip) {
+  const v = String(ip || '').replace(/^::ffff:/, '').trim();
+  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(v)) return; // 只认 IPv4（板子直连场景）
+  setSetting(db, BOARD_IP_KEY, v);
+  setSetting(db, BOARD_SEEN_KEY, String(Date.now()));
+}
+function getBoardInfo() {
+  const ip = getSetting(db, BOARD_IP_KEY, '');
+  const seen = Number(getSetting(db, BOARD_SEEN_KEY, '0')) || 0;
+  return { ip, seen_at: seen, online: !!ip && Date.now() - seen < 90000 }; // 轮询周期 25s，3 个周期没来视为离线
+}
+
 // ---------- 桥接统一入口（POST /xiaozhi/bridge，index.js EXEMPT + key） ----------
 // 返回恒为业务 JSON（ok/message），HTTP 层只对密钥错回 403——固件侧好把 message 直接念给用户。
 async function dispatch(op, body) {
@@ -271,8 +293,9 @@ async function dispatch(op, body) {
       const devices = [];
       for (const d of all) {
         if (!d.sw && d.t == null && d.h == null) continue;
-        const it = { name: d.name, room: d.room, on: d.sw ? d.sw.v : null };
-        if (d.alias) it.alias = d.alias; // 有别名才带——用户嘴里的叫法 AI 得认识
+        // 别名接管（v1.9.18）：name 给 AI 的就是用户嘴里的叫法——有别名的设备本名已退出匹配，
+        // 清单里再列本名只会诱导 AI 拿它去调（然后被拒）
+        const it = { name: d.alias || d.name, room: d.room, on: d.sw ? d.sw.v : null };
         if (d.t != null) it.t = d.t;
         if (d.h != null) it.h = d.h;
         devices.push(it);
@@ -310,4 +333,5 @@ module.exports = {
   getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk,
   listDevicesForBridge, setDeviceAlias, dispatch, speakerAction, ensureSpeakerPoints,
   setPhotoPending, listPhotos, savePhoto, deletePhoto, photoPath,
+  noteBoardIp, getBoardInfo,
 };

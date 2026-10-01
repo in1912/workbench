@@ -1,9 +1,10 @@
 <template>
   <div class="xz-root">
-    <!-- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 摄像头 -->
+    <!-- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 摄像头；v1.9.18 加视频对话 -->
     <div class="xz-tabs">
       <button :class="{ on: sub === 'guide' }" @click="switchSub('guide')">🛠 装机向导</button>
       <button :class="{ on: sub === 'voice' }" @click="switchSub('voice')">🏠 语音控米家</button>
+      <button :class="{ on: sub === 'live' }" @click="switchSub('live')">🎥 视频对话</button>
       <button :class="{ on: sub === 'camera' }" @click="switchSub('camera')">📷 摄像头</button>
     </div>
 
@@ -270,7 +271,7 @@
         <div v-if="showDevices" class="xz-devs-wrap">
           <p class="xz-muted" style="margin:2px 0 8px">
             与「米家」tab 同一数据源：进本页、展开列表、点 ⟳ 都会刷新（⟳ 额外强制同步小米云端）。
-            <b>别名</b>=语音里的叫法——对着板子喊别名也能控，设备真名不变；输完回车或点别处即保存{{ isAdmin ? '' : '（登记需管理员）' }}；
+            <b>别名</b>=给设备起的语音叫法，登记后<b>只认别名、本名退出匹配</b>——两台重名设备给其中一台起别名即可消歧（喊本名就只控没别名的那台）；输完回车或点别处即保存{{ isAdmin ? '' : '（登记需管理员）' }}；
             左侧开关可直接通断测试（与语音同一条控制链路）。
           </p>
           <div v-if="!shownDevices.length" class="xz-muted">
@@ -284,13 +285,48 @@
                     :title="d.online ? '快速通断测试' : '设备离线'" @click="toggleDevice(d)"><i></i></button>
             <i v-else class="xz-dot" :class="{ 'xz-on': d.online }" :title="d.online ? '在线（无开关属性）' : '离线'"></i>
             <span class="xz-dev-name" :title="`${d.room === '未分区' ? '' : d.room + ' · '}${d.name}${d.home ? '（' + d.home + '）' : ''}`">{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
-            <small v-if="d.sw" class="xz-muted">{{ d.sw.v ? '开' : '关' }}</small>
+            <span class="xz-alias-arrow" title="语音别名（登记后只认别名，本名退出匹配——重名设备消歧用）">叫→</span>
             <input v-model="d.aliasDraft" class="xz-alias" placeholder="语音别名" maxlength="32"
                    :disabled="!isAdmin" @blur="saveAlias(d)" @keyup.enter="$event.target.blur()" />
+            <button class="btn sm ghost xz-alias-save" :class="{ dirty: d.aliasDraft !== (d.alias || '') }"
+                    :disabled="!isAdmin || d.aliasDraft === (d.alias || '')" @mousedown.prevent @click="saveAlias(d)">存</button>
+            <small v-if="d.sw" class="xz-muted xz-sw-state">{{ d.sw.v ? '开' : '关' }}</small>
           </div>
         </div>
       </div>
     </div>
+    </template>
+
+    <!-- ============ 视频对话（v1.9.18） ============ -->
+    <template v-else-if="sub === 'live'">
+      <div class="card">
+        <h3 style="margin:0 0 4px">🎥 视频对话（板子摄像头 + 麦克风扬声器）</h3>
+        <p class="xz-muted" style="margin:0 0 14px">
+          「开启视频」网页实时显示板子看到的画面（约 2-4 帧/秒，画面经工作台中转，外网也能看）；
+          「开始对话」板子立刻进入对话模式——<b>对板子说话，回应从板子扬声器播出</b>（用的是板子的麦克风和喇叭，不是电脑的）。
+          两者可同时开：看着画面问它问题。
+        </p>
+        <div class="xz-actions" style="margin-top:0">
+          <button class="btn primary" @click="toggleLive">{{ liveOn ? '⏹ 关闭视频' : '▶ 开启视频' }}</button>
+          <button class="btn" :disabled="chatBusy || !board.ip" @click="chatCmd(1)">{{ chatBusy ? '…' : '🎤 开始对话' }}</button>
+          <button class="btn" :disabled="chatBusy || !board.ip" @click="chatCmd(0)">⏹ 结束对话</button>
+          <button class="btn" :disabled="busy.photo" @click="requestPhoto">📸 拍一张</button>
+        </div>
+        <p class="xz-muted" style="margin:6px 0 0">
+          板子：{{ board.ip ? `${board.ip}${board.online ? ' · 在线' : ' · 刚刚失联'}` : 'IP 未登记（板子连着网并已烧录 v1.9.18 固件后，最迟约 1 分钟自动登记）' }}
+          <button class="btn sm ghost" style="margin-left:6px" @click="loadBoard">⟳</button>
+        </p>
+        <div v-if="liveOn" class="xz-live-frame">
+          <img :src="videoUrl" alt="板子实时画面" @error="liveStreamBroken" />
+          <span class="xz-live-tag">● LIVE</span>
+        </div>
+        <div v-else class="xz-muted" style="margin-top:12px">
+          （视频默认关闭：开着流板子会持续采集编码耗电耗 CPU，不用时记得关。流断了会自动停，重新点「开启视频」即可。）
+        </div>
+        <small class="xz-muted" style="display:block;margin-top:6px">
+          需已烧录 v1.9.18 固件；对话中喊「你看到了什么」这类视觉问答建议先关视频（板子同一颗摄像头，两条链路抢帧）。
+        </small>
+      </div>
     </template>
 
     <!-- ============ 摄像头（v1.9.17） ============ -->
@@ -367,14 +403,42 @@ const testText = ref('');
 const devices = ref([]); const showDevices = ref(false);
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 
-// ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 摄像头 ----------
-const SUBS = ['guide', 'voice', 'camera'];
+// ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 视频对话 / 摄像头 ----------
+const SUBS = ['guide', 'voice', 'live', 'camera'];
 const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'guide');
 function switchSub(s) {
   sub.value = s;
   localStorage.setItem('xz_sub', s);
   if (s === 'voice') loadDevices(false); // 台数随标题显示，切过来就拉最新
+  if (s === 'live') loadBoard();
   if (s === 'camera') loadPhotos();
+}
+
+// ---------- 视频对话（v1.9.18）：MJPEG 流经工作台代理（?token= 同照片先例）；对话指令直达板子 ----------
+const board = ref({ ip: '', seen_at: 0, online: false });
+const liveOn = ref(false); // 流开关——img 只在开时挂载，关=断连接，板子随之停止推帧
+const chatBusy = ref(false);
+const videoUrl = computed(() => `/api/xiaozhi/video?token=${token()}`);
+async function loadBoard() {
+  try { board.value = await api.get('/xiaozhi/board'); } catch { /* 排障信息而已，失败不打扰 */ }
+}
+function toggleLive() {
+  liveOn.value = !liveOn.value;
+  if (liveOn.value) loadBoard(); // 开流顺带刷一次板子状态（错误提示里好用）
+}
+function liveStreamBroken() {
+  liveOn.value = false;
+  flashErr('视频流断了（板子可能重启/断网）——稍后重新开启');
+}
+async function chatCmd(on) {
+  chatBusy.value = true;
+  try {
+    await api.post('/xiaozhi/chat', { on });
+    flashOk(on ? '已让板子开始对话——现在对它说话即可' : '已结束对话');
+  } catch (e) {
+    flashErr('对话指令失败：' + e.message);
+  }
+  chatBusy.value = false;
 }
 
 // ---------- 家庭过滤 + 快捷开关（v1.9.17） ----------
@@ -716,8 +780,17 @@ onBeforeUnmount(() => {
 .xz-devs-wrap { display: block; }
 .xz-devs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
 .xz-dev { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 4px 8px; background: rgba(0,0,0,.03); border-radius: 6px; }
-.xz-dev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.xz-alias { width: 104px; margin-left: auto; flex: none; font-size: 12px; padding: 2px 8px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: transparent; color: inherit; }
+.xz-dev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 44%; flex: 0 1 auto; }
+.xz-alias-arrow { font-size: 11px; color: var(--muted); flex: none; opacity: .55; }
+.xz-dev:hover .xz-alias-arrow { opacity: 1; color: var(--accent, #2563eb); }
+.xz-alias { width: 108px; flex: none; font-size: 12px; padding: 2px 8px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: transparent; color: inherit; }
+.xz-dev:hover .xz-alias { border-color: var(--accent, #2563eb); }
+.xz-alias-save { flex: none; padding: 2px 8px !important; font-size: 12px; opacity: .45; }
+.xz-alias-save.dirty { opacity: 1; border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.xz-sw-state { margin-left: auto; flex: none; }
+.xz-live-frame { position: relative; margin-top: 12px; background: #0b1020; border-radius: 10px; overflow: hidden; }
+.xz-live-frame img { display: block; width: 100%; max-height: 62vh; object-fit: contain; }
+.xz-live-tag { position: absolute; top: 10px; left: 10px; font-size: 11px; letter-spacing: 1px; color: #ff6b6b; background: rgba(0,0,0,.55); border-radius: 4px; padding: 2px 8px; }
 .xz-dev i { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; }
 .xz-dev i.xz-on { background: var(--ok, #1e9e68); }
 </style>

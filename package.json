@@ -1,8 +1,8 @@
 {
   "name": "personal-workbench",
-  "version": "1.9.17",
+  "version": "1.9.18",
   "private": true,
-  "description": "自托管个人工作台：信息聚合、任务、家庭、学习、AI",
+  "description": "鑷墭绠′釜浜哄伐浣滃彴锛氫俊鎭仛鍚堛€佷换鍔°€佸搴€佸涔犮€丄I",
   "main": "server/index.js",
   "scripts": {
     "start": "node --no-warnings server/index.js",
