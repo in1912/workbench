@@ -73,6 +73,17 @@ try {
   ok(typeof cfg.j.bridge_key === 'string' && cfg.j.bridge_key.length === 32, 'admin 读配置带 32hex 桥接密钥');
   ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { bridge: { url: 'javascript:alert(1)' } } })).status === 400, '非法桥接 URL 被拒');
 
+  console.log('— 设备别名（v1.9.16）');
+  const alPut = await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: '123456789', alias: '客厅大灯' } });
+  ok(alPut.status === 200 && alPut.j.device_aliases['123456789'] === '客厅大灯', '别名登记成功（did→别名对照）');
+  const alClr = await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: '123456789', alias: '' } });
+  ok(alClr.status === 200 && !alClr.j.device_aliases['123456789'], '空别名=解除登记');
+  ok((await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: 'x!@#', alias: 'a' } })).status === 400, '非法 did 被拒');
+  ok((await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: '123456789', alias: 'a'.repeat(33) } })).status === 400, '超长别名被拒（≤32）');
+  ok((await api('PUT', '/api/xiaozhi/device-alias', { body: { did: '123456789', alias: 'a' } })).status === 401, '未登录登记别名 401');
+  const dv = await api('GET', '/api/xiaozhi/devices', { token: T });
+  ok(dv.status === 200 && dv.j.bound === false && Array.isArray(dv.j.devices), '设备一览优雅降级（隔离库未绑米家：bound=false 空列表不 500）');
+
   console.log('— 桥接（EXEMPT + key）');
   const noKey = await api('POST', '/api/xiaozhi/bridge', { body: { op: 'ping' } });
   ok(noKey.status === 403, '无 key 桥接 403');

@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.15
+version=1.9.16
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=智能板装机向导 ③ 配网步骤同样去掉内嵌 iframe，改为新窗口链接（与 ④ 控制台一致；连上板子热点后点按钮直达 192.168.4.1，混合内容分支与死代码一并清理）。上一版（1.9.14）：④ 步控制台改链接。
+changelog=智能板设备一览与语音别名：① 修复面板「可控设备一览」恒 0 台（前端从未调过设备接口）；现与米家 tab 同源同刷（进页/展开/⟳ 按钮均可刷新，⟳ 强制同步小米云端），并提示本地与生产是两套独立库；② 每台设备可登记「语音别名」（did→别名对照表，真名不变），语音解析真名/别名同等匹配、别名随 list_devices 带给云端 AI，多义候选也带别名；③ 烧录区写明串口探测/编译烧录仅本地模式可用（生产/NAS 页探测不到芯片是正常的）。上一版（1.9.15）：向导 ③ 配网改新窗口链接。

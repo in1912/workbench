@@ -121,6 +121,11 @@
               <button class="btn sm" :disabled="busy.probe || !form.port" @click="doProbe">{{ busy.probe ? '探测中…' : '探测芯片' }}</button>
             </div>
             <small v-if="probeMsg" class="xz-muted" :class="{ 'xz-err': !probeOk }">{{ probeMsg }}</small>
+            <small class="xz-muted" style="display:block;margin-top:4px">
+              ⚠️ 串口探测 / 编译烧录需要<b>本地模式</b>：在装了 ESP-IDF 6.1 + 小智源码的 Windows 电脑上打开
+              <code>http://localhost:3000</code> 的本页操作。生产 / NAS 页面没有工具链和串口，<b>探测不到芯片是正常的</b>
+              ——那边用上方「构建机地址」下载固件，配 esptool 命令手动烧录即可。
+            </small>
           </div>
         </div>
 
@@ -244,18 +249,30 @@
         <small v-if="spTestMsg" class="xz-muted">{{ spTestMsg }}</small>
       </div>
 
-      <!-- 可控设备预览 -->
+      <!-- 可控设备预览（与「米家」tab 同源；别名=语音里的另一种叫法，纯对照不改真名） -->
       <div class="xz-sub">
-        <div class="xz-sub-title xz-click" @click="showDevices = !showDevices">
+        <div class="xz-sub-title xz-click" @click="toggleDevices">
           可控设备一览（{{ devices.length }} 台）{{ showDevices ? ' ▴' : ' ▾' }}
+          <button class="btn sm" style="margin-left:8px" :disabled="busy.devs" @click.stop="loadDevices(true)">{{ busy.devs ? '同步中…' : '⟳ 同步米家' }}</button>
         </div>
-        <div v-if="showDevices" class="xz-devs">
+        <div v-if="showDevices" class="xz-devs-wrap">
+          <p class="xz-muted" style="margin:2px 0 8px">
+            与「米家」tab 同一数据源：进本页、展开列表、点 ⟳ 都会刷新（⟳ 额外强制同步小米云端）。
+            <b>别名</b>=语音里的叫法——对着板子喊别名也能控，设备真名不变；输完回车或点别处即保存{{ isAdmin ? '' : '（登记需管理员）' }}。
+          </p>
+          <div v-if="!devices.length" class="xz-muted">
+            <template v-if="devBound === false">⚠️ 本服务器还没绑定米家（{{ devMsg || '未绑定' }}）——到「米家」tab 绑定后这里自动出现。</template>
+            <template v-else>（没有可控设备）</template><br />
+            注意：这里显示的是<b>当前这台服务器</b>的米家数据——本地电脑（localhost）与生产 NAS 是两套独立的库；
+            语音桥接地址填的哪台服务器，板子就控制哪台的米家。
+          </div>
           <div v-for="d in devices" :key="d.did" class="xz-dev">
             <i :class="d.online ? 'xz-on' : ''"></i>
-            <span>{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
+            <span class="xz-dev-name" :title="`${d.room === '未分区' ? '' : d.room + ' · '}${d.name}`">{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
             <small v-if="d.sw" class="xz-muted">{{ d.sw.v ? '开' : '关' }}</small>
+            <input v-model="d.aliasDraft" class="xz-alias" placeholder="语音别名" maxlength="32"
+                   :disabled="!isAdmin" @blur="saveAlias(d)" @keyup.enter="$event.target.blur()" />
           </div>
-          <div v-if="!devices.length" class="xz-muted">（先在「米家」tab 绑定账号，这里就会出现可控设备）</div>
         </div>
       </div>
     </div>
@@ -284,11 +301,12 @@ const form = reactive({
   speaker: { did: '', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 },
 });
 const ports = ref([]);
-const busy = reactive({ ports: false, probe: false, spProbe: false });
+const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false });
 const probeMsg = ref(''); const probeOk = ref(false);
 const spProbeMsg = ref(''); const spTestMsg = ref('');
 const testText = ref('');
 const devices = ref([]); const showDevices = ref(false);
+const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 const st = ref({ running: false, done: false, failed: false, progress: 0, stepIndex: 0, log: [], steps: [] });
 const msg = reactive({ err: '', ok: '' });
 const logBox = ref(null);
@@ -327,6 +345,31 @@ async function loadAll() {
     if (!cap.value.isWindows) miss.push('仅限 Windows');
     capMiss.value = miss.join('、') || '缺工具链';
   } catch (e) { flashErr('读取配置失败：' + e.message); }
+}
+
+// ---------- 可控设备（与米家 tab 同源；fresh=强制同步小米云端） ----------
+async function loadDevices(fresh) {
+  busy.devs = true;
+  try {
+    const r = await api.get('/xiaozhi/devices' + (fresh ? '?fresh=1' : ''));
+    devBound.value = !!r.bound;
+    devMsg.value = r.message || '';
+    devices.value = (r.devices || []).map((d) => ({ ...d, aliasDraft: d.alias || '' }));
+  } catch (e) { flashErr('设备列表加载失败：' + e.message); }
+  busy.devs = false;
+}
+function toggleDevices() {
+  showDevices.value = !showDevices.value;
+  if (showDevices.value) loadDevices(false); // 每次展开都拉最新——米家 tab 那边动过这里立刻跟上
+}
+async function saveAlias(d) {
+  const v = String(d.aliasDraft || '').trim();
+  if (v === (d.alias || '')) return;
+  try {
+    await api.put('/xiaozhi/device-alias', { did: d.did, alias: v });
+    d.alias = v || null;
+    flashOk(v ? `已登记别名「${v}」——对板子喊这个名字也能控` : '已清除别名');
+  } catch (e) { flashErr('别名保存失败：' + e.message); }
 }
 
 // ---------- 保存（唤醒词/通道/桥接/智能屏/串口一起） ----------
@@ -438,6 +481,7 @@ watch(() => [form.channel, form.bridge.url, form.helper.url, form.speaker.did], 
 
 onMounted(async () => {
   await loadAll();
+  loadDevices(false); // 设备台数随标题显示，不阻塞页面
   st.value = await api.get('/xiaozhi/build/status').catch(() => st.value);
   if (st.value.running) startPoll();
   if (isAdmin && cap.value.canFlash) loadPorts();
@@ -490,8 +534,11 @@ onBeforeUnmount(stopPoll);
 .xz-sub { border-top: 1px dashed var(--border, #e5e7eb); margin-top: 14px; padding-top: 10px; }
 .xz-sub-title { font-weight: 600; font-size: 13.5px; margin-bottom: 8px; }
 .xz-click { cursor: pointer; }
-.xz-devs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+.xz-devs-wrap { display: block; }
+.xz-devs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
 .xz-dev { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 4px 8px; background: rgba(0,0,0,.03); border-radius: 6px; }
+.xz-dev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xz-alias { width: 104px; margin-left: auto; flex: none; font-size: 12px; padding: 2px 8px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: transparent; color: inherit; }
 .xz-dev i { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; }
 .xz-dev i.xz-on { background: var(--ok, #1e9e68); }
 </style>

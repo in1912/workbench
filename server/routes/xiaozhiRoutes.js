@@ -106,10 +106,26 @@ router.post('/xiaozhi/bridge', (req, res) => {
     .catch((e) => res.status(503).json({ ok: false, message: '桥接处理失败：' + e.message }));
 });
 
-// ---------- 可控设备（面板预览用；走登录态不走 key） ----------
+// ---------- 可控设备（面板预览用；走登录态不走 key；与「米家」tab 同源，fresh=1 强刷云端） ----------
 router.get('/xiaozhi/devices', asyncH(async (req, res) => {
-  res.json({ devices: await svc.listDevicesForBridge() });
+  try {
+    res.json({ bound: true, devices: await svc.listDevicesForBridge(req.query.fresh === '1') });
+  } catch (e) {
+    // 未绑定米家等：设备空着但别 500——面板要能区分「未绑定」和「绑了但没可控设备」
+    res.json({ bound: false, devices: [], message: e.message });
+  }
 }));
+
+// ---------- 设备别名登记（v1.9.16：did → 别名；语音解析真名/别名同等匹配） ----------
+router.put('/xiaozhi/device-alias', (req, res) => {
+  if (!adminOnly(req, res)) return;
+  try {
+    const aliases = svc.setDeviceAlias(req.body?.did, req.body?.alias);
+    res.json({ ok: true, device_aliases: aliases });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // ---------- 智能屏动作点位自动探测 + 试播/转述测试（登录 + tab 即可） ----------
 router.post('/xiaozhi/speaker-probe', asyncH(async (req, res) => {

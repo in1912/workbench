@@ -19,6 +19,7 @@ const DEFAULT_CFG = {
   speaker: { did: '1149549826', siid_play: null, aiid_play: 3, siid_exec: null, aiid_exec: 4, piid_play: 1, piid_exec: 1 }, // siid 空=按 spec 自动探测
   bridge: { url: '' }, // 烧进固件的工作台桥接地址（含 /api/xiaozhi/bridge；空=构建时前端自动带当前访问地址）
   helper: { url: '' }, // 构建机地址（v1.9.12：无工具链环境【如 NAS 容器】从这里取固件，LAN 内 Windows 工作台）
+  device_aliases: {}, // 语音别名对照表（v1.9.16：did → 别名；resolveDevice 与 list_devices 回包都认，纯映射不改设备真名）
   paths: {}, // 能力探测路径覆盖（admin 在面板改：srcDir/esptool/idfExportBat/idfGitDir/serialPort）
 };
 
@@ -30,6 +31,7 @@ function getConfig() {
     speaker: { ...DEFAULT_CFG.speaker, ...(saved.speaker || {}) },
     bridge: { ...DEFAULT_CFG.bridge, ...(saved.bridge || {}) },
     helper: { ...DEFAULT_CFG.helper, ...(saved.helper || {}) },
+    device_aliases: { ...(saved.device_aliases || {}) },
     paths: { ...(saved.paths || {}) },
   };
 }
@@ -41,10 +43,23 @@ function saveConfig(patch) {
     speaker: { ...cur.speaker, ...(patch.speaker || {}) },
     bridge: { ...cur.bridge, ...(patch.bridge || {}) },
     helper: { ...cur.helper, ...(patch.helper || {}) },
+    device_aliases: { ...cur.device_aliases, ...(patch.device_aliases || {}) },
     paths: { ...cur.paths, ...(patch.paths || {}) },
   };
   setSetting(db, CFG_KEY, next);
   return next;
+}
+
+// ---------- 别名登记（面板逐台编辑；语音解析按「真名/别名」同等匹配） ----------
+function setDeviceAlias(did, alias) {
+  const d = String(did || '').trim();
+  if (!/^[\w.-]{1,64}$/.test(d)) throw new Error('did 格式不对');
+  const a = String(alias || '').trim();
+  if (a.length > 32) throw new Error('别名最长 32 个字');
+  const aliases = { ...(getConfig().device_aliases || {}) };
+  if (a) aliases[d] = a; else delete aliases[d]; // 空别名=解除登记
+  saveConfig({ device_aliases: aliases });
+  return aliases;
 }
 
 // ---------- 桥接密钥（32hex；&& ensureBridgeKey() 防空串匹配空串，照 vibe keyOk） ----------
@@ -65,8 +80,9 @@ function bridgeKeyOk(req) {
 
 // ---------- 设备拍平（桥接给云端 AI 的紧凑形态；砍 urn/model 等省流量） ----------
 const MAX_DEVICES = 150;
-async function listDevicesForBridge() {
-  const view = await mihome.getHomeView(false);
+async function listDevicesForBridge(fresh = false) {
+  const view = await mihome.getHomeView(!!fresh); // fresh=1 与「米家」tab 的强制同步同一条路
+  const aliases = getConfig().device_aliases || {};
   const out = [];
   for (const h of view.homes || []) for (const r of h.rooms || []) for (const d of r.devices || []) {
     if (d.is_parent) continue; // 多路开关的父条目无外层开关，各分路有独立卡片
@@ -74,6 +90,7 @@ async function listDevicesForBridge() {
       did: d.did, name: d.name, room: r.name, online: !!d.online,
       sw: d.switch ? { siid: d.switch.siid, piid: d.switch.piid, v: d.switch.value === true } : null,
       t: d.env?.t?.value ?? null, h: d.env?.h?.value ?? null,
+      alias: aliases[String(d.did)] || null, // 语音别名（v1.9.16）：真名之外的叫法
     });
     if (out.length >= MAX_DEVICES) return out;
   }
@@ -81,19 +98,20 @@ async function listDevicesForBridge() {
 }
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
-// 名称→设备解析：did 精确 > 名称全等 > 唯一子串；多义时返回候选列表让 AI 追问用户
+const namesOf = (d) => [d.name, d.alias].filter(Boolean); // 真名/别名同等参与匹配
+// 名称→设备解析：did 精确 > 名称/别名全等 > 唯一子串（含 房间+名称/别名 组合）；多义时返回候选让 AI 追问
 function resolveDevice(devices, query) {
   const raw = String(query || '').trim();
   const q = norm(raw);
   if (!q) return { error: '设备名不能为空' };
   let hit = devices.find((d) => String(d.did) === raw || norm(d.did) === q);
   if (!hit) {
-    const full = devices.filter((d) => norm(d.name) === q);
+    const full = devices.filter((d) => namesOf(d).some((n) => norm(n) === q));
     if (full.length === 1) hit = full[0];
     else if (full.length > 1) return { error: ambiguous(full, raw) };
   }
   if (!hit) {
-    const sub = devices.filter((d) => norm(d.name).includes(q) || norm(`${d.room}${d.name}`).includes(q));
+    const sub = devices.filter((d) => namesOf(d).some((n) => norm(n).includes(q) || norm(`${d.room}${n}`).includes(q)));
     if (sub.length === 1) hit = sub[0];
     else if (sub.length > 1) return { error: ambiguous(sub, raw) };
   }
@@ -101,7 +119,7 @@ function resolveDevice(devices, query) {
   return { device: hit };
 }
 function ambiguous(list, raw) {
-  const names = list.slice(0, 5).map((d) => `${d.room}的${d.name}`);
+  const names = list.slice(0, 5).map((d) => `${d.room}的${d.name}${d.alias ? `（也叫${d.alias}）` : ''}`);
   return `「${raw}」匹配到多台：${names.join('、')}${list.length > 5 ? ' 等' : ''}，请说完整名称`;
 }
 
@@ -207,6 +225,7 @@ async function dispatch(op, body) {
       for (const d of all) {
         if (!d.sw && d.t == null && d.h == null) continue;
         const it = { name: d.name, room: d.room, on: d.sw ? d.sw.v : null };
+        if (d.alias) it.alias = d.alias; // 有别名才带——用户嘴里的叫法 AI 得认识
         if (d.t != null) it.t = d.t;
         if (d.h != null) it.h = d.h;
         devices.push(it);
@@ -234,4 +253,4 @@ async function dispatch(op, body) {
   }
 }
 
-module.exports = { getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk, listDevicesForBridge, dispatch, speakerAction, ensureSpeakerPoints };
+module.exports = { getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk, listDevicesForBridge, setDeviceAlias, dispatch, speakerAction, ensureSpeakerPoints };
