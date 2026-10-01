@@ -439,7 +439,7 @@ async function listEmails(d, limit = 30, opts = {}) {
 
       // 入库元信息（INSERT OR IGNORE，依赖 (account_id, uid) 组合唯一索引去重）
       const insert = d.prepare(
-        "INSERT OR IGNORE INTO emails(account_id,uid,subject,from_name,from_addr,date,seen,folder) VALUES(?,?,?,?,?,0,'inbox')"
+        "INSERT OR IGNORE INTO emails(account_id,uid,subject,from_name,from_addr,date,seen,folder) VALUES(?,?,?,?,?,?,0,'inbox')"
       );
       const tx = d.transaction((list) => {
         for (const m of list) insert.run(accountId, m.uid, m.subject, m.from_name || '', m.from_addr, m.date);
