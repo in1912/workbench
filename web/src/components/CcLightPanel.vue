@@ -1,16 +1,16 @@
 <template>
-  <div>
-    <h2 class="page-title">Agent红绿灯</h2>
-    <div class="tabs">
-      <button v-if="canTab('cclight','intro')" :class="{active: tab==='intro'}" @click="switchTab('intro')">功能介绍</button>
-      <button v-if="canTab('cclight','download')" :class="{active: tab==='download'}" @click="switchTab('download')">下载安装包</button>
-      <button v-if="canTab('cclight','install')" :class="{active: tab==='install'}" @click="switchTab('install')">安装步骤</button>
+  <div class="ccp-root">
+    <!-- 子 tab：功能介绍 / 下载安装包 / 安装步骤（localStorage.cc_sub 记忆，同 XiaozhiPanel 模式） -->
+    <div class="ccp-tabs">
+      <button :class="{ on: sub === 'intro' }" @click="switchSub('intro')">🚦 功能介绍</button>
+      <button :class="{ on: sub === 'download' }" @click="switchSub('download')">⬇ 下载安装包</button>
+      <button :class="{ on: sub === 'install' }" @click="switchSub('install')">🛠 安装步骤</button>
     </div>
 
     <div v-if="err" class="msg err">{{ err }}</div>
 
-    <!-- ==================== ① 功能介绍（含灯效演示图，v1.9.22 从智能家居子 tab 升格独立页） ==================== -->
-    <template v-if="tab==='intro'">
+    <!-- ==================== ① 功能介绍（含灯效演示图） ==================== -->
+    <template v-if="sub === 'intro'">
       <div class="card">
         <div class="cc-intro-row">
           <div style="flex:1; min-width:0">
@@ -97,7 +97,7 @@
     </template>
 
     <!-- ==================== ② 下载安装包（含子文件清单） ==================== -->
-    <template v-else-if="tab==='download'">
+    <template v-else-if="sub === 'download'">
       <div class="card">
         <h3 style="margin:0 0 10px">⬇ 下载安装包（按你的电脑系统选）</h3>
         <div class="cc-dl-group">🖥️ Windows 环境</div>
@@ -134,7 +134,7 @@
     </template>
 
     <!-- ==================== ③ 安装步骤：① 刷版 → ② 电脑钩子 → ③ 蓝牙配对（+ 参考文档） ==================== -->
-    <template v-else-if="tab==='install'">
+    <template v-else-if="sub === 'install'">
       <div class="card">
         <h3>安装顺序总览</h3>
         <div class="cc-note" style="margin:0">
@@ -213,43 +213,26 @@
         </ul>
       </div>
     </template>
-
-    <!-- 无任何子 tab 权限时的空态 -->
-    <div v-else class="card" style="text-align:center;color:var(--muted);padding:36px">没有可用的页签权限，请联系管理员在「用户管理」里勾选。</div>
   </div>
 </template>
 
 <script setup>
-// Agent红绿灯独立页（v1.9.22）：原智能家居页 cclight 子 tab（v1.8.1-1.8.10）升格而来。
-// 三个子 tab：功能介绍（含灯效演示图）/ 下载安装包（含子文件清单）/ 安装步骤（刷版→电脑钩子→蓝牙配对 + 参考文档）。
-import { ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { canTab, firstTab } from '../tabs';
+// Agent红绿灯面板（v1.9.23）：智能家居页 cclight 子 tab 的内容组件。
+// 内容沿用 v1.9.22 独立页的三段结构（功能介绍/下载安装包/安装步骤），子 tab 用 localStorage 记忆
+// （不占页级 ?tab= 查询参数，那是外层智能家居页的）；/cclight/* API 权限挂 smarthome.cclight 单 tab。
+import { ref } from 'vue';
 import { api } from '../api';
 import ccDemoImg from '../assets/cclight-demo.png';
 
-const route = useRoute();
-const router = useRouter();
-// ?tab= 深链必须再过 TAB_DEFS 校验 key 存在（canTab 对 admin 的未知 key 也放行，不校验会落进空态分支）
-const TABS = ['intro', 'download', 'install'];
-const tab = ref(firstTab('cclight', 'intro'));
-function switchTab(t) {
-  tab.value = t;
-  router.replace({ query: { ...route.query, tab: t } });
-  if (t === 'download') loadCcFiles();
+const SUBS = ['intro', 'download', 'install'];
+const sub = ref(SUBS.includes(localStorage.getItem('cc_sub')) ? localStorage.getItem('cc_sub') : 'intro');
+function switchSub(s) {
+  sub.value = s;
+  localStorage.setItem('cc_sub', s);
+  if (s === 'download') loadCcFiles();
 }
-const pickTab = (t) => (TABS.includes(t) && canTab('cclight', t) ? t : null);
-watch(() => route.query.tab, (t) => {
-  const v = pickTab(String(t || ''));
-  if (v && v !== tab.value) tab.value = v;
-});
-if (route.query.tab) {
-  const t0 = pickTab(String(route.query.tab));
-  if (t0) tab.value = t0;
-}
-if (tab.value === 'download') loadCcFiles();
 
-// ---------- 下载区文件清单（/cclight/* API 权限挂在本页 download tab） ----------
+// ---------- 下载区文件清单 ----------
 const ccFiles = ref([]);
 async function loadCcFiles() {
   if (ccFiles.value.length) return;
@@ -257,16 +240,21 @@ async function loadCcFiles() {
   catch { ccFiles.value = []; }
 }
 const fmtCcSize = (n) => (!n ? '' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-// 下载失败不静默（v1.9.8 起的规矩）：错误显示在页面顶部，网关代答/断网点了没反应可定位
+// 下载失败不静默（v1.9.8 起的规矩）：错误显示在面板顶部，网关代答/断网点了没反应可定位
 const err = ref('');
 function flashErr(m) { err.value = m; setTimeout(() => (err.value = ''), 8000); }
 function ccDl(name) { api.download(`/cclight/file/${encodeURIComponent(name)}`, name).catch((e) => flashErr(`下载失败：${e.message}`)); }
 function ccDlPack() { api.download('/cclight/package', 'cc-light.zip').catch((e) => flashErr(`打包下载失败：${e.message}`)); }
 function ccDlPackMac() { api.download('/cclight/package-mac', 'cc-light-mac.zip').catch((e) => flashErr(`打包下载失败：${e.message}`)); }
+if (sub.value === 'download') loadCcFiles();
 </script>
 
 <style scoped>
-/* 灯效表 / 步骤 / 下载清单（自 SmartHome.vue cclight 段迁入） */
+/* 子 tab 样式与 XiaozhiPanel（.xz-tabs）同款胶囊风格 */
+.ccp-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.ccp-tabs button { border: 1px solid var(--border, #e5e7eb); background: rgba(0,0,0,.03); color: inherit; border-radius: 18px; padding: 5px 16px; font-size: 13px; cursor: pointer; }
+.ccp-tabs button.on { background: var(--accent, #2563eb); border-color: var(--accent, #2563eb); color: #fff; }
+/* 灯效表 / 步骤 / 下载清单（自 SmartHome.vue cclight 段沿承） */
 .cc-intro-row { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
 .cc-demo { flex-shrink: 0; width: 150px; max-width: 40%; border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,.12); }
 @media (max-width: 640px) { .cc-demo { width: 104px; } .cc-intro-row { gap: 10px; } }

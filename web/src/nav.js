@@ -18,8 +18,7 @@ export const NAV_ITEMS = [
   { to: '/pets', icon: 'pets', label: '电子宠物', page: 'pets' },
   { to: '/messages', icon: 'chat', label: '短消息', page: 'messages' },
   { to: '/smart-home', icon: 'home', label: '智能家居', page: 'smarthome' },
-  // Agent红绿灯（2026-10 v1.9.22）：ESP32-C3 三色灯指示九家 AI Agent 状态；v1.8.1 起原为智能家居子 tab
-  { to: '/cc-light', icon: 'traffic', label: 'Agent红绿灯', page: 'cclight' },
+  // v1.9.22 曾把 Agent红绿灯升格独立侧栏页；v1.9.23 放回智能家居子 tab（旧地址 /cc-light 在 router 重定向）
   { to: '/settings', icon: 'settings', label: '设置', page: 'settings' },
 ];
 

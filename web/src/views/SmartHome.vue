@@ -5,6 +5,8 @@
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
       <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">参数翻译</button>
       <button v-if="canTab('smarthome','xiaozhi')" :class="{active: tab==='xiaozhi'}" @click="switchTab('xiaozhi')">智能板</button>
+      <!-- Agent红绿灯（v1.8.1 起为本页子 tab；v1.9.22 曾升格独立页，v1.9.23 放回智能板之后） -->
+      <button v-if="canTab('smarthome','cclight')" :class="{active: tab==='cclight'}" @click="switchTab('cclight')">Agent红绿灯</button>
       <button v-if="canTab('smarthome','settings')" :class="{active: tab==='settings'}" @click="switchTab('settings')">设置</button>
     </div>
 
@@ -92,6 +94,9 @@
 
     <!-- ==================== 智能板 tab（v1.9.11：小智 Korvo2V3 装机/唤醒词/语音控米家） ==================== -->
     <XiaozhiPanel v-else-if="tab==='xiaozhi'" />
+
+    <!-- ==================== Agent红绿灯 tab（v1.9.23 放回本页：功能介绍/下载安装包/安装步骤三段，见 CcLightPanel） ==================== -->
+    <CcLightPanel v-else-if="tab==='cclight'" />
 
     <!-- ==================== 设置 tab ==================== -->
     <template v-else-if="tab==='settings'">
@@ -324,6 +329,7 @@ import { api } from '../api';
 import QRCode from 'qrcode';
 import { zh, TERM_GROUPS } from '../miotTerms';
 import XiaozhiPanel from '../components/XiaozhiPanel.vue';
+import CcLightPanel from '../components/CcLightPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -337,9 +343,8 @@ function switchTab(t) {
   }
 }
 // 兼容旧链接 ?tab=monitor / ?tab=verify：监控 tab 与二次验证已下线（v1.6.29），分别落到米家/设置
-// v1.9.22：cclight 子 tab 升格为独立页 /cc-light，旧深链直接重定向过去
+// v1.9.22 曾把 cclight 升格独立页并在此重定向；v1.9.23 放回本页子 tab，?tab=cclight 直接可用
 const normalizeTab = (t) => (t === 'verify' ? 'settings' : t === 'monitor' ? 'mijia' : t);
-if (route.query.tab === 'cclight') router.replace('/cc-light');
 watch(() => route.query.tab, (t) => {
   t = normalizeTab(String(t || ''));
   if (t && t !== tab.value && canTab('smarthome', t)) tab.value = t;

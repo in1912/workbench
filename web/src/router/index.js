@@ -20,8 +20,8 @@ const routes = [
   { path: '/pets', component: () => import('../views/Pets.vue'), meta: { title: '我的宠物', page: 'pets' } },
   // 智能家居（2026-09 v1.6.8）：米家扫码绑定 + 家庭/房间/设备卡片控制
   { path: '/smart-home', component: () => import('../views/SmartHome.vue'), meta: { title: '智能家居', page: 'smarthome' } },
-  // Agent红绿灯（2026-10 v1.9.22）：从智能家居子 tab 升格为独立页（旧深链 /smart-home?tab=cclight 由 SmartHome.vue 重定向过来）
-  { path: '/cc-light', component: () => import('../views/CcLight.vue'), meta: { title: 'Agent红绿灯', page: 'cclight' } },
+  // Agent红绿灯：v1.9.22 曾升格独立页，v1.9.23 放回智能家居子 tab；旧地址/书签重定向过去
+  { path: '/cc-light', redirect: (to) => ({ path: '/smart-home', query: { ...to.query, tab: 'cclight' } }) },
   // 「打字赚钱」4 个 tab 已并入学习页（2026-09 v1.2.0）；旧地址带参跳转过去（tab key 不变）
   { path: '/typing', redirect: (to) => ({ path: '/learning', query: { tab: to.query.tab || 'practice' } }) },
   // 「领养宠物」已并回电子宠物模块的 tab；旧地址带参跳转过去

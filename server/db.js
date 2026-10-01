@@ -1728,6 +1728,52 @@ function migrateCclightPage() {
 }
 migrateCclightPage();
 
+// 一次性反向迁移（2026-10 v1.9.23）：「Agent红绿灯」从独立页 cclight 放回智能家居页的 cclight 子 tab
+// （v1.9.22 升格、v1.9.23 依用户要求回迁，内容三段结构保留）。授权回平：
+//   开过 cclight 页的 → 从 allowed_pages 剥掉该页；tabs.cclight 三子 tab 收敛成 smarthome.cclight 单键
+//   （勾过任意子 tab 或整页未细分 = 内容可见，平移；tabs.cclight=[] 空细分 = 原本就不可见，不平移）；
+//   原来没开智能家居页的补上 smarthome 页且只给 cclight 一个 tab（不扩权到米家/智能板）；
+//   残留的 tabs.cclight 死键（没开过页却存过细分）直接删，不因此补页（幂等，主库+租户库同跑）。
+function migrateCclightBackToSmarthome() {
+  const fix = (d) => {
+    if (getSetting(d, 'cclight_back_v1923', false)) return;
+    setSetting(d, 'cclight_back_v1923', true);
+    const users = (() => { try { return d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all(); } catch { return []; } })();
+    for (const u of users) {
+      let pages;
+      try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+      let tabs;
+      try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+      const hadPage = Array.isArray(pages) && pages.includes('cclight');
+      const ccTabs = (tabs && typeof tabs === 'object' && Array.isArray(tabs.cclight)) ? tabs.cclight : null;
+      if (!hadPage && ccTabs === null) continue;
+      let changed = false;
+      if (hadPage) {
+        pages = pages.filter((p) => p !== 'cclight');
+        const keepTab = ccTabs === null || ccTabs.length > 0; // 勾过子 tab 或整页未细分 = 内容可见
+        if (!pages.includes('smarthome')) {
+          // 原来没开智能家居页：补上并只给 cclight 一个 tab（防移页丢权限，也不扩权）
+          pages.push('smarthome');
+          tabs.smarthome = keepTab
+            ? (Array.isArray(tabs.smarthome) ? [...new Set([...tabs.smarthome, 'cclight'])] : ['cclight'])
+            : (Array.isArray(tabs.smarthome) ? tabs.smarthome : []);
+        } else if (keepTab && Array.isArray(tabs.smarthome) && !tabs.smarthome.includes('cclight')) {
+          tabs.smarthome = [...tabs.smarthome, 'cclight'];
+          // tabs.smarthome 缺键 = 该页全部 tab 开放，cclight 随之可用，无需写入
+        }
+        changed = true;
+      }
+      if (ccTabs !== null) { delete tabs.cclight; changed = true; }
+      if (changed) d.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE id=?')
+        .run(JSON.stringify(pages), JSON.stringify(tabs), u.id);
+    }
+  };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] v1.9.23 Agent红绿灯放回智能家居页：用户授权已回迁');
+}
+migrateCclightBackToSmarthome();
+
 // 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
 // （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。
 function migrateClipboardAgent() {

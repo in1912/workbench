@@ -65,8 +65,8 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'pets', 'smarthome', 'cclight', 'settings'];
-// v1.9.22：「Agent红绿灯」从智能家居页的 cclight 子 tab 升格为独立页（用户授权由 db.js 幂等迁移）
+const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'pets', 'smarthome', 'settings'];
+// v1.9.22 曾把「Agent红绿灯」升格独立页；v1.9.23 放回智能家居页 cclight 子 tab（授权由 db.js 幂等迁移回平）
 // v1.8.0：「私有项目」页（mbti/dep/pro 三大测试中心）已整体移除，迁至独立项目 Private_Mini；
 // 历史 allowed_pages/allowed_tabs 里残留的 'private' 键无害（不再有页面/接口映射到它）
 
@@ -93,8 +93,8 @@ function pageForPath(p) {
   // 智能家居（v1.6.8）：米家设备总览/属性读写/能力描述为页内共享；
   // /mihome/callback 在 index.js EXEMPT 免登录名单里（OAuth 回跳无登录态），不经过这里
   if (p.startsWith('/mihome')) return 'smarthome';
-  // Agent红绿灯（CC-LIGHT）v1.8.1 起挂在智能家居页 cclight tab，v1.9.22 升格为独立页
-  if (p.startsWith('/cclight')) return 'cclight';
+  // Agent红绿灯（CC-LIGHT）：挂智能家居页 cclight tab（v1.9.22 曾升格独立页，v1.9.23 放回）
+  if (p.startsWith('/cclight')) return 'smarthome';
   // 智能板（小智 Korvo2V3，v1.9.11）：装机/唤醒词/桥接归智能家居页 xiaozhi tab；
   // /xiaozhi/bridge 在 index.js EXEMPT 免登录（板端固件回连，key 即凭证），不经过这里
   if (p.startsWith('/xiaozhi')) return 'smarthome';
@@ -220,14 +220,10 @@ const TAB_PATHS = {
     ['mijia', []],
     ['terms', []],
     ['xiaozhi', ['/xiaozhi']],
+    // Agent红绿灯（v1.9.23 放回本页）：/cclight 文件清单/单文件/打包下载整块归这一个 tab；
+    // 面板内 功能介绍/下载安装包/安装步骤 三段为纯 UI 子页，无独立权限键
+    ['cclight', ['/cclight']],
     ['settings', ['/mihome/bind', '/mihome/unbind']],
-  ],
-  // Agent红绿灯（v1.9.22 从智能家居子 tab 升格为独立页）：/cclight 文件与打包下载 API 归 download tab；
-  // intro（功能介绍）/ install（安装步骤）为静态内容页，无独立 API 前缀
-  cclight: [
-    ['intro', []],
-    ['download', ['/cclight']],
-    ['install', []],
   ],
 };
 

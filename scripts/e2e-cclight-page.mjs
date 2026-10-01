@@ -1,9 +1,12 @@
-// E2E：「Agent红绿灯」独立页（v1.9.22，从智能家居子 tab 升格）
-// API：pageForPath('/cclight')=cclight → admin 200；迁移（重启触发 db.js 幂等迁移）：
-//   u1（pages=smarthome + tabs.smarthome 含 cclight）→ 补 cclight 页 + tabs.cclight 三键 + smarthome 死键清除；
-//   u3（pages=smarthome + tabs 不含 cclight）→ 不补页；u1 可达 /cclight/files、u3 403。
-// UI：三个子 tab（功能介绍含示例图与灯效表 / 下载安装包含子文件清单 / 安装步骤含 ①刷版②钩子③蓝牙配对 与参考文档）；
-//   旧深链 /smart-home?tab=cclight 重定向 /cc-light；智能家居页不再有 Agent红绿灯 tab；侧栏有独立入口。
+// E2E：「Agent红绿灯」放回智能家居页 cclight 子 tab（v1.9.23，v1.9.22 曾升格独立页后回迁）
+// API：pageForPath('/cclight')=smarthome + TAB_PATHS.smarthome.cclight → 单 tab 语义：
+//   开 smarthome 页 + 勾 cclight → /cclight/files 200；没勾 → 403。
+// 反向迁移（重启触发 db.js 幂等迁移 cclight_back_v1923）植入 v1.9.22 形态验证授权回平：
+//   u1 pages=[smarthome,cclight]+tabs{smarthome:[mijia],cclight:[3子]} → [smarthome]+smarthome:[mijia,cclight]；
+//   u2 pages=[cclight]+tabs{cclight:[intro]} → [smarthome]+smarthome:[cclight]（补页只给单 tab 不扩权）；
+//   u3 cclight:[]（空细分=原本不可见）→ 不平移 cclight；u4 页外死键 tabs.cclight → 删除不补页。
+// UI：智能家居页 5 个 tab（Agent红绿灯在智能板之后）、面板三段子 tab（localStorage.cc_sub 记忆）、
+//   旧地址 /cc-light 重定向 /smart-home?tab=cclight、侧栏无独立入口。
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,56 +41,72 @@ try {
   fs.rmSync(DATA, { recursive: true, force: true });
   fs.mkdirSync(DATA, { recursive: true });
 
-  // ---------- 第一阶段：建用户（旧授权形态），admin 探 API ----------
+  // ---------- 第一阶段：建用户（v1.9.23 形态：cclight 是 smarthome 的合法 tab 键）----------
   srv = await boot();
   const HJ = { 'Content-Type': 'application/json' };
   let lj = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'admin', password: 'test123456' }) })).json();
   const A = { ...HJ, Authorization: 'Bearer ' + lj.token };
 
-  // 模拟 v1.9.21 形态的用户：u1 开了 smarthome 页且勾过 cclight 子 tab；u3 开了 smarthome 页但没勾 cclight
-  await fetch(`${B}/api/users`, { method: 'POST', headers: A, body: JSON.stringify({ username: 'u1', password: 'u123456', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia', 'cclight'] } }) });
-  await fetch(`${B}/api/users`, { method: 'POST', headers: A, body: JSON.stringify({ username: 'u3', password: 'u345678', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia'] } }) });
+  // uA：开 smarthome 页 + 勾 cclight（新形态能建能存——sanitizeTabs 按 TAB_PATHS.smarthome 认这个键）
+  await fetch(`${B}/api/users`, { method: 'POST', headers: A, body: JSON.stringify({ username: 'uA', password: 'ua123456', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia', 'cclight'] } }) });
+  // uB：开 smarthome 页但没勾 cclight
+  await fetch(`${B}/api/users`, { method: 'POST', headers: A, body: JSON.stringify({ username: 'uB', password: 'ub123456', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia'] } }) });
+  // uC/uD：先按新形态建号（第二阶段服务已停，用 sqlite 植入 v1.9.22 形态覆盖）
+  await fetch(`${B}/api/users`, { method: 'POST', headers: A, body: JSON.stringify({ username: 'uC', password: 'uc123456', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia'] } }) });
+  await fetch(`${B}/api/users`, { method: 'POST', headers: A, body: JSON.stringify({ username: 'uD', password: 'ud123456', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia'] } }) });
 
   let r = await fetch(`${B}/api/cclight/files`, { headers: A });
   let j = await r.json();
   ck('A1 admin /cclight/files 200 且清单非空', r.status === 200 && Array.isArray(j.files) && j.files.length > 0, `status=${r.status}`);
 
-  // ---------- 第二阶段：植入 v1.9.21 旧形态授权（API 建不成——新 sanitizeTabs 会剥掉 smarthome.cclight 死键）→ 重启触发迁移 ----------
+  const tA = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'uA', password: 'ua123456' }) })).json();
+  const tB = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'uB', password: 'ub123456' }) })).json();
+  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + tA.token } });
+  ck('A2 uA（smarthome.cclight）200', r.status === 200, `status=${r.status}`);
+  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + tB.token } });
+  ck('A3 uB（smarthome 无 cclight 键）403', r.status === 403, `status=${r.status}`);
+
+  r = await fetch(`${B}/api/users`, { headers: A });
+  const usersArr = await r.json();
+  const uA0 = (Array.isArray(usersArr) ? usersArr : usersArr.users || []).find((x) => x.username === 'uA');
+  ck('A4 新形态授权存得住（smarthome 含 cclight 键）', Array.isArray(uA0?.allowed_tabs?.smarthome) && uA0.allowed_tabs.smarthome.includes('cclight'), JSON.stringify(uA0?.allowed_tabs));
+
+  // ---------- 第二阶段：植入 v1.9.22 形态授权（独立页）→ 重启触发反向迁移 ----------
   srv.kill();
   await sleep(900);
   {
     const { DatabaseSync } = await import('node:sqlite');
     const sdb = new DatabaseSync(path.join(DATA, 'workbench.sqlite'));
-    sdb.prepare("UPDATE users SET allowed_pages='[\"smarthome\"]', allowed_tabs='{\"smarthome\":[\"mijia\",\"cclight\"]}' WHERE username='u1'").run();
-    sdb.prepare("UPDATE users SET allowed_pages='[\"smarthome\"]', allowed_tabs='{\"smarthome\":[\"mijia\"]}' WHERE username='u3'").run();
-    // 第一阶段启动已消费过迁移 guard——删掉才等价于「刚从 v1.9.21 升上来的旧库」
-    sdb.prepare("DELETE FROM settings WHERE key='cclight_page_v1922'").run();
+    const set = (n, pages, tabs) => sdb.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE username=?').run(JSON.stringify(pages), JSON.stringify(tabs), n);
+    set('uA', ['smarthome', 'cclight'], { smarthome: ['mijia'], cclight: ['intro', 'download', 'install'] }); // 升格迁移的典型产物
+    set('uB', ['cclight'], { cclight: ['intro'] });                                                       // 只开过独立页
+    set('uC', ['smarthome', 'cclight'], { smarthome: ['mijia'], cclight: [] });                           // 空细分=内容本就不可见
+    set('uD', ['smarthome'], { smarthome: ['mijia'], cclight: ['intro'] });                               // 页外死键
+    // 第一阶段启动已消费过迁移 guard——删掉才等价于「刚从 v1.9.22 升上来的旧库」
+    sdb.prepare("DELETE FROM settings WHERE key='cclight_back_v1923'").run();
     sdb.close();
   }
   srv = await boot();
 
   r = await fetch(`${B}/api/users`, { headers: A });
-  const users = await r.json();
-  const g = (n) => (Array.isArray(users) ? users : users.users || []).find((x) => x.username === n);
-  const u1 = g('u1'), u3 = g('u3');
-  ck('B1 u1 迁移后补上 cclight 页（紧随 smarthome）', Array.isArray(u1?.allowed_pages) && u1.allowed_pages.includes('cclight') && u1.allowed_pages.indexOf('cclight') === u1.allowed_pages.indexOf('smarthome') + 1, JSON.stringify(u1?.allowed_pages));
-  ck('B2 u1 tabs.cclight = 三子 tab 全开', Array.isArray(u1?.allowed_tabs?.cclight) && u1.allowed_tabs.cclight.join(',') === 'intro,download,install', JSON.stringify(u1?.allowed_tabs));
-  ck('B3 u1 tabs.smarthome 死键已清（只余 mijia）', Array.isArray(u1?.allowed_tabs?.smarthome) && u1.allowed_tabs.smarthome.join(',') === 'mijia', JSON.stringify(u1?.allowed_tabs?.smarthome));
-  ck('B4 u3（原本没勾 cclight）不补页', Array.isArray(u3?.allowed_pages) && !u3.allowed_pages.includes('cclight'), JSON.stringify(u3?.allowed_pages));
+  const us = await r.json();
+  const g = (n) => (Array.isArray(us) ? us : us.users || []).find((x) => x.username === n);
+  const uA = g('uA'), uB = g('uB'), uC = g('uC'), uD = g('uD');
 
-  const t1 = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'u1', password: 'u123456' }) })).json();
-  const t3 = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'u3', password: 'u345678' }) })).json();
-  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + t1.token } });
-  ck('B5 u1（迁得 cclight 页）200', r.status === 200, `status=${r.status}`);
-  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + t3.token } });
-  ck('B6 u3（无 cclight 页）403', r.status === 403, `status=${r.status}`);
+  ck('B1 uA 独立页剥除、cclight 平移进 smarthome 细分', JSON.stringify(uA?.allowed_pages) === '["smarthome"]' && uA?.allowed_tabs?.smarthome?.join(',') === 'mijia,cclight' && !('cclight' in (uA?.allowed_tabs || {})), JSON.stringify(uA?.allowed_pages) + ' ' + JSON.stringify(uA?.allowed_tabs));
+  ck('B2 uB 补 smarthome 页且只给 cclight 单 tab（不扩权）', JSON.stringify(uB?.allowed_pages) === '["smarthome"]' && uB?.allowed_tabs?.smarthome?.join(',') === 'cclight', JSON.stringify(uB?.allowed_pages) + ' ' + JSON.stringify(uB?.allowed_tabs));
+  ck('B3 uC 空细分不平移（内容本就不可见）', JSON.stringify(uC?.allowed_pages) === '["smarthome"]' && uC?.allowed_tabs?.smarthome?.join(',') === 'mijia' && !('cclight' in (uC?.allowed_tabs || {})), JSON.stringify(uC?.allowed_tabs));
+  ck('B4 uD 页外死键删除、其余不动', JSON.stringify(uD?.allowed_pages) === '["smarthome"]' && uD?.allowed_tabs?.smarthome?.join(',') === 'mijia' && !('cclight' in (uD?.allowed_tabs || {})), JSON.stringify(uD?.allowed_tabs));
 
-  // 保存回路：新形态三子 tab 能存住（sanitizeTabs 按 TAB_PATHS 过滤，缺键会被剥）
-  const u1id = u1.id;
-  r = await fetch(`${B}/api/users/${u1id}`, { method: 'PUT', headers: A, body: JSON.stringify({ allowed_pages: ['cclight'], allowed_tabs: { cclight: ['intro', 'download'] } }) });
-  ck('B7 PUT 新形态授权 200', r.status === 200, `status=${r.status}`);
-  const u1b = (await (await fetch(`${B}/api/users`, { headers: A })).json()).find((x) => x.id === u1id);
-  ck('B8 回读 tabs.cclight 保留 2 键', Array.isArray(u1b?.allowed_tabs?.cclight) && u1b.allowed_tabs.cclight.join(',') === 'intro,download', JSON.stringify(u1b?.allowed_tabs));
+  const tA2 = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'uA', password: 'ua123456' }) })).json();
+  const tB2 = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'uB', password: 'ub123456' }) })).json();
+  const tC2 = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'uC', password: 'uc123456' }) })).json();
+  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + tA2.token } });
+  ck('B5 uA 迁移后仍可下载（200）', r.status === 200, `status=${r.status}`);
+  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + tB2.token } });
+  ck('B6 uB 迁移后仍可下载（200）', r.status === 200, `status=${r.status}`);
+  r = await fetch(`${B}/api/cclight/files`, { headers: { Authorization: 'Bearer ' + tC2.token } });
+  ck('B7 uC 迁移后依旧不可见（403）', r.status === 403, `status=${r.status}`);
 
   // ---------- 第三阶段：UI ----------
   const { chromium } = await import('playwright');
@@ -97,52 +116,67 @@ try {
   await ctx.addInitScript((u) => { localStorage.setItem('wb_user', u); }, JSON.stringify(lj.user));
   const p = await ctx.newPage();
 
-  await p.goto(`${B}/#/cc-light`);
+  await p.goto(`${B}/#/smart-home?tab=cclight`);
   await p.waitForSelector('.page-title');
-  ck('C1 页标题 + 三个子 tab', (await p.locator('h2.page-title').innerText()) === 'Agent红绿灯' && await p.locator('.tabs button').count() === 3, await p.locator('.tabs').innerText());
-  ck('C2 子 tab 顺序 = 功能介绍/下载安装包/安装步骤', (await p.locator('.tabs button').allInnerTexts()).join('|') === '功能介绍|下载安装包|安装步骤');
+  ck('C1 智能家居页 5 个 tab，Agent红绿灯在智能板之后', (await p.locator('h2.page-title').innerText()) === '智能家居'
+    && (await p.locator('.tabs button').allInnerTexts()).join('|') === '米家|参数翻译|智能板|Agent红绿灯|设置', await p.locator('.tabs').innerText());
+  ck('C2 Agent红绿灯按钮处于激活态', (await p.locator('.tabs button.active').innerText()) === 'Agent红绿灯');
+
+  await p.waitForSelector('.ccp-tabs button');
+  ck('C3 面板三段子 tab（功能介绍/下载安装包/安装步骤）', (await p.locator('.ccp-tabs button').allInnerTexts()).map((t) => t.trim().replace(/^[^一-龥A-Za-z0-9]+\s*/, '')).join('|') === '功能介绍|下载安装包|安装步骤', await p.locator('.ccp-tabs').innerText());
   await p.waitForSelector('img.cc-demo');
-  ck('C3 功能介绍含示例图与灯效对照表', (await p.locator('img.cc-demo').count()) === 1 && (await p.locator('table.cc-table').first().innerText()).includes('轮播演示'));
+  ck('C4 功能介绍含示例图与灯效对照表', (await p.locator('img.cc-demo').count()) === 1 && (await p.locator('table.cc-table').first().innerText()).includes('轮播演示'));
   await p.screenshot({ path: path.join(ROOT, 'Logs', 'e2e-cclight-intro.png'), fullPage: true });
 
-  await p.locator('.tabs button', { hasText: '下载安装包' }).click();
+  await p.locator('.ccp-tabs button', { hasText: '下载安装包' }).click();
   await p.waitForSelector('.cc-file');
-  ck('C4 下载页：子文件清单渲染（文件名+大小+下载按钮）', await p.locator('.cc-file').count() > 5 && (await p.locator('.cc-file').first().innerText()).includes('KB'));
-  ck('C5 下载页：Windows/macOS 打包按钮', await p.locator('button', { hasText: '打包下载（Windows' }).count() === 1 && await p.locator('button', { hasText: '打包下载（macOS' }).count() === 1);
+  ck('C5 下载页：子文件清单渲染 + 双打包按钮', await p.locator('.cc-file').count() > 5 && (await p.locator('.cc-file').first().innerText()).includes('KB')
+    && await p.locator('button', { hasText: '打包下载（Windows' }).count() === 1 && await p.locator('button', { hasText: '打包下载（macOS' }).count() === 1);
 
-  await p.locator('.tabs button', { hasText: '安装步骤' }).click();
+  await p.locator('.ccp-tabs button', { hasText: '安装步骤' }).click();
   const installTxt = await p.evaluate(() => document.body.innerText);
-  ck('C6 安装页：① 怎么刷版', installTxt.includes('① 怎么刷版') && installTxt.includes('flash-firmware.cmd'));
-  ck('C7 安装页：② 怎么装电脑中的钩子', installTxt.includes('② 怎么装电脑中的钩子') && installTxt.includes('cc-light-install-all.cmd'));
-  ck('C8 安装页：③ 蓝牙配对（无需系统配对说明）', installTxt.includes('③ 怎么做板子的蓝牙配对') && installTxt.includes('Agent light'));
-  ck('C9 安装页：参考文档（外链 ≥ 5 条）', await p.locator('.cc-refs a').count() >= 5);
+  ck('C6 安装页：① 刷版 / ② 电脑钩子 / ③ 蓝牙配对', installTxt.includes('① 怎么刷版') && installTxt.includes('flash-firmware.cmd')
+    && installTxt.includes('② 怎么装电脑中的钩子') && installTxt.includes('③ 怎么做板子的蓝牙配对') && installTxt.includes('Agent light'));
+  ck('C7 安装页：参考文档（外链 ≥ 5 条）', await p.locator('.cc-refs a').count() >= 5);
   await p.screenshot({ path: path.join(ROOT, 'Logs', 'e2e-cclight-install.png'), fullPage: true });
 
-  // 旧深链重定向
-  await p.goto(`${B}/#/smart-home?tab=cclight`);
-  await p.waitForSelector('h2.page-title');
+  // 子 tab 记忆：切到「下载安装包」刷新仍在该段（localStorage.cc_sub）
+  await p.locator('.ccp-tabs button', { hasText: '下载安装包' }).click();
+  await p.reload();
+  await p.waitForSelector('.cc-file');
+  ck('C8 子 tab 用 localStorage 记忆（刷新仍停在下载页）', (await p.locator('.ccp-tabs button.on').innerText()).includes('下载安装包') && await p.locator('.cc-file').count() > 5);
+
+  // 旧地址 /cc-light（v1.9.22 独立页时期的书签）重定向到 /smart-home?tab=cclight
+  await p.goto(`${B}/#/cc-light`);
+  await p.waitForSelector('.page-title');
   await sleep(600);
-  ck('C10 旧深链 /smart-home?tab=cclight → /cc-light', p.url().includes('#/cc-light'), p.url());
+  ck('C9 旧地址 /cc-light → /smart-home?tab=cclight', p.url().includes('#/smart-home') && p.url().includes('tab=cclight') && (await p.locator('.tabs button.active').innerText()) === 'Agent红绿灯', p.url());
 
-  // 智能家居页不再有 Agent红绿灯 tab
-  await p.goto(`${B}/#/smart-home?tab=mijia`);
-  await p.waitForSelector('.tabs button');
-  ck('C11 智能家居页无 Agent红绿灯 tab', await p.locator('.tabs button', { hasText: 'Agent红绿灯' }).count() === 0, await p.locator('.tabs').innerText());
+  // 侧栏不再有独立入口
+  ck('C10 侧栏无「Agent红绿灯」独立入口', await p.locator('a').filter({ hasText: 'Agent红绿灯' }).count() === 0, '侧栏仍有链接');
 
-  // 侧栏独立入口
-  ck('C12 侧栏有「Agent红绿灯」入口', await p.locator('a').filter({ hasText: 'Agent红绿灯' }).count() >= 1, '侧栏未找到链接');
-
-  // 受限成员（只剩 intro/download）：不见安装步骤 tab（重新登录拿 B7 改权后的新 user 对象）
-  const t1b = await (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: HJ, body: JSON.stringify({ username: 'u1', password: 'u123456' }) })).json();
+  // 受限成员（uB：只有 cclight 一个 tab）——按钮可见、面板可用、三段全开（单 tab 语义无子段权限）
   const ctx2 = await browser.newContext();
-  await ctx2.addInitScript((t) => { localStorage.setItem('wb_token', t); }, t1b.token);
-  await ctx2.addInitScript((u) => { localStorage.setItem('wb_user', u); }, JSON.stringify(t1b.user));
+  await ctx2.addInitScript((t) => { localStorage.setItem('wb_token', t); }, tB2.token);
+  await ctx2.addInitScript((u) => { localStorage.setItem('wb_user', u); }, JSON.stringify(tB2.user));
   const p2 = await ctx2.newPage();
-  await p2.goto(`${B}/#/cc-light`);
+  await p2.goto(`${B}/#/smart-home`);
   await p2.waitForSelector('.tabs button');
-  ck('C13 u1 只见授权的 2 个子 tab（无安装步骤）', await p2.locator('.tabs button').count() === 2 && await p2.locator('.tabs button', { hasText: '安装步骤' }).count() === 0, await p2.locator('.tabs').innerText());
+  ck('C11 uB 只见授权的 Agent红绿灯 tab（无米家/设置）', (await p2.locator('.tabs button').allInnerTexts()).join('|') === 'Agent红绿灯', await p2.locator('.tabs').innerText());
+  await p2.locator('.tabs button', { hasText: 'Agent红绿灯' }).click();
+  await p2.waitForSelector('.ccp-tabs button');
+  ck('C12 uB 面板三段全开（单 tab 语义）', await p2.locator('.ccp-tabs button').count() === 3, await p2.locator('.ccp-tabs').innerText());
 
-  console.log(`\n== Agent红绿灯独立页 e2e: ${pass} 通过 / ${fail} 失败 ==`);
+  // 未授权成员（uC）：无按钮（API 403 已在 B7 验证）
+  const ctx3 = await browser.newContext();
+  await ctx3.addInitScript((t) => { localStorage.setItem('wb_token', t); }, tC2.token);
+  await ctx3.addInitScript((u) => { localStorage.setItem('wb_user', u); }, JSON.stringify(tC2.user));
+  const p3 = await ctx3.newPage();
+  await p3.goto(`${B}/#/smart-home`);
+  await p3.waitForSelector('.tabs button');
+  ck('C13 uC 不见 Agent红绿灯按钮', await p3.locator('.tabs button', { hasText: 'Agent红绿灯' }).count() === 0, await p3.locator('.tabs').innerText());
+
+  console.log(`\n== Agent红绿灯回迁智能家居 e2e: ${pass} 通过 / ${fail} 失败 ==`);
 } catch (e) {
   fail++;
   console.error('e2e 异常：', e);
