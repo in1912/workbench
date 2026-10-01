@@ -198,6 +198,13 @@ try {
       && (await p.locator('.ext-row button', { hasText: 'VLC 播放' }).count()) === 1
       && (await p.locator('.ext-row button', { hasText: '复制直链' }).count()) === 1, '外部播放器按钮行齐（PotPlayer / VLC / 复制直链）');
     ok((await p.locator('.ext-row').innerText()).includes('与视频教学共用一份'), '联动脚本提示注明与视频教学共用');
+    // v1.9.27 回归：复制直链必须是完整绝对 URL——potplayer:// 协议调起与外部粘贴拿到相对路径就是废链
+    // （曾因 localBase 内网访问时 mediaBase 为空串，拼出 /api/vc/file?... 无 host 残链）
+    await p.evaluate(() => { window.__copied = ''; navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve(); }; });
+    await p.locator('.ext-row button', { hasText: '复制直链' }).click();
+    await p.waitForTimeout(300);
+    const copied = await p.evaluate(() => window.__copied);
+    ok(/^https?:\/\/.+\/api\/vc\/file\?path=.+&token=/.test(copied), '复制直链为绝对 URL（含 host + token）: ' + (copied ? copied.slice(0, 70) + '…' : '（空）'));
     ok((await p.locator('.zone-head', { hasText: '视频1.mp4' }).count()) === 1, '播放区标题显示文件名');
     // 打开时查断点（admin 上面看过 540s → resume 查询应发出；伪 mp4 无时长不会真 seek，但查询必须发生）
     ok(true, '（进度查询随播放自动发起，API 段已覆盖记录语义）');

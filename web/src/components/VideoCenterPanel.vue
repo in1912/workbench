@@ -63,7 +63,7 @@
 // 进度口径与 vstudy 相同：position=历史最大播放位置、watched=实际观看增量，15 秒一批上报。
 import { onBeforeUnmount, onMounted, provide, ref } from 'vue';
 import { api } from '../api';
-import { localState, probeLocalBase } from '../utils/localBase';
+import { localState, probeLocalBase, sameOriginBase } from '../utils/localBase';
 import VsTreeNode from '../learning/VsTreeNode.vue';
 
 const getToken = () => localStorage.getItem('wb_token') || '';
@@ -95,8 +95,9 @@ function applyLocal() {
 }
 const onLocalEvt = () => applyLocal();
 
+// mediaBase 为空（本就在内网）时兜底同源绝对前缀——外部播放器协议调起与「复制直链」必须拿到完整 URL
 const fileUrl = (rel, download = false) =>
-  `${mediaBase}/api/vc/file?path=${encodeURIComponent(rel)}${download ? '&download=1' : ''}&token=${encodeURIComponent(getToken())}`;
+  `${mediaBase || sameOriginBase()}/api/vc/file?path=${encodeURIComponent(rel)}${download ? '&download=1' : ''}&token=${encodeURIComponent(getToken())}`;
 
 // VsTreeNode 的点击回调（inject 键与视频教学同名——同一时刻只挂一个面板，不冲突）
 provide('vstudySelectFile', (rel, entry) => {

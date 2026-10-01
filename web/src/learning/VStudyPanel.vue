@@ -151,7 +151,7 @@
 // 学习会话：每打开一个文件 = 一次会话（/vstudy/session/*），开始页下方「历史学习列表」按会话展示明细。
 import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
 import { api } from '../api';
-import { localState, probeLocalBase } from '../utils/localBase';
+import { localState, probeLocalBase, sameOriginBase } from '../utils/localBase';
 import VsTreeNode from './VsTreeNode.vue';
 
 const getToken = () => localStorage.getItem('wb_token') || '';
@@ -201,8 +201,9 @@ function applyLocal() {
 }
 const onLocalEvt = () => applyLocal();
 
+// mediaBase 为空（本就在内网）时兜底同源绝对前缀——外部播放器协议调起与「复制直链」必须拿到完整 URL
 const fileUrl = (rel, download = false) =>
-  `${mediaBase}/api/vstudy/file?path=${encodeURIComponent(rel)}${download ? '&download=1' : ''}&token=${encodeURIComponent(getToken())}`;
+  `${mediaBase || sameOriginBase()}/api/vstudy/file?path=${encodeURIComponent(rel)}${download ? '&download=1' : ''}&token=${encodeURIComponent(getToken())}`;
 
 provide('vstudySelectFile', (rel, entry) => {
   if (entry.kind === 'media') playMedia(rel, entry);

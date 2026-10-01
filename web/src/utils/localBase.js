@@ -3,7 +3,7 @@
 // 可达则学习页大文件（视频/音频/PDF/图片）自动改走该地址。探测是后台异步请求，不阻塞界面。
 // 学习页与内外网徽标共用同一份缓存（wb_local_base，与设置页保存后清缓存的键一致，勿改名）
 // 和同一事件（wb-local-base，探测完成广播），单飞去重避免重复发请求。
-import { api } from '../api';
+import { api, prefixUrl } from '../api';
 import { netZone } from './netZone';
 
 const KEY = 'wb_local_base';
@@ -22,6 +22,13 @@ export function effectiveBase() {
   if (netZone() === 'lan') return '';
   const c = readCache();
   return c && c.ok && Date.now() - c.at < OK_TTL ? c.base : '';
+}
+
+// 同源绝对前缀（含 fnOS 网关 /app/{appname} 前缀）：mediaBase 为空（本就在内网/未配直连）时，
+// 页面内 <video>/<img> 用相对路径没问题，但外部播放器（potplayer:// 协议调起）和「复制直链」
+// 拿到没有 host 的相对路径就是废链——播放器开了没流、贴到 PotPlayer 里也放不了。兜底拼全。
+export function sameOriginBase() {
+  return location.origin + prefixUrl('');
 }
 
 // 通道全貌：lan=当前就在内网地址上；configured=设置里配了地址；ok=探测可达；base=生效的本地源前缀
