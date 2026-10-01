@@ -245,7 +245,7 @@ router.post('/xiaozhi/chat', asyncH(async (req, res) => {
   const b = svc.getBoardInfo();
   if (!b.ip) return res.status(503).json({ error: '还不知道板子的 IP——板子连着网并已烧录 v1.9.18 固件后会自动登记（最多等 1 分钟）' });
   const on = (req.body || {}).on ? 1 : 0;
-  const r = await boardHttpGet(`http://${b.ip}:81/chat?k=${encodeURIComponent(svc.ensureBridgeKey())}&on=${on}`, 4000);
+  const r = await boardHttpGet(`http://${b.ip}:81/chat?k=${encodeURIComponent(svc.ensureBridgeKey())}&on=${on}`, 8000); // 8s：视频流活跃时板子 httpd 被推流挤占，应答实测 2.4s+（v1.9.21 真机），4s 会误杀
   if (!r.ok) {
     return res.status(502).json({ ok: false, error: `连不上板子（${b.ip}:81，${r.stage}${r.err ? '：' + r.err : ''}）——板子离线或固件未升级` });
   }

@@ -487,17 +487,20 @@ const videoUrl = computed(() => `/api/xiaozhi/video?token=${token()}`);
 async function loadBoard() {
   try { board.value = await api.get('/xiaozhi/board'); } catch { /* 排障信息而已，失败不打扰 */ }
 }
-// 一键开关：开=画面+对话一起拉起（缺哪边补哪边），关=两边一起收。部分失败不回滚另一边——状态行看得到，再点一次补齐
+// 一键开关：开=对话先行、画面跟上（v1.9.21 真机实测：视频流活跃时板子应答 /chat 要 2.4s+，
+// 先开流再发指令容易顶到超时 502——所以两个方向都按「无流竞争」的顺序发：开=先指令后挂流，关=先摘流后指令）。
+// 部分失败不回滚另一边——状态行看得到，再点一次补齐
 async function toggleSession() {
   sessionBusy.value = true;
   try {
     if (sessionOn.value) {
-      liveOn.value = false; // 先摘 <img> 断流（省得指令超时还占着板子编码）
+      liveOn.value = false; // 先摘 <img> 断流，板子 httpd 不再被推流挤占，结束指令毫秒级
       await setVoice(false);
       flashOk('已结束视频对话');
     } else {
-      if (!liveOn.value) { liveOn.value = true; loadBoard(); } // 开流顺带刷一次板子状态（错误提示里好用）
-      const ok = await setVoice(true);
+      const ok = await setVoice(true); // 对话指令先发（此刻无流，0.2s 级应答），板子随即进入监听
+      liveOn.value = true; // 再挂画面（对话失败也挂——看着画面排障，状态行能看出对话缺着）
+      loadBoard(); // 开流顺带刷一次板子状态（错误提示里好用）
       if (ok) flashOk('视频对话已开启——看着画面直接对它说话');
     }
   } finally { sessionBusy.value = false; }
