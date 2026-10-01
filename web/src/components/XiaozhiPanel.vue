@@ -63,13 +63,10 @@
           <b>绑定小智控制台（xiaozhi.me）</b>
           <p class="xz-muted">
             配网成功后板子会显示 <b>6 位激活码</b>并播报。到控制台注册/登录（免费）→ 添加设备 → 输入激活码完成绑定，
-            之后对话走虾哥云端 AI。建议<b>新窗口完成登录</b>（控制台对 iframe 内登录的兼容性不保证）：
+            之后对话走虾哥云端 AI。绑定信息存在板子里，重启不用重输：
           </p>
-          <div class="xz-frame-wrap xz-frame-me">
-            <iframe src="https://xiaozhi.me" title="小智控制台"></iframe>
-          </div>
           <div class="xz-dl-row" style="margin-top:6px">
-            <a class="btn" href="https://xiaozhi.me" target="_blank" rel="noopener">🆕 新窗口打开 xiaozhi.me</a>
+            <a class="btn" href="https://xiaozhi.me" target="_blank" rel="noopener">🆕 打开 xiaozhi.me 控制台（新窗口）</a>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.13
+version=1.9.14
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=语音控米家稳定性修复：板子 WiFi 弱信号下设备列表回包过大（14KB）传输 16 秒拖垮小智云端长连接，工具结果发不回去报「发送失败」——list_devices 回包瘦身（只发名字/房间/开关状态，省略纯传感器与内部点位数据，14KB→约 4KB），控制能力不受影响（设备解析在服务端做）。上一版（1.9.12）：构建机地址代理 + speaker.did 校验修复。
+changelog=智能板装机向导第 ④ 步（绑定小智控制台）去掉内嵌 iframe，改为新窗口链接直达（控制台站内登录在 iframe 内兼容性不佳）。上一版（1.9.13）：语音控米家稳定性修复——list_devices 回包瘦身防弱信号下拖垮 MQTT。
