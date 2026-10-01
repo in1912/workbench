@@ -3,11 +3,12 @@
     <h2 class="page-title">智能家居</h2>
     <div class="tabs">
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
-      <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">参数翻译</button>
       <button v-if="canTab('smarthome','xiaozhi')" :class="{active: tab==='xiaozhi'}" @click="switchTab('xiaozhi')">智能板</button>
       <!-- Agent红绿灯（v1.8.1 起为本页子 tab；v1.9.22 曾升格独立页，v1.9.23 放回智能板之后） -->
       <button v-if="canTab('smarthome','cclight')" :class="{active: tab==='cclight'}" @click="switchTab('cclight')">Agent红绿灯</button>
       <button v-if="canTab('smarthome','settings')" :class="{active: tab==='settings'}" @click="switchTab('settings')">米家设置</button>
+      <!-- 参数翻译（v1.9.24 更名「米家参数翻译」并移到米家设置之后） -->
+      <button v-if="canTab('smarthome','terms')" :class="{active: tab==='terms'}" @click="switchTab('terms')">米家参数翻译</button>
     </div>
 
     <div v-if="err" class="msg err">{{ err }}</div>
