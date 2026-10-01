@@ -231,7 +231,16 @@ router.post('/xiaozhi/chat', asyncH(async (req, res) => {
       signal: AbortSignal.timeout(4000),
     });
     const t = await r.text();
-    res.status(r.statusCode).type('json').send(t); // 板端 {ok,message} 原样透传
+    // 板端 {ok,message} 原样透传；非 JSON 一律不透传（v1.9.21 实测：登记的 IP 若是端口转发改写出的 127.0.0.1，
+    // 这一步会打到 NAS 上别的服务，回 HTML 错误页——原样透传就成了「HTTP 502 非 JSON」的天书）
+    let parsed = null;
+    try { parsed = JSON.parse(t); } catch { /* 非 JSON，走下面的统一提示 */ }
+    if (parsed && typeof parsed === 'object') return res.status(r.statusCode).json(parsed);
+    res.status(502).json({
+      ok: false,
+      error: `板子对话接口回了非预期内容（HTTP ${r.statusCode}）——多半是登记到的 IP「${b.ip}」不是板子本体` +
+        '（生产端口转发会改写来源地址）。请确认板子已烧录 v1.9.20+ 固件（poll 自报 IP），稍等 1 分钟再试。',
+    });
   } catch (e) {
     res.status(502).json({ ok: false, error: `连不上板子（${b.ip}:81）：${e.message}——板子离线或固件未升级` });
   }

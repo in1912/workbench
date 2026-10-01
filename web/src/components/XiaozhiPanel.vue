@@ -303,17 +303,19 @@
       <div class="card">
         <h3 style="margin:0 0 4px">🎥 视频对话（板子摄像头 + 麦克风扬声器）</h3>
         <p class="xz-muted" style="margin:0 0 14px">
-          「开启视频」网页实时显示板子看到的画面（约 2-4 帧/秒，画面经工作台中转，外网也能看）；
-          「开始对话」板子立刻进入对话模式——<b>对板子说话，回应从板子扬声器播出</b>（用的是板子的麦克风和喇叭，不是电脑的）。
-          两者可同时开：看着画面问它问题。
+          一个按钮同步开两件事：网页实时显示板子看到的画面（约 2-4 帧/秒，画面经工作台中转，外网也能看），
+          同时板子立刻进入对话模式——<b>看着画面直接对它说话，回应从板子扬声器播出</b>（用的是板子的麦克风和喇叭，不是电脑的）。
         </p>
         <div class="xz-actions" style="margin-top:0">
-          <button class="btn primary" @click="toggleLive">{{ liveOn ? '⏹ 关闭视频' : '▶ 开启视频' }}</button>
-          <button class="btn" :disabled="chatBusy || !board.ip" @click="chatCmd(1)">{{ chatBusy ? '…' : '🎤 开始对话' }}</button>
-          <button class="btn" :disabled="chatBusy || !board.ip" @click="chatCmd(0)">⏹ 结束对话</button>
+          <button class="btn primary" :disabled="sessionBusy" @click="toggleSession">
+            {{ sessionBusy ? '… 处理中' : sessionOn ? '⏹ 结束视频对话' : '🎥 开启视频对话' }}
+          </button>
           <button class="btn" :disabled="busy.photo" @click="requestPhoto">📸 拍一张</button>
         </div>
         <p class="xz-muted" style="margin:6px 0 0">
+          画面：{{ liveOn ? '✅ 开' : '⬜ 关' }} · 对话：{{ voiceOn ? '✅ 开' : '⬜ 关' }}
+          <template v-if="liveOn !== voiceOn">（两边没对齐——再点一次按钮补齐缺的那边）</template>
+          <br />
           板子：{{ board.ip ? `${board.ip}${board.online ? ' · 在线' : ' · 刚刚失联'}` : 'IP 未登记（板子连着网并已烧录 v1.9.18 固件后，最迟约 1 分钟自动登记）' }}
           <button class="btn sm ghost" style="margin-left:6px" @click="loadBoard">⟳</button>
         </p>
@@ -322,10 +324,10 @@
           <span class="xz-live-tag">● LIVE</span>
         </div>
         <div v-else class="xz-muted" style="margin-top:12px">
-          （视频默认关闭：开着流板子会持续采集编码耗电耗 CPU，不用时记得关。流断了会自动停，重新点「开启视频」即可。）
+          （视频默认关闭：开着流板子会持续采集编码耗电耗 CPU，不用时记得关。流断了会自动停，重新点按钮即可。）
         </div>
         <small class="xz-muted" style="display:block;margin-top:6px">
-          需已烧录 v1.9.18 固件；对话中喊「你看到了什么」这类视觉问答建议先关视频（板子同一颗摄像头，两条链路抢帧）。
+          需已烧录 v1.9.18 固件；对话中喊「你看到了什么」这类视觉问答建议先结束视频对话（板子同一颗摄像头，两条链路抢帧）。
         </small>
       </div>
     </template>
@@ -475,31 +477,44 @@ async function onChatScroll() {
   chat.loadingMore = false;
 }
 
-// ---------- 视频对话（v1.9.18）：MJPEG 流经工作台代理（?token= 同照片先例）；对话指令直达板子 ----------
+// ---------- 视频对话（v1.9.18 建，v1.9.21 一键同步）：MJPEG 流经工作台代理（?token= 同照片先例）；对话指令直达板子 ----------
 const board = ref({ ip: '', seen_at: 0, online: false });
 const liveOn = ref(false); // 流开关——img 只在开时挂载，关=断连接，板子随之停止推帧
-const chatBusy = ref(false);
+const voiceOn = ref(false); // 对话开关（板子 StartListening/StopListening 的镜像，指令成功才置位）
+const sessionBusy = ref(false);
+const sessionOn = computed(() => liveOn.value && voiceOn.value); // 两边都开才算「进行中」
 const videoUrl = computed(() => `/api/xiaozhi/video?token=${token()}`);
 async function loadBoard() {
   try { board.value = await api.get('/xiaozhi/board'); } catch { /* 排障信息而已，失败不打扰 */ }
 }
-function toggleLive() {
-  liveOn.value = !liveOn.value;
-  if (liveOn.value) loadBoard(); // 开流顺带刷一次板子状态（错误提示里好用）
+// 一键开关：开=画面+对话一起拉起（缺哪边补哪边），关=两边一起收。部分失败不回滚另一边——状态行看得到，再点一次补齐
+async function toggleSession() {
+  sessionBusy.value = true;
+  try {
+    if (sessionOn.value) {
+      liveOn.value = false; // 先摘 <img> 断流（省得指令超时还占着板子编码）
+      await setVoice(false);
+      flashOk('已结束视频对话');
+    } else {
+      if (!liveOn.value) { liveOn.value = true; loadBoard(); } // 开流顺带刷一次板子状态（错误提示里好用）
+      const ok = await setVoice(true);
+      if (ok) flashOk('视频对话已开启——看着画面直接对它说话');
+    }
+  } finally { sessionBusy.value = false; }
+}
+async function setVoice(on) {
+  try {
+    await api.post('/xiaozhi/chat', { on });
+    voiceOn.value = on;
+    return true;
+  } catch (e) {
+    flashErr((on ? '开启对话失败' : '结束对话失败') + '：' + e.message);
+    return false;
+  }
 }
 function liveStreamBroken() {
   liveOn.value = false;
-  flashErr('视频流断了（板子可能重启/断网）——稍后重新开启');
-}
-async function chatCmd(on) {
-  chatBusy.value = true;
-  try {
-    await api.post('/xiaozhi/chat', { on });
-    flashOk(on ? '已让板子开始对话——现在对它说话即可' : '已结束对话');
-  } catch (e) {
-    flashErr('对话指令失败：' + e.message);
-  }
-  chatBusy.value = false;
+  flashErr('视频流断了（板子可能重启/断网）——稍后再点按钮重开（对话若还开着会一并补齐）');
 }
 
 // ---------- 家庭过滤 + 快捷开关（v1.9.17） ----------
