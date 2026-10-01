@@ -41,18 +41,12 @@
           <b>配网（板子连家里 WiFi）</b>
           <p class="xz-muted">
             板子上电/烧录后自动进配网模式，屏幕显示热点名（形如 <code>Xiaozhi-XXXX</code>，开放无密码）。
-            用<b>手机或电脑连上这个热点</b>，浏览器打开 <code>http://192.168.4.1</code>，选家里 WiFi 输密码提交。
+            用<b>手机或电脑连上这个热点</b>，点下面的按钮（或浏览器打开 <code>http://192.168.4.1</code>），选家里 WiFi 输密码提交。
+            配网信息存在板子里，重启不用重配：
           </p>
-          <!-- 混合内容：https 页面（生产域名）嵌不了 http 内网页，只给新窗口按钮；http 内网访问直接嵌 -->
-          <template v-if="isHttp">
-            <div class="xz-frame-wrap">
-              <iframe src="http://192.168.4.1" title="小智配网页"></iframe>
-            </div>
-            <p class="xz-muted" style="margin:6px 0 0">↑ 已嵌入板端配网页：先连上 Xiaozhi-XXXX 热点，再在这里直接配网。（没连热点时页面打不开是正常的）</p>
-          </template>
-          <div v-else class="xz-dl-row">
-            <a class="btn primary" href="http://192.168.4.1" target="_blank" rel="noopener">🆕 新窗口打开配网页 192.168.4.1</a>
-            <span class="xz-muted">生产域名为 https，浏览器禁止嵌入 http 内网页——请先连板子热点，再点按钮。</span>
+          <div class="xz-dl-row">
+            <a class="btn primary" href="http://192.168.4.1" target="_blank" rel="noopener">🆕 打开配网页 192.168.4.1（新窗口）</a>
+            <span class="xz-muted">先连上 Xiaozhi-XXXX 热点再打开；没连热点时页面打不开是正常的。</span>
           </div>
         </div>
       </div>
@@ -277,7 +271,6 @@ import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { api } from '../api';
 
 const isAdmin = (() => { try { return (JSON.parse(localStorage.getItem('wb_user') || '{}') || {}).role === 'admin'; } catch { return false; } })();
-const isHttp = typeof location !== 'undefined' && location.protocol === 'http:';
 
 const cap = ref({ canBuild: false, canFlash: false, isWindows: true, firmware: {}, paths: {} });
 const cfg = ref({ wake: { pinyin: '', display: '', threshold: 20 }, channel: 'direct', speaker: {}, bridge: { url: '' }, paths: {} });
@@ -463,8 +456,6 @@ onBeforeUnmount(stopPoll);
 .xz-step-body { flex: 1; min-width: 0; }
 .xz-dl-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
 .xz-jump { color: var(--accent, #2563eb); font-size: 13px; text-decoration: none; }
-.xz-frame-wrap { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; overflow: hidden; background: #fff; }
-.xz-frame-wrap iframe { width: 100%; height: 380px; border: 0; display: block; }
 .xz-cap { border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
 .xz-cap-ok { background: rgba(30, 158, 104, .08); color: var(--ok, #1e9e68); }
 .xz-cap-warn { background: rgba(234, 179, 8, .1); color: #a16207; }

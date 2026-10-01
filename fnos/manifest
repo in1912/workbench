@@ -1,5 +1,5 @@
 appname=qgworkbench
-version=1.9.14
+version=1.9.15
 display_name=全能工作台
 desc=自托管家庭/个人效率中枢：13 个模块（今日看板/新闻/邮箱/笔记/学习/日程/家庭管理/效率工具/AI助手/电子宠物/短消息/米家智能家居/设置），多成员双层权限，SQLite 存储、数据全在 NAS 本地。通过 fnOS 统一网关嵌入桌面（NAS 账号免登直进），也支持局域网直连 7777 端口。源码：https://github.com/in1912/workbench
 source=thirdparty
@@ -17,4 +17,4 @@ desktop_applaunchname=qgworkbench.main
 ctl_stop=true
 disable_authorization_path=true
 
-changelog=智能板装机向导第 ④ 步（绑定小智控制台）去掉内嵌 iframe，改为新窗口链接直达（控制台站内登录在 iframe 内兼容性不佳）。上一版（1.9.13）：语音控米家稳定性修复——list_devices 回包瘦身防弱信号下拖垮 MQTT。
+changelog=智能板装机向导 ③ 配网步骤同样去掉内嵌 iframe，改为新窗口链接（与 ④ 控制台一致；连上板子热点后点按钮直达 192.168.4.1，混合内容分支与死代码一并清理）。上一版（1.9.14）：④ 步控制台改链接。
