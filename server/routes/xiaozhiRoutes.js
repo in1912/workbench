@@ -240,6 +240,11 @@ router.post('/xiaozhi/chat', asyncH(async (req, res) => {
 // GET /xiaozhi/board：板子 IP / 在线状态（面板显示与排障）
 router.get('/xiaozhi/board', (req, res) => res.json(svc.getBoardInfo()));
 
+// GET /xiaozhi/chatlog：对话记录分页（?before_id=&limit=，默认最新 50 条≈3 屏；向上滚动加载更早）
+router.get('/xiaozhi/chatlog', (req, res) => {
+  res.json(svc.listChatLog({ beforeId: req.query.before_id, limit: req.query.limit }));
+});
+
 // ---------- 智能屏动作点位自动探测 + 试播/转述测试（登录 + tab 即可） ----------
 router.post('/xiaozhi/speaker-probe', asyncH(async (req, res) => {
   const sp = await svc.ensureSpeakerPoints(true);

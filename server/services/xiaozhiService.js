@@ -275,6 +275,41 @@ function getBoardInfo() {
   return { ip, seen_at: seen, online: !!ip && Date.now() - seen < 90000 }; // 轮询周期 25s，3 个周期没来视为离线
 }
 
+// ---------- 对话记录（v1.9.19）：板子上报 stt/tts 攒批入库 + 面板分页读取 ----------
+const CHATLOG_KEEP_MAX = 5000; // 容量上限（约数千轮对话），写满清最老——同照片相册的思路
+
+function appendChatLog(messages) {
+  const now = Date.now();
+  const rows = [];
+  for (const m of Array.isArray(messages) ? messages.slice(0, 64) : []) { // 单批上限防异常包
+    const role = m && m.role === 'user' ? 'user' : 'assistant';
+    const text = String((m && m.text) || '').trim().slice(0, 1000);
+    if (!text) continue;
+    let ts = Number(m && m.ts_ms);
+    if (!Number.isFinite(ts) || ts < 1e12 || ts > now + 600000) ts = now; // 板钟未同步（1970）/超前用服务端时间
+    rows.push([ts, role, text]);
+  }
+  if (!rows.length) return 0;
+  const ins = db.prepare('INSERT INTO xiaozhi_chat_log (ts, role, text) VALUES (?, ?, ?)');
+  for (const r of rows) ins.run(r[0], r[1], r[2]);
+  const total = db.prepare('SELECT COUNT(*) c FROM xiaozhi_chat_log').get().c;
+  if (total > CHATLOG_KEEP_MAX) {
+    db.prepare('DELETE FROM xiaozhi_chat_log WHERE id IN (SELECT id FROM xiaozhi_chat_log ORDER BY id LIMIT ?)')
+      .run(total - CHATLOG_KEEP_MAX);
+  }
+  return rows.length;
+}
+
+// 面板「对话记录」分页：默认最新一页（≈3 屏），向上滚动带 before_id 再取更早的
+function listChatLog({ beforeId, limit } = {}) {
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const before = Number(beforeId) || null;
+  const rows = before
+    ? db.prepare('SELECT id, ts, role, text FROM xiaozhi_chat_log WHERE id < ? ORDER BY id DESC LIMIT ?').all(before, lim + 1)
+    : db.prepare('SELECT id, ts, role, text FROM xiaozhi_chat_log ORDER BY id DESC LIMIT ?').all(lim + 1);
+  return { messages: rows.slice(0, lim).reverse(), has_more: rows.length > lim }; // 时间正序返回，prepend 用
+}
+
 // ---------- 桥接统一入口（POST /xiaozhi/bridge，index.js EXEMPT + key） ----------
 // 返回恒为业务 JSON（ok/message），HTTP 层只对密钥错回 403——固件侧好把 message 直接念给用户。
 async function dispatch(op, body) {
@@ -322,7 +357,12 @@ async function dispatch(op, body) {
       if (wanted) setSetting(db, PHOTO_PENDING_KEY, '');
       return { ok: true, photo_requested: wanted, message: wanted ? '请拍照上传' : '' };
     }
-    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll）` };
+    if (op === 'chatlog') {
+      // 板子攒批上报的对话记录（v1.9.19）：空批也回 ok——让板子清掉重试，别死循环
+      const n = appendChatLog(b.messages);
+      return { ok: true, message: n ? `已记录 ${n} 条对话` : '' };
+    }
+    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll / chatlog）` };
   } catch (e) {
     console.error('[xiaozhi] bridge', op, e.message);
     return { ok: false, message: `桥接处理失败：${e.message}` };
@@ -333,5 +373,5 @@ module.exports = {
   getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk,
   listDevicesForBridge, setDeviceAlias, dispatch, speakerAction, ensureSpeakerPoints,
   setPhotoPending, listPhotos, savePhoto, deletePhoto, photoPath,
-  noteBoardIp, getBoardInfo,
+  noteBoardIp, getBoardInfo, appendChatLog, listChatLog,
 };

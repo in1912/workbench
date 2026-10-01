@@ -5,6 +5,7 @@
       <button :class="{ on: sub === 'guide' }" @click="switchSub('guide')">🛠 装机向导</button>
       <button :class="{ on: sub === 'voice' }" @click="switchSub('voice')">🏠 语音控米家</button>
       <button :class="{ on: sub === 'live' }" @click="switchSub('live')">🎥 视频对话</button>
+      <button :class="{ on: sub === 'history' }" @click="switchSub('history')">💬 对话记录</button>
       <button :class="{ on: sub === 'camera' }" @click="switchSub('camera')">📷 摄像头</button>
     </div>
 
@@ -329,6 +330,32 @@
       </div>
     </template>
 
+    <!-- ============ 对话记录（v1.9.19）：与板子的全部对话，聊天窗口式，向上滚动加载更早 ======== -->
+    <template v-else-if="sub === 'history'">
+      <div class="card">
+        <h3 style="margin:0 0 4px">💬 对话记录（与{{ boardName }}的全部对话）</h3>
+        <p class="xz-muted" style="margin:0 0 10px">
+          板子听到的每句话（右侧）和{{ boardName }}的每句应答（左侧）都自动存进工作台；
+          默认显示最新一段，向上滚动到顶自动加载更早的（每次约 3 屏）。需已烧录 v1.9.19 固件之后的对话才有记录。
+          <button class="btn sm ghost" style="margin-left:6px" :disabled="busy.chat" @click="loadChat()">{{ busy.chat ? '加载中…' : '⟳ 刷新' }}</button>
+        </p>
+        <div v-if="!chat.messages.length && !busy.chat" class="xz-muted" style="padding:28px 0;text-align:center">
+          还没有对话记录——对着板子说句话，几秒后刷新就能看到（固件每 3 秒攒批上报）。
+        </div>
+        <div v-else class="xz-chat" ref="chatBox" @scroll="onChatScroll">
+          <div v-if="chat.loadingMore" class="xz-chat-hint">加载更早的记录…</div>
+          <div v-else-if="!chat.hasMore" class="xz-chat-hint">—— 没有更早的了 ——</div>
+          <div v-for="m in chat.messages" :key="m.id" class="xz-chat-row" :class="m.role">
+            <div class="xz-bubble" :class="m.role">
+              <span v-if="m.role === 'assistant'" class="xz-chat-name">{{ boardName }}</span>
+              <span class="xz-chat-text">{{ m.text }}</span>
+              <span class="xz-chat-time" :title="fmtTime(m.ts)">{{ fmtChatTime(m.ts) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- ============ 摄像头（v1.9.17） ============ -->
     <template v-else>
       <div class="card">
@@ -396,22 +423,56 @@ const form = reactive({
   speaker: { did: '', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 },
 });
 const ports = ref([]);
-const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false });
+const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false });
 const probeMsg = ref(''); const probeOk = ref(false);
 const spProbeMsg = ref(''); const spTestMsg = ref('');
 const testText = ref('');
 const devices = ref([]); const showDevices = ref(false);
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 
-// ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 视频对话 / 摄像头 ----------
-const SUBS = ['guide', 'voice', 'live', 'camera'];
+// ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 ----------
+const SUBS = ['guide', 'voice', 'live', 'history', 'camera'];
 const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'guide');
 function switchSub(s) {
   sub.value = s;
   localStorage.setItem('xz_sub', s);
   if (s === 'voice') loadDevices(false); // 台数随标题显示，切过来就拉最新
   if (s === 'live') loadBoard();
+  if (s === 'history') loadChat();
   if (s === 'camera') loadPhotos();
+}
+
+// ---------- 对话记录（v1.9.19）：聊天窗口，左=板子应答，右=用户指令；向上滚动翻更早 ----------
+const chat = reactive({ messages: [], hasMore: false, loadingMore: false });
+const chatBox = ref(null);
+const boardName = computed(() => cfg.value.wake?.display || '小阳阳'); // 板子的称呼跟唤醒词显示名走
+const fmtChatTime = (t) => { try { return new Date(t).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }); } catch { return ''; } };
+async function loadChat() {
+  busy.chat = true;
+  try {
+    const r = await api.get('/xiaozhi/chatlog?limit=50'); // 一页 50 条≈3 屏
+    chat.messages = r.messages || [];
+    chat.hasMore = !!r.has_more;
+    await nextTick(); // 默认滚到底：进来直接看到最新一轮对话
+    if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight;
+  } catch (e) { flashErr('对话记录加载失败：' + e.message); }
+  busy.chat = false;
+}
+async function onChatScroll() {
+  const el = chatBox.value;
+  if (!el || chat.loadingMore || !chat.hasMore || busy.chat) return;
+  if (el.scrollTop > 80) return; // 滚到贴近顶部才翻页
+  chat.loadingMore = true;
+  const prevHeight = el.scrollHeight;
+  const prevTop = el.scrollTop;
+  try {
+    const r = await api.get(`/xiaozhi/chatlog?limit=50&before_id=${chat.messages[0]?.id || 0}`);
+    chat.messages = [...(r.messages || []), ...chat.messages];
+    chat.hasMore = !!r.has_more;
+    await nextTick();
+    el.scrollTop = el.scrollHeight - prevHeight + prevTop; // 补回撑高的差值：视口看起来原地不动，旧内容从上面接出来
+  } catch (e) { flashErr('加载更早记录失败：' + e.message); }
+  chat.loadingMore = false;
 }
 
 // ---------- 视频对话（v1.9.18）：MJPEG 流经工作台代理（?token= 同照片先例）；对话指令直达板子 ----------
@@ -791,6 +852,15 @@ onBeforeUnmount(() => {
 .xz-live-frame { position: relative; margin-top: 12px; background: #0b1020; border-radius: 10px; overflow: hidden; }
 .xz-live-frame img { display: block; width: 100%; max-height: 62vh; object-fit: contain; }
 .xz-live-tag { position: absolute; top: 10px; left: 10px; font-size: 11px; letter-spacing: 1px; color: #ff6b6b; background: rgba(0,0,0,.55); border-radius: 4px; padding: 2px 8px; }
+.xz-chat { max-height: 62vh; overflow-y: auto; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: rgba(0,0,0,.02); scroll-behavior: auto; }
+.xz-chat-row { display: flex; }
+.xz-chat-row.user { justify-content: flex-end; }
+.xz-bubble { max-width: 78%; border-radius: 12px; padding: 7px 12px; font-size: 13.5px; line-height: 1.6; word-break: break-word; }
+.xz-bubble.assistant { background: rgba(0,0,0,.06); border-top-left-radius: 4px; }
+.xz-bubble.user { background: var(--accent, #2563eb); color: #fff; border-top-right-radius: 4px; }
+.xz-chat-name { display: block; font-size: 11px; font-weight: 600; color: var(--accent, #2563eb); margin-bottom: 2px; }
+.xz-chat-time { display: block; font-size: 10.5px; opacity: .55; margin-top: 2px; text-align: right; }
+.xz-chat-hint { text-align: center; font-size: 11.5px; color: var(--muted); padding: 2px 0 6px; flex: none; }
 .xz-dev i { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; }
 .xz-dev i.xz-on { background: var(--ok, #1e9e68); }
 </style>

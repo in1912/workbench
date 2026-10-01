@@ -674,6 +674,14 @@ CREATE TABLE IF NOT EXISTS monitor_shots (
   shot_interval INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_monitor_shots_dev ON monitor_shots(device_id, ts);
+-- 智能板对话记录（v1.9.19，主库——家庭共享设备）：板子固件把云端 stt（用户说的话）/
+-- tts（小阳阳应答句子）攒批 POST 到桥接 op=chatlog 落这里；超量由 service 写入时清最老。
+CREATE TABLE IF NOT EXISTS xiaozhi_chat_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,          -- 毫秒时间戳（板子墙钟；SNTP 未同步的旧值由 service 用接收时间兜底）
+  role TEXT NOT NULL,           -- user / assistant
+  text TEXT NOT NULL
+);
 -- 家庭与子女（按 family 共享开关路由：开=读主库全员共用，关=读各租户库独立）
 -- 结构与租户库同名表一致（routedDb 选库，两边共用同一份 DDL 定义见上方业务表）
 CREATE TABLE IF NOT EXISTS family_items (

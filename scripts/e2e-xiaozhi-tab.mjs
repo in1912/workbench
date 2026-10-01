@@ -132,6 +132,23 @@ try {
   ok((await fetch(`${B}/api/xiaozhi/video?token=${T}`)).status === 502, 'video 代理板端不可达 → 502');
   ok((await fetch(`${B}/api/xiaozhi/video`)).status === 401, '无登录态取视频流 401');
 
+  console.log('— 对话记录（v1.9.19：chatlog 攒批入库 + 向上翻页）');
+  const clEmpty = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'chatlog', messages: [{ role: 'user', text: '   ' }, { role: 'assistant' }] } });
+  ok(clEmpty.status === 200 && clEmpty.j.ok === true && clEmpty.j.message === '', 'chatlog 空批也回 ok（空白文本全滤掉）——别让板子重试');
+  const clPut = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'chatlog', messages: [
+    { role: 'user', text: '小阳阳打开门口台灯', ts_ms: 1 },  // 板钟未同步（1970）→ 服务端时间兜底
+    { role: 'assistant', text: '好的，已为你打开门口台灯。', ts_ms: Date.now() },
+  ] } });
+  ok(clPut.status === 200 && /已记录 2 条/.test(clPut.j.message || ''), 'chatlog 攒批入库成功');
+  const clList = await api('GET', '/api/xiaozhi/chatlog', { token: T });
+  ok(clList.status === 200 && clList.j.messages.length === 2 && clList.j.messages[0].role === 'user' && clList.j.messages[1].role === 'assistant', '对话记录按时间正序返回（左应答右指令两个角色都在）');
+  ok(clList.j.messages[0].ts > 1e12, '板钟未同步的那条被兜底成服务端时间');
+  const clPage = await api('GET', '/api/xiaozhi/chatlog?limit=1', { token: T });
+  ok(clPage.j.messages.length === 1 && clPage.j.messages[0].role === 'assistant' && clPage.j.has_more === true, '分页 limit=1 取到最新一条 + has_more=true');
+  const clOlder = await api('GET', `/api/xiaozhi/chatlog?limit=50&before_id=${clPage.j.messages[0].id}`, { token: T });
+  ok(clOlder.j.messages.length === 1 && clOlder.j.messages[0].role === 'user' && clOlder.j.has_more === false, 'before_id 向上翻页取到更早一条 + has_more=false');
+  ok((await fetch(`${B}/api/xiaozhi/chatlog`)).status === 401, '无登录态读对话记录 401');
+
   console.log('— 桥接（EXEMPT + key）');
   const noKey = await api('POST', '/api/xiaozhi/bridge', { body: { op: 'ping' } });
   ok(noKey.status === 403, '无 key 桥接 403');
