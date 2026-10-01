@@ -84,6 +84,42 @@ try {
   const dv = await api('GET', '/api/xiaozhi/devices', { token: T });
   ok(dv.status === 200 && dv.j.bound === false && Array.isArray(dv.j.devices), '设备一览优雅降级（隔离库未绑米家：bound=false 空列表不 500）');
 
+  console.log('— 默认家庭 / 快捷开关（v1.9.17）');
+  const hf = await api('PUT', '/api/xiaozhi/config', { token: T, body: { home_filter: '老家' } });
+  ok(hf.status === 200 && hf.j.config.home_filter === '老家', 'home_filter 保存回读一致');
+  ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { home_filter: 'x'.repeat(33) } })).status === 400, '超长家庭名被拒');
+  ok((await api('POST', '/api/xiaozhi/device-control', { token: T, body: { did: 'x!', action: 'on' } })).status === 400, '快捷开关非法 did 400');
+  ok((await api('POST', '/api/xiaozhi/device-control', { token: T, body: { did: '123', action: 'bright' } })).status === 400, '快捷开关非法 action 400');
+  const dc = await api('POST', '/api/xiaozhi/device-control', { token: T, body: { did: '123456789', action: 'on' } });
+  ok(dc.status === 200 && dc.j.ok === false, '快捷开关走 control 链（未绑米家 → 业务 JSON 优雅降级不 500）');
+
+  console.log('— 摄像头照片（v1.9.17：上传 key 即凭证 + 相册 + poll 消费）');
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 0x3b)]);
+  const upNoKey = await fetch(`${B}/api/xiaozhi/photo`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpg });
+  ok(upNoKey.status === 403, '无 key 上传照片 403');
+  const upBad = await fetch(`${B}/api/xiaozhi/photo?k=deadbeef`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpg });
+  ok(upBad.status === 403, '错 key 上传照片 403');
+  const upOk = await fetch(`${B}/api/xiaozhi/photo?k=${cfg.j.bridge_key}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg', 'x-wb-key': cfg.j.bridge_key }, body: jpg });
+  const upJ = await upOk.json();
+  ok(upOk.status === 200 && upJ.ok === true && /^\d{10,14}\.jpg$/.test(upJ.file), `带 key 上传照片成功（${upJ.file}）`);
+  const upJunk = await fetch(`${B}/api/xiaozhi/photo?k=${cfg.j.bridge_key}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: Buffer.from('not a jpeg at all....') });
+  ok(upJunk.status === 400, '非 JPEG 数据被拒 400');
+  const phList = await api('GET', '/api/xiaozhi/photos', { token: T });
+  ok(phList.status === 200 && phList.j.photos.length === 1 && phList.j.photos[0].file === upJ.file, '相册列表能看到刚传的照片');
+  const phImg = await fetch(`${B}/api/xiaozhi/photos/${upJ.file}?token=${T}`);
+  const phBuf = Buffer.from(await phImg.arrayBuffer());
+  ok(phImg.status === 200 && phBuf[0] === 0xff && phBuf[1] === 0xd8 && phBuf.length === jpg.length, '?token= 直取图片（JPEG 魔数 + 长度一致，<img> src 通道）');
+  ok((await api('GET', '/api/xiaozhi/photos/..%2F..%2Fpackage.json', { token: T })).status === 404, '相册文件名白名单防穿越');
+  ok((await fetch(`${B}/api/xiaozhi/photos/${upJ.file}`)).status === 401, '无登录态取图 401');
+  ok((await api('DELETE', `/api/xiaozhi/photos/${upJ.file}`, { token: T })).status === 200, '管理员删照片成功');
+  ok((await api('GET', '/api/xiaozhi/photos', { token: T })).j.photos.length === 0, '删除后相册为空');
+  const req1 = await api('POST', '/api/xiaozhi/photo-request', { token: T });
+  ok(req1.status === 200 && req1.j.ok === true, '面板请求拍照 200（置 pending）');
+  const poll1 = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll' } });
+  ok(poll1.status === 200 && poll1.j.ok === true && poll1.j.photo_requested === true, '板子轮询 poll 拿到拍照指令（pending 消费）');
+  const poll2 = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll' } });
+  ok(poll2.status === 200 && poll2.j.photo_requested === false, '再次 poll 无指令（pending 已清）');
+
   console.log('— 桥接（EXEMPT + key）');
   const noKey = await api('POST', '/api/xiaozhi/bridge', { body: { op: 'ping' } });
   ok(noKey.status === 403, '无 key 桥接 403');
@@ -132,6 +168,10 @@ try {
   ok((await api('PUT', '/api/xiaozhi/config', { token: MT, body: { channel: 'direct' } })).status === 403, '成员改配置被管理员门禁拦下');
   ok((await api('GET', '/api/xiaozhi/ports', { token: MT })).status === 403, '成员枚举串口被拦');
   ok((await fetch(`${B}/api/xiaozhi/firmware`, { headers: { Authorization: 'Bearer ' + MT } })).status === 403, '成员（非管理员）下载固件被拒（固件内含桥接密钥）');
+  const upM = await fetch(`${B}/api/xiaozhi/photo?k=${rot.j.bridge_key}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpg });
+  const upMJ = await upM.json();
+  ok((await api('DELETE', `/api/xiaozhi/photos/${upMJ.file}`, { token: MT })).status === 403, '成员删照片被拒（管理员操作）');
+  ok((await api('DELETE', `/api/xiaozhi/photos/${upMJ.file}`, { token: T })).status === 200, '管理员删照片成功（轮换后新 key 仍可上传）');
 
   console.log('— 构建状态机（空转）');
   const st0 = await api('GET', '/api/xiaozhi/build/status', { token: MT });

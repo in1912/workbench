@@ -77,6 +77,11 @@ router.put('/xiaozhi/config', (req, res) => {
     if (url && !/^https?:\/\/[\w.:%-]+(:\d+)?(\/[\w./%:-]*)?$/.test(url)) return res.status(400).json({ error: '构建机地址格式不对（http://局域网IP:3000）' });
     patch.helper = { url };
   }
+  if (b.home_filter !== undefined) {
+    const v = String(b.home_filter || '').trim();
+    if (v.length > 32) return res.status(400).json({ error: '家庭名最长 32 个字' });
+    patch.home_filter = v || 'all'; // 空=全部
+  }
   if (b.paths) {
     const allow = ['srcDir', 'esptool', 'idfExportBat', 'idfGitDir', 'serialPort'];
     const out = {};
@@ -109,11 +114,23 @@ router.post('/xiaozhi/bridge', (req, res) => {
 // ---------- 可控设备（面板预览用；走登录态不走 key；与「米家」tab 同源，fresh=1 强刷云端） ----------
 router.get('/xiaozhi/devices', asyncH(async (req, res) => {
   try {
-    res.json({ bound: true, devices: await svc.listDevicesForBridge(req.query.fresh === '1') });
+    const devices = await svc.listDevicesForBridge(req.query.fresh === '1');
+    // v1.9.17：家庭清单（默认家庭下拉用）随设备一起给，保持单一数据源
+    const homes = [...new Set(devices.map((d) => d.home).filter(Boolean))];
+    res.json({ bound: true, devices, homes });
   } catch (e) {
     // 未绑定米家等：设备空着但别 500——面板要能区分「未绑定」和「绑了但没可控设备」
-    res.json({ bound: false, devices: [], message: e.message });
+    res.json({ bound: false, devices: [], homes: [], message: e.message });
   }
+}));
+
+// ---------- 快捷开关（v1.9.17：设备一览逐台通断测试；登录+tab 即可，复用语音 control 全逻辑） ----------
+router.post('/xiaozhi/device-control', asyncH(async (req, res) => {
+  const did = String((req.body || {}).did || '').trim();
+  const action = String((req.body || {}).action || '').trim();
+  if (!/^[\w.-]{1,64}$/.test(did)) return res.status(400).json({ error: 'did 格式不对' });
+  if (!['on', 'off', 'toggle'].includes(action)) return res.status(400).json({ error: 'action 只支持 on / off / toggle' });
+  res.json(await svc.dispatch('control', { device: did, action })); // did 精确匹配直达（resolveDevice 首选 did 全等）
 }));
 
 // ---------- 设备别名登记（v1.9.16：did → 别名；语音解析真名/别名同等匹配） ----------
@@ -125,6 +142,36 @@ router.put('/xiaozhi/device-alias', (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ---------- 摄像头照片（v1.9.17） ----------
+// 上传：板子固件 POST 二进制 JPEG（index.js EXEMPT + 桥接密钥，同 bridge 的 key 即凭证模式）。
+// 全局 express.json 不解析 image/jpeg，路由级 express.raw 接住 Buffer（content-type 带上 octet-stream 兜底固件侧忘设头）。
+router.post('/xiaozhi/photo', express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '5mb' }), (req, res) => {
+  if (!svc.bridgeKeyOk(req)) return res.status(403).json({ ok: false, error: '桥接密钥不对' });
+  try {
+    const saved = svc.savePhoto(req.body);
+    console.log(`[xiaozhi] 板子上传照片 ${saved.file}（${(saved.size / 1024).toFixed(0)} KB）`);
+    res.json({ ok: true, file: saved.file, size: saved.size, message: '照片已存入工作台相册' });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// 列表 / 单图 / 删除：登录 + tab 即可看（家庭相册性质）；删除限管理员
+router.get('/xiaozhi/photos', (req, res) => res.json({ photos: svc.listPhotos() }));
+router.get('/xiaozhi/photos/:file', (req, res) => {
+  try { res.sendFile(svc.photoPath(req.params.file)); } catch (e) { res.status(404).json({ error: e.message }); }
+});
+router.delete('/xiaozhi/photos/:file', (req, res) => {
+  if (!adminOnly(req, res)) return;
+  try { svc.deletePhoto(req.params.file); res.json({ ok: true }); } catch (e) { res.status(404).json({ error: e.message }); }
+});
+
+// 面板「请求板子拍一张」：置 pending，板子轮询 poll 时消费并上传（最迟一个轮询周期）
+router.post('/xiaozhi/photo-request', (req, res) => {
+  svc.setPhotoPending();
+  res.json({ ok: true, message: '已请求拍照——板子最迟约 30 秒内上传（须已烧录 v1.9.17 固件并连着网）' });
 });
 
 // ---------- 智能屏动作点位自动探测 + 试播/转述测试（登录 + tab 即可） ----------

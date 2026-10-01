@@ -1,6 +1,14 @@
 <template>
   <div class="xz-root">
+    <!-- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 摄像头 -->
+    <div class="xz-tabs">
+      <button :class="{ on: sub === 'guide' }" @click="switchSub('guide')">🛠 装机向导</button>
+      <button :class="{ on: sub === 'voice' }" @click="switchSub('voice')">🏠 语音控米家</button>
+      <button :class="{ on: sub === 'camera' }" @click="switchSub('camera')">📷 摄像头</button>
+    </div>
+
     <!-- ============ 装机向导 ============ -->
+    <template v-if="sub === 'guide'">
     <div class="card">
       <h3 style="margin:0 0 4px">🛠 装机向导（ESP32-S3-Korvo-2-V3 · 小智 AI 语音板）</h3>
       <p class="xz-muted" style="margin:0 0 14px">
@@ -119,13 +127,11 @@
               </select>
               <button class="btn sm" :disabled="busy.ports" @click="loadPorts">{{ busy.ports ? '…' : '刷新' }}</button>
               <button class="btn sm" :disabled="busy.probe || !form.port" @click="doProbe">{{ busy.probe ? '探测中…' : '探测芯片' }}</button>
+              <span class="xz-muted xz-port-note" title="串口探测 / 编译烧录需要本地模式：在装了 ESP-IDF 6.1 + 小智源码的电脑上打开 http://localhost:3000 的本页操作。生产/NAS 页没有工具链和串口，探测不到芯片是正常的——那边用上方「构建机地址」下载固件，配 esptool 命令手动烧录。">
+                ⚠️ 仅本地模式（装了 ESP-IDF 的电脑开 localhost:3000）能探测/烧录；生产页探测不到芯片是正常的
+              </span>
             </div>
             <small v-if="probeMsg" class="xz-muted" :class="{ 'xz-err': !probeOk }">{{ probeMsg }}</small>
-            <small class="xz-muted" style="display:block;margin-top:4px">
-              ⚠️ 串口探测 / 编译烧录需要<b>本地模式</b>：在装了 ESP-IDF 6.1 + 小智源码的 Windows 电脑上打开
-              <code>http://localhost:3000</code> 的本页操作。生产 / NAS 页面没有工具链和串口，<b>探测不到芯片是正常的</b>
-              ——那边用上方「构建机地址」下载固件，配 esptool 命令手动烧录即可。
-            </small>
           </div>
         </div>
 
@@ -179,8 +185,10 @@
         <span>当前唤醒词</span><b>{{ cfg.wake.display }}（{{ cfg.wake.pinyin }}，阈值 {{ cfg.wake.threshold }}）</b>
       </div>
     </div>
+    </template>
 
     <!-- ============ 语音控米家 ============ -->
+    <template v-else-if="sub === 'voice'">
     <div class="card">
       <h3 style="margin:0 0 4px">🏠 语音控米家（板子 → 工作台 → 米家设备）</h3>
       <p class="xz-muted" style="margin:0 0 14px">
@@ -252,28 +260,79 @@
       <!-- 可控设备预览（与「米家」tab 同源；别名=语音里的另一种叫法，纯对照不改真名） -->
       <div class="xz-sub">
         <div class="xz-sub-title xz-click" @click="toggleDevices">
-          可控设备一览（{{ devices.length }} 台）{{ showDevices ? ' ▴' : ' ▾' }}
+          可控设备一览（{{ shownDevices.length }} 台）{{ showDevices ? ' ▴' : ' ▾' }}
           <button class="btn sm" style="margin-left:8px" :disabled="busy.devs" @click.stop="loadDevices(true)">{{ busy.devs ? '同步中…' : '⟳ 同步米家' }}</button>
+          <select v-if="showDevices && homes.length > 1" v-model="homeFilter" class="xz-home-sel" @click.stop @change="saveHomeFilter">
+            <option value="all">全部家庭（{{ devices.length }}）</option>
+            <option v-for="h in homes" :key="h" :value="h">{{ h }}（{{ devices.filter((d) => d.home === h).length }}）</option>
+          </select>
         </div>
         <div v-if="showDevices" class="xz-devs-wrap">
           <p class="xz-muted" style="margin:2px 0 8px">
             与「米家」tab 同一数据源：进本页、展开列表、点 ⟳ 都会刷新（⟳ 额外强制同步小米云端）。
-            <b>别名</b>=语音里的叫法——对着板子喊别名也能控，设备真名不变；输完回车或点别处即保存{{ isAdmin ? '' : '（登记需管理员）' }}。
+            <b>别名</b>=语音里的叫法——对着板子喊别名也能控，设备真名不变；输完回车或点别处即保存{{ isAdmin ? '' : '（登记需管理员）' }}；
+            左侧开关可直接通断测试（与语音同一条控制链路）。
           </p>
-          <div v-if="!devices.length" class="xz-muted">
+          <div v-if="!shownDevices.length" class="xz-muted">
             <template v-if="devBound === false">⚠️ 本服务器还没绑定米家（{{ devMsg || '未绑定' }}）——到「米家」tab 绑定后这里自动出现。</template>
-            <template v-else>（没有可控设备）</template><br />
+            <template v-else>（{{ homeFilter !== 'all' ? `「${homeFilter}」里没有可控设备` : '没有可控设备' }}）</template><br />
             注意：这里显示的是<b>当前这台服务器</b>的米家数据——本地电脑（localhost）与生产 NAS 是两套独立的库；
             语音桥接地址填的哪台服务器，板子就控制哪台的米家。
           </div>
-          <div v-for="d in devices" :key="d.did" class="xz-dev">
-            <i :class="d.online ? 'xz-on' : ''"></i>
-            <span class="xz-dev-name" :title="`${d.room === '未分区' ? '' : d.room + ' · '}${d.name}`">{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
+          <div v-for="d in shownDevices" :key="d.did" class="xz-dev" :class="{ busy: d._busy }">
+            <button v-if="d.sw" class="xz-toggle" :class="{ on: d.sw.v, wait: d._busy }" :disabled="!d.online || d._busy"
+                    :title="d.online ? '快速通断测试' : '设备离线'" @click="toggleDevice(d)"><i></i></button>
+            <i v-else class="xz-dot" :class="{ 'xz-on': d.online }" :title="d.online ? '在线（无开关属性）' : '离线'"></i>
+            <span class="xz-dev-name" :title="`${d.room === '未分区' ? '' : d.room + ' · '}${d.name}${d.home ? '（' + d.home + '）' : ''}`">{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
             <small v-if="d.sw" class="xz-muted">{{ d.sw.v ? '开' : '关' }}</small>
             <input v-model="d.aliasDraft" class="xz-alias" placeholder="语音别名" maxlength="32"
                    :disabled="!isAdmin" @blur="saveAlias(d)" @keyup.enter="$event.target.blur()" />
           </div>
         </div>
+      </div>
+    </div>
+    </template>
+
+    <!-- ============ 摄像头（v1.9.17） ============ -->
+    <template v-else>
+      <div class="card">
+        <h3 style="margin:0 0 4px">📷 摄像头相册（板子拍照存工作台）</h3>
+        <p class="xz-muted" style="margin:0 0 14px">
+          板子摄像头拍的照片会存进工作台：可以对着板子说「拍张照存相册」（语音 → AI 调板上的拍照工具），
+          也可以在这里点按钮主动让板子拍（板子每 ~25 秒轮询一次指令，稍等即传）。点击照片放大，滚轮缩放。
+        </p>
+        <div class="xz-actions" style="margin-top:0">
+          <button class="btn primary" :disabled="busy.photo" @click="requestPhoto">{{ busy.photo ? '已请求，等板子上传…' : '📸 让板子拍一张' }}</button>
+          <button class="btn" :disabled="busy.photos" @click="loadPhotos">{{ busy.photos ? '…' : '⟳ 刷新' }}</button>
+          <span class="xz-muted">{{ photos.length ? `共 ${photos.length} 张` : '（还没有照片）' }}</span>
+        </div>
+        <div v-if="!photos.length" class="xz-muted" style="margin-top:10px">
+          相册还是空的——对着板子说「拍张照存到相册」，或点上面的按钮（需板子已烧录带拍照功能的固件并连着网）。
+        </div>
+        <div v-else class="xz-gallery">
+          <div v-for="p in photos" :key="p.file" class="xz-shot">
+            <img :src="photoUrl(p.file)" loading="lazy" @click="openLightbox(p)" alt="板子照片" />
+            <div class="xz-shot-bar">
+              <span class="xz-muted">{{ fmtTime(p.mtime) }} · {{ fmtSize(p.size) }}</span>
+              <button v-if="isAdmin" class="btn sm ghost" @click="delPhoto(p)">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 照片查看器：点击放大 / 滚轮缩放 / 双击复位 / ESC 或点背景关闭 -->
+    <div v-if="viewer.show" class="xz-viewer" @wheel.prevent="zoomViewer($event.deltaY < 0 ? 1 : -1)" @click.self="closeViewer"
+         @dblclick="resetViewer" tabindex="0" ref="viewerBox">
+      <img :src="photoUrl(viewer.file)" :style="{ transform: `scale(${viewer.scale}) translate(${viewer.x}px, ${viewer.y}px)` }" alt="照片查看" />
+      <div class="xz-viewer-bar">
+        <span>{{ fmtTime(viewer.mtime) }} · {{ fmtSize(viewer.size) }} · {{ Math.round(viewer.scale * 100) }}%</span>
+        <span>
+          <button class="btn sm ghost" @click="zoomViewer(-1)">－</button>
+          <button class="btn sm ghost" @click="resetViewer">100%</button>
+          <button class="btn sm ghost" @click="zoomViewer(1)">＋</button>
+          <button class="btn sm ghost" @click="closeViewer">✕ 关闭</button>
+        </span>
       </div>
     </div>
 
@@ -284,7 +343,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { api } from '../api';
 
 const isAdmin = (() => { try { return (JSON.parse(localStorage.getItem('wb_user') || '{}') || {}).role === 'admin'; } catch { return false; } })();
@@ -301,12 +360,48 @@ const form = reactive({
   speaker: { did: '', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 },
 });
 const ports = ref([]);
-const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false });
+const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false });
 const probeMsg = ref(''); const probeOk = ref(false);
 const spProbeMsg = ref(''); const spTestMsg = ref('');
 const testText = ref('');
 const devices = ref([]); const showDevices = ref(false);
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
+
+// ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 摄像头 ----------
+const SUBS = ['guide', 'voice', 'camera'];
+const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'guide');
+function switchSub(s) {
+  sub.value = s;
+  localStorage.setItem('xz_sub', s);
+  if (s === 'voice') loadDevices(false); // 台数随标题显示，切过来就拉最新
+  if (s === 'camera') loadPhotos();
+}
+
+// ---------- 家庭过滤 + 快捷开关（v1.9.17） ----------
+const homes = ref([]);
+const homeFilter = ref('all'); // 'all'=全部（存进 config.home_filter，下次进来还是这个家）
+const shownDevices = computed(() => homeFilter.value === 'all' ? devices.value : devices.value.filter((d) => d.home === homeFilter.value));
+async function saveHomeFilter() {
+  if (!isAdmin) return; // 非管理员只改本会话显示，不落配置
+  try { await api.put('/xiaozhi/config', { home_filter: homeFilter.value }); } catch (e) { flashErr('默认家庭保存失败：' + e.message); }
+}
+async function toggleDevice(d) {
+  if (d._busy || !d.sw) return;
+  const want = !d.sw.v;
+  d._busy = true; d.sw.v = want; // 乐观更新，失败回读校正（与米家卡片同思路）
+  try {
+    const r = await api.post('/xiaozhi/device-control', { did: d.did, action: want ? 'on' : 'off' });
+    if (!r.ok) { d.sw.v = !want; flashErr(r.message || '控制失败'); }
+    else flashOk(r.message || `已${want ? '打开' : '关闭'}${d.name}`);
+  } catch (e) {
+    d.sw.v = !want;
+    flashErr('控制失败：' + e.message);
+  } finally { d._busy = false; }
+}
+
+// ---------- 摄像头相册（v1.9.17） ----------
+const photos = ref([]);
+
 const st = ref({ running: false, done: false, failed: false, progress: 0, stepIndex: 0, log: [], steps: [] });
 const msg = reactive({ err: '', ok: '' });
 const logBox = ref(null);
@@ -355,6 +450,10 @@ async function loadDevices(fresh) {
     devBound.value = !!r.bound;
     devMsg.value = r.message || '';
     devices.value = (r.devices || []).map((d) => ({ ...d, aliasDraft: d.alias || '' }));
+    homes.value = r.homes || [];
+    if (homeFilter.value === 'all' && cfg.value.home_filter && cfg.value.home_filter !== 'all'
+        && homes.value.includes(cfg.value.home_filter)) homeFilter.value = cfg.value.home_filter; // 默认家庭（config 存的）
+    if (homeFilter.value !== 'all' && !homes.value.includes(homeFilter.value)) homeFilter.value = 'all'; // 家庭没了（改名/删除）回全部
   } catch (e) { flashErr('设备列表加载失败：' + e.message); }
   busy.devs = false;
 }
@@ -372,7 +471,61 @@ async function saveAlias(d) {
   } catch (e) { flashErr('别名保存失败：' + e.message); }
 }
 
-// ---------- 保存（唤醒词/通道/桥接/智能屏/串口一起） ----------
+// ---------- 相册 ----------
+const token = () => encodeURIComponent(localStorage.getItem('wb_token') || '');
+const photoUrl = (file) => `/api/xiaozhi/photos/${file}?token=${token()}`; // <img> 带不了 Authorization 头，走 ?token=（同家庭图床）
+async function loadPhotos() {
+  busy.photos = true;
+  try { photos.value = (await api.get('/xiaozhi/photos')).photos || []; }
+  catch (e) { flashErr('相册加载失败：' + e.message); }
+  busy.photos = false;
+}
+let photoPollTimer = null;
+async function requestPhoto() {
+  busy.photo = true;
+  try {
+    const r = await api.post('/xiaozhi/photo-request', {});
+    flashOk(r.message || '已请求拍照，等板子上传');
+    // 板子 ~25s 轮询一次（刚开机要等 60s 启动 + 25s 周期）：密集刷 80 秒，见到新照片就停
+    const before = photos.value[0]?.file || '';
+    clearInterval(photoPollTimer);
+    let n = 0;
+    photoPollTimer = setInterval(async () => {
+      if (++n > 16) { clearInterval(photoPollTimer); busy.photo = false; return; } // 80s 超时
+      try {
+        await loadPhotos();
+        if (photos.value[0] && photos.value[0].file !== before) {
+          clearInterval(photoPollTimer); busy.photo = false;
+          flashOk('照片已上传 🎉');
+        }
+      } catch { /* 下个 tick 重试 */ }
+    }, 5000);
+  } catch (e) { busy.photo = false; flashErr('请求失败：' + e.message); }
+}
+async function delPhoto(p) {
+  if (!confirm(`删除这张 ${fmtTime(p.mtime)} 的照片？`)) return;
+  try {
+    await api.del(`/xiaozhi/photos/${p.file}`);
+    photos.value = photos.value.filter((x) => x.file !== p.file);
+    if (viewer.value.show && viewer.value.file === p.file) closeViewer();
+  } catch (e) { flashErr('删除失败：' + e.message); }
+}
+
+// ---------- 照片查看器（点击放大 / 滚轮缩放 / 双击复位 / ESC 关闭） ----------
+const viewerBox = ref(null);
+const viewer = reactive({ show: false, file: '', size: 0, mtime: 0, scale: 1, x: 0, y: 0 });
+function openLightbox(p) {
+  Object.assign(viewer, { show: true, file: p.file, size: p.size, mtime: p.mtime, scale: 1, x: 0, y: 0 });
+  nextTick(() => viewerBox.value?.focus());
+}
+function closeViewer() { viewer.show = false; }
+function zoomViewer(dir) {
+  viewer.scale = Math.min(8, Math.max(0.2, viewer.scale + dir * Math.max(0.1, viewer.scale * 0.15)));
+}
+function resetViewer() { viewer.scale = 1; viewer.x = 0; viewer.y = 0; }
+function onKey(e) { if (e.key === 'Escape' && viewer.show) closeViewer(); }
+window.addEventListener('keydown', onKey);
+
 async function saveConfig(extra = {}) {
   const body = {
     wake: { ...form.wake },
@@ -486,11 +639,37 @@ onMounted(async () => {
   if (st.value.running) startPoll();
   if (isAdmin && cap.value.canFlash) loadPorts();
 });
-onBeforeUnmount(stopPoll);
+onBeforeUnmount(() => {
+  stopPoll();
+  clearInterval(photoPollTimer);
+  window.removeEventListener('keydown', onKey);
+});
 </script>
 
 <style scoped>
 .xz-root { display: flex; flex-direction: column; gap: 16px; }
+.xz-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.xz-tabs button { border: 1px solid var(--border, #e5e7eb); background: rgba(0,0,0,.03); color: inherit; border-radius: 18px; padding: 5px 16px; font-size: 13px; cursor: pointer; }
+.xz-tabs button.on { background: var(--accent, #2563eb); border-color: var(--accent, #2563eb); color: #fff; }
+.xz-port-note { flex: 1; min-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.xz-home-sel { font-size: 12.5px; padding: 2px 6px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: transparent; color: inherit; margin-left: 8px; }
+.xz-toggle { position: relative; width: 34px; height: 18px; border-radius: 9px; border: none; background: #c8c8c8; cursor: pointer; padding: 0; flex: none; transition: background .2s; }
+.xz-toggle i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .2s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.xz-toggle.on { background: var(--ok, #1e9e68); }
+.xz-toggle.on i { left: 18px; }
+.xz-toggle.wait { opacity: .6; }
+.xz-toggle:disabled { cursor: not-allowed; }
+.xz-dot { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; margin: 0 13px; }
+.xz-dot.xz-on { background: var(--ok, #1e9e68); }
+.xz-dev.busy { opacity: .7; }
+.xz-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+.xz-shot { display: flex; flex-direction: column; gap: 4px; }
+.xz-shot img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 8px; cursor: zoom-in; background: #0b1020; }
+.xz-shot-bar { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.xz-viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.88); display: flex; align-items: center; justify-content: center; outline: none; }
+.xz-viewer img { max-width: 92vw; max-height: 88vh; cursor: zoom-in; transition: transform .08s linear; user-select: none; -webkit-user-drag: none; }
+.xz-viewer-bar { position: absolute; bottom: 14px; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; color: #eee; font-size: 13px; }
+.xz-viewer-bar .btn { color: #eee; border-color: rgba(255,255,255,.4); }
 .xz-muted { color: var(--muted); font-size: 13px; line-height: 1.7; margin: 4px 0; }
 .xz-ok { color: var(--ok, #1e9e68); }
 .xz-err { color: var(--danger, #dc2626); }

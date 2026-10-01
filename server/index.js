@@ -74,6 +74,7 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
   '/mihome/callback', // 米家 OAuth 回跳（小米浏览器重定向落地，无工作台登录态；只认 state 会话 + 一次性 code）
   '/xiaozhi/bridge', // 智能板桥接（v1.9.11：板端固件 MCP 工具回连，key 即凭证，照 /vibe/job 模式）
   '/xiaozhi/firmware', // 智能板固件下载（v1.9.12：同一桥接密钥或管理员令牌，路由内自校验；无工具链环境从构建机代理）
+  '/xiaozhi/photo', // 智能板照片上传（v1.9.17：固件 POST 二进制 JPEG，路由级 raw 解析 + 桥接密钥自校验）
   '/pets/desktop']; // 桌面宠物（key 即凭证：state/frame/action）
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();

@@ -6,11 +6,16 @@
 //   speaker=小爱智能屏转述（x10a execute-text-directive，自然语言由小爱解析，
 //   可覆盖非开关类指令——备选通道，did/aiid 用户提供，siid 从 spec 自动探测）。
 const crypto = require('crypto');
-const { db, getSetting, setSetting } = require('../db');
+const fs = require('fs');
+const path = require('path');
+const { db, getSetting, setSetting, dataDir } = require('../db');
 const mihome = require('./mihomeService');
 
 const CFG_KEY = 'xiaozhi_config';
 const KEY_KEY = 'xiaozhi_bridge_key';
+const PHOTO_PENDING_KEY = 'xiaozhi_photo_pending'; // 1=面板请求板子拍一张，板子轮询 poll 时消费
+const PHOTO_DIR = path.join(dataDir, 'xiaozhi', 'photos'); // 相册落盘目录（文件名 = 时间戳.jpg，文件系统即索引）
+const PHOTO_KEEP = 200; // 相册上限：超出时自动清最老的
 
 // 默认配置与板子当前实况一致（小阳阳 + COM4 + 智能屏10 did）
 const DEFAULT_CFG = {
@@ -20,6 +25,7 @@ const DEFAULT_CFG = {
   bridge: { url: '' }, // 烧进固件的工作台桥接地址（含 /api/xiaozhi/bridge；空=构建时前端自动带当前访问地址）
   helper: { url: '' }, // 构建机地址（v1.9.12：无工具链环境【如 NAS 容器】从这里取固件，LAN 内 Windows 工作台）
   device_aliases: {}, // 语音别名对照表（v1.9.16：did → 别名；resolveDevice 与 list_devices 回包都认，纯映射不改设备真名）
+  home_filter: 'all', // 设备一览默认显示的家庭（v1.9.17：'all'=全部；存家庭名，面板下拉选择）
   paths: {}, // 能力探测路径覆盖（admin 在面板改：srcDir/esptool/idfExportBat/idfGitDir/serialPort）
 };
 
@@ -87,7 +93,7 @@ async function listDevicesForBridge(fresh = false) {
   for (const h of view.homes || []) for (const r of h.rooms || []) for (const d of r.devices || []) {
     if (d.is_parent) continue; // 多路开关的父条目无外层开关，各分路有独立卡片
     out.push({
-      did: d.did, name: d.name, room: r.name, online: !!d.online,
+      did: d.did, name: d.name, home: h.name, room: r.name, online: !!d.online,
       sw: d.switch ? { siid: d.switch.siid, piid: d.switch.piid, v: d.switch.value === true } : null,
       t: d.env?.t?.value ?? null, h: d.env?.h?.value ?? null,
       alias: aliases[String(d.did)] || null, // 语音别名（v1.9.16）：真名之外的叫法
@@ -206,6 +212,47 @@ async function speakerAction(kind, text) {
   }
 }
 
+// ---------- 摄像头照片（v1.9.17：板子拍照 → POST /xiaozhi/photo 落盘；面板请求 → pending 标记 → 板子轮询消费） ----------
+function setPhotoPending() { setSetting(db, PHOTO_PENDING_KEY, '1'); }
+function listPhotos() {
+  try {
+    if (!fs.existsSync(PHOTO_DIR)) return [];
+    return fs.readdirSync(PHOTO_DIR)
+      .filter((f) => /^\d{10,14}(_\d+)?\.jpg$/.test(f)) // 白名单：文件名只认时间戳形态，顺带防目录穿越
+      .map((f) => { const st = fs.statSync(path.join(PHOTO_DIR, f)); return { file: f, size: st.size, mtime: st.mtimeMs }; })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (e) {
+    console.error('[xiaozhi] listPhotos', e.message);
+    return [];
+  }
+}
+function savePhoto(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 100) throw new Error('照片数据为空');
+  if (buf.length > 4 * 1024 * 1024) throw new Error('照片超过 4MB 上限');
+  if (buf[0] !== 0xff || buf[1] !== 0xd8) throw new Error('不是 JPEG 数据');
+  fs.mkdirSync(PHOTO_DIR, { recursive: true });
+  const file = `${Date.now()}.jpg`;
+  fs.writeFileSync(path.join(PHOTO_DIR, file), buf);
+  // 相册上限：超出清最老的（照片是可再生数据，保留最近 PHOTO_KEEP 张）
+  const all = listPhotos();
+  for (const old of all.slice(PHOTO_KEEP - 1)) {
+    try { fs.unlinkSync(path.join(PHOTO_DIR, old.file)); } catch { /* 尽力而为 */ }
+  }
+  return { file, size: buf.length };
+}
+function deletePhoto(file) {
+  if (!/^\d{10,14}(_\d+)?\.jpg$/.test(String(file || ''))) throw new Error('文件名不合法');
+  const p = path.join(PHOTO_DIR, file);
+  if (!fs.existsSync(p)) throw new Error('照片不存在');
+  fs.unlinkSync(p);
+}
+function photoPath(file) {
+  if (!/^\d{10,14}(_\d+)?\.jpg$/.test(String(file || ''))) throw new Error('文件名不合法');
+  const p = path.join(PHOTO_DIR, file);
+  if (!fs.existsSync(p)) throw new Error('照片不存在');
+  return p;
+}
+
 // ---------- 桥接统一入口（POST /xiaozhi/bridge，index.js EXEMPT + key） ----------
 // 返回恒为业务 JSON（ok/message），HTTP 层只对密钥错回 403——固件侧好把 message 直接念给用户。
 async function dispatch(op, body) {
@@ -246,11 +293,21 @@ async function dispatch(op, body) {
       if (!text) return { ok: false, message: 'text 不能为空' };
       return await speakerAction('play', text);
     }
-    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak）` };
+    if (op === 'poll') {
+      // 板子定期轮询（v1.9.17）：面板点「拍一张」置 pending，这里消费掉让板子立刻上传照片
+      const wanted = getSetting(db, PHOTO_PENDING_KEY, '') === '1';
+      if (wanted) setSetting(db, PHOTO_PENDING_KEY, '');
+      return { ok: true, photo_requested: wanted, message: wanted ? '请拍照上传' : '' };
+    }
+    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll）` };
   } catch (e) {
     console.error('[xiaozhi] bridge', op, e.message);
     return { ok: false, message: `桥接处理失败：${e.message}` };
   }
 }
 
-module.exports = { getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk, listDevicesForBridge, setDeviceAlias, dispatch, speakerAction, ensureSpeakerPoints };
+module.exports = {
+  getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk,
+  listDevicesForBridge, setDeviceAlias, dispatch, speakerAction, ensureSpeakerPoints,
+  setPhotoPending, listPhotos, savePhoto, deletePhoto, photoPath,
+};
