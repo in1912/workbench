@@ -124,6 +124,13 @@ try {
   const poll2 = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll' } });
   ok(poll2.status === 200 && poll2.j.photo_requested === false, '再次 poll 无指令（pending 已清）');
 
+  console.log('— poll 自报 IP（v1.9.20：生产端口转发改写 remoteAddress 恒 127.0.0.1 的根治）');
+  const pollIp = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll', ip: '192.168.110.99' } });
+  ok(pollIp.status === 200 && pollIp.j.ok === true, 'poll 带自报 ip 字段被接受');
+  ok((await api('GET', '/api/xiaozhi/board', { token: T })).j.ip === '192.168.110.99', '自报 ip 优先于 remoteAddress 登记');
+  await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll', ip: 'not-an-ip' } });
+  ok((await api('GET', '/api/xiaozhi/board', { token: T })).j.ip === '127.0.0.1', '非法自报 ip 回退 remoteAddress（旧固件兼容）');
+
   console.log('— 视频对话（v1.9.18：poll 登记 IP + 代理错误路径）');
   const bd = await api('GET', '/api/xiaozhi/board', { token: T });
   ok(bd.status === 200 && bd.j.ip === '127.0.0.1' && bd.j.online === true, 'poll 登记板子 IP + 在线判定（e2e 里即 127.0.0.1）');

@@ -107,7 +107,7 @@ router.post('/xiaozhi/bridge-key/reset', (req, res) => {
 router.post('/xiaozhi/bridge', (req, res) => {
   if (!svc.bridgeKeyOk(req)) return res.status(403).json({ ok: false, message: '桥接密钥不对（轮换后需重烧固件）' });
   const op = String((req.body || {}).op || '');
-  if (op === 'poll') svc.noteBoardIp(req.socket.remoteAddress); // 板子 25s 一poll，顺手刷新 IP（v1.9.18 视频对话直达用）
+  if (op === 'poll') svc.noteBoardIp(req.socket.remoteAddress, req.body.ip); // 板子 25s 一 poll：v1.9.20 固件自报 ip 优先（生产代理改写 remoteAddress），视频对话直达用
   svc.dispatch(op, req.body)
     .then((r) => res.json(r))
     .catch((e) => res.status(503).json({ ok: false, message: '桥接处理失败：' + e.message }));

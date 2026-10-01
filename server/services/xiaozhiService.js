@@ -259,13 +259,16 @@ function photoPath(file) {
   return p;
 }
 
-// ---------- 板子 IP（v1.9.18 视频对话）：bridge 请求的 remoteAddress 即板子内网地址 ----------
-// 板子直连内网 NAS（桥接地址填内网是既定部署），socket 远端可信；每次 poll 刷新，供视频流/对话指令直达板子 81 端口。
+// ---------- 板子 IP（v1.9.18 视频对话）：poll 自报优先，remoteAddress 兜底 ----------
+// v1.9.20 实测：生产 NAS 的端口转发会改写来源地址（任何客户端 remoteAddress 恒 127.0.0.1），
+// v1.9.20 固件起 poll 带 ip 字段自报；旧固件没有该字段则回退 socket 远端（本地 localhost 部署仍准确）。
 const BOARD_IP_KEY = 'xiaozhi_device_ip';
 const BOARD_SEEN_KEY = 'xiaozhi_device_ip_seen_at';
-function noteBoardIp(ip) {
-  const v = String(ip || '').replace(/^::ffff:/, '').trim();
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(v)) return; // 只认 IPv4（板子直连场景）
+const isIpv4 = (s) => /^(\d{1,3}\.){3}\d{1,3}$/.test(s);
+function noteBoardIp(socketIp, explicitIp) {
+  const e = String(explicitIp || '').replace(/^::ffff:/, '').trim();
+  const v = isIpv4(e) ? e : String(socketIp || '').replace(/^::ffff:/, '').trim();
+  if (!isIpv4(v)) return; // 只认 IPv4（板子直连场景）
   setSetting(db, BOARD_IP_KEY, v);
   setSetting(db, BOARD_SEEN_KEY, String(Date.now()));
 }
