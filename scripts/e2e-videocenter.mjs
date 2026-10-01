@@ -107,6 +107,31 @@ try {
   ok((await api('GET', '/api/vc/progress', { token: T })).status === 400, '缺 path 400');
   ok((await api('POST', '/api/vc/progress', { token: T, body: {} })).status === 400, '缺 path 上报 400');
 
+  console.log('— 播放历史（/vc/open 建档 + /vc/records 倒序分页）');
+  ok((await api('POST', '/api/vc/open', { token: T, body: {} })).status === 400, '/vc/open 缺 path 400');
+  ok((await api('POST', '/api/vc/open', { token: T, body: { path: '电影A\\视频2.flv', ext: 'flv' } })).status === 200, '/vc/open 建档 200');
+  let hr = await api('GET', '/api/vc/records', { token: T });
+  ok(hr.status === 200 && hr.j.total === 2 && hr.j.pageSize === 5, '默认每页 5 条，共 2 条（视频1 有进度 + 视频2 仅打开）');
+  ok(hr.j.records[0].path === '电影A\\视频2.flv' && hr.j.records[1].path === MP4_FULL, '倒序：最近一次打开排最上面');
+  ok(hr.j.records[0].folder === '电影A' && hr.j.records[0].name === '视频2.flv', '拆出「文件夹名 + 文件名」两列（' + hr.j.records[0].folder + ' / ' + hr.j.records[0].name + '）');
+  ok(hr.j.records[0].watched_sec === 0 && hr.j.records[0].position_sec === 0, '仅打开未观看也留一条（进度全 0）');
+  // 重复打开同一文件不新增行（去重：一人一文件一行，只刷新时间）
+  await api('POST', '/api/vc/open', { token: T, body: { path: '电影A\\视频2.flv', ext: 'flv' } });
+  ok((await api('GET', '/api/vc/records', { token: T })).j.total === 2, '重复打开同一文件不新增行（按文件去重）');
+  // 分页：再造 6 条 → 共 8 条
+  for (let i = 1; i <= 6; i++) await api('POST', '/api/vc/open', { token: T, body: { path: '电影A\\分页' + i + '.mp4', ext: 'mp4' } });
+  const hp1 = await api('GET', '/api/vc/records', { token: T });
+  ok(hp1.j.total === 8 && hp1.j.records.length === 5 && hp1.j.page === 1, '8 条记录：第一页返回 5 条');
+  ok(hp1.j.records[0].name === '分页6.mp4', '最新打开的在最上面（分页6）');
+  const hp2 = await api('GET', '/api/vc/records?page=2', { token: T });
+  ok(hp2.j.records.length === 3 && hp2.j.page === 2, '第二页返回剩余 3 条');
+  const hp3 = await api('GET', '/api/vc/records?page=1&pageSize=30', { token: T });
+  ok(hp3.j.pageSize === 30 && hp3.j.records.length === 8, 'pageSize=30 可改分页量（一页装下 8 条）');
+  const hp4 = await api('GET', '/api/vc/records?page=1&pageSize=999', { token: T });
+  ok(hp4.j.pageSize === 100, 'pageSize 上限收敛到 100（防拉爆）');
+  // 历史按人隔离：m1 看不到 admin 的记录（在下面的成员段验证，此处先确认 admin 自己的计数）
+  ok((await api('GET', '/api/vc/records?pageSize=100', { token: T })).j.records.every((r) => 'folder' in r && 'name' in r), '每条记录都带 folder/name 派生列');
+
   console.log('— 外部播放器脚本与视频教学共用（同一份文件）');
   const scVc = await api('GET', '/api/vc/extplayer', { token: T, raw: true });
   const scVs = await api('GET', '/api/vstudy/extplayer', { token: T, raw: true });
@@ -137,6 +162,8 @@ try {
   ok(beacon.status === 200, '?token= 无 Authorization 头上报成功（sendBeacon 通道）');
   const pg2 = await api('GET', '/api/vc/progress?path=' + encodeURIComponent('电影A\\视频2.flv'), { token: MT });
   ok(pg2.j.record && pg2.j.record.position_sec === 120, 'beacon 上报的进度落库（按人隔离，m1 自己的记录）');
+  const mrec = await api('GET', '/api/vc/records', { token: MT });
+  ok(mrec.status === 200 && mrec.j.total === 1 && mrec.j.records[0].name === '视频2.flv', '播放历史按人隔离（m1 只看到自己的 1 条，看不到 admin 的 8 条）');
 
   // —— UI（Playwright）：tab 渲染 + 树 + 点击播放 + 外部播放器按钮行 + 成员授权前后 ——
   console.log('— UI（tab / 树 / 点击播放 / 外部播放器行）');
@@ -152,6 +179,7 @@ try {
     const p = await ctx.newPage();
     const perr = [];
     p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    p.on('dialog', (d) => { d.dismiss().catch(() => {}); }); // 「复制直链」等操作会弹 alert，自动关掉别卡住
 
     // 成员（未授权时）：看不到「视频中心」tab 按钮——m1 已在 API 段被授权，这里另建 m2 保持未授权态
     await api('POST', '/api/users', { token: T, body: { username: 'm2', password: 'm2-pass-123', role: 'user', allowed_pages: ['smarthome'], allowed_tabs: { smarthome: ['mijia'] } } });
@@ -185,6 +213,29 @@ try {
     await p.waitForSelector('.node', { timeout: 8000 });
     ok((await p.locator('.node', { hasText: '电影A' }).count()) >= 1, '根目录自动展开列出 电影A');
     ok((await p.locator('.player-zone .ph').count()) === 1, '右侧播放占位区在（未选文件）');
+    // 播放历史模块：未播放也常驻（admin 已有 8 条：视频1 进度 + 视频2 + 分页1~6）
+    await p.waitForSelector('.his-tb', { timeout: 8000 });
+    const heads = await p.locator('.his-tb th').allInnerTexts();
+    ok(heads.join('|') === '时间|文件夹|文件名|完整路径', '历史表头四列=时间/文件夹/文件名/完整路径（实际：' + heads.join('|') + '）');
+    ok((await p.locator('.his-row').count()) === 5, '默认每页显示 5 条');
+    ok((await p.locator('.his-page select').inputValue()) === '5', '分页量默认 5');
+    ok((await p.locator('.his-page select option').allInnerTexts()).join(',') === '5,10,15,30,50', '分页量可选 10/15/30/50（含默认 5）');
+    ok((await p.locator('.his-row').first().innerText()).includes('分页6.mp4'), '列表最上面是最近一次打开记录（分页6）');
+    ok((await p.locator('.his-row').first().innerText()).includes('电影A'), '行内含「文件夹名」列（电影A）');
+    // 前后翻页（8 条 → 2 页）
+    await p.locator('.his-page button', { hasText: '下一页' }).click();
+    await p.waitForFunction(() => document.querySelectorAll('.his-row').length === 3, null, { timeout: 8000 });
+    ok((await p.locator('.his-page').innerText()).replace(/\s+/g, ' ').includes('第 2 / 2 页'), '可后翻页（第 2 / 2 页，剩余 3 条）');
+    await p.locator('.his-page button', { hasText: '上一页' }).click();
+    await p.waitForFunction(() => document.querySelectorAll('.his-row').length === 5, null, { timeout: 8000 });
+    ok((await p.locator('.his-page').innerText()).replace(/\s+/g, ' ').includes('第 1 / 2 页'), '可前翻页回第 1 页');
+    // 改分页量：停在第 1 页也必须立即按新条数刷新
+    await p.locator('.his-page select').selectOption('30');
+    await p.waitForFunction(() => document.querySelectorAll('.his-row').length === 8, null, { timeout: 8000 });
+    ok(true, '分页量改为 30 立即刷新（8 条一页显示）');
+    await p.locator('.his-page select').selectOption('5');
+    await p.waitForFunction(() => document.querySelectorAll('.his-row').length === 5, null, { timeout: 8000 });
+    ok(true, '分页量改回 5 立即刷新');
     // 点开目录 → 点媒体文件 → 播放器加载 + 外部播放器按钮行出现
     const fileReq = p.waitForRequest((rq) => rq.url().includes('/api/vc/file') && rq.url().includes('token='), { timeout: 8000 });
     await p.locator('.node', { hasText: '电影A' }).first().click();
@@ -198,6 +249,28 @@ try {
       && (await p.locator('.ext-row button', { hasText: 'VLC 播放' }).count()) === 1
       && (await p.locator('.ext-row button', { hasText: '复制直链' }).count()) === 1, '外部播放器按钮行齐（PotPlayer / VLC / 复制直链）');
     ok((await p.locator('.ext-row').innerText()).includes('与视频教学共用一份'), '联动脚本提示注明与视频教学共用');
+    // 布局：外部播放器按钮行在播放历史列表「下面」；下载路径齐全；循环开关默认开
+    const hisBox = await p.locator('.his').boundingBox();
+    const extBox = await p.locator('.ext-row').boundingBox();
+    ok(!!hisBox && !!extBox && extBox.y >= hisBox.y + hisBox.height - 2, '外部播放器按钮行位于播放历史列表下方');
+    ok((await p.locator('.ext-row a[href="https://www.videolan.org/"]').count()) === 1, '说明小字含 VLC 下载路径 https://www.videolan.org/');
+    ok((await p.locator('.ext-row a[href="https://potplayer.daum.net/"]').count()) === 1, '说明小字含 PotPlayer 下载路径');
+    ok(await p.locator('.zone-head .lp input').isChecked(), '「文件夹内循环播放」默认开启');
+    // 刚打开的文件排到历史最上面（/vc/open 建档 + 刷新）
+    ok((await p.locator('.his-row').first().innerText()).includes('视频1.mp4'), '刚播放的文件排到历史最上面');
+    // 关闭当前视频 → 点历史任意一行 → 重新打开该文件（src 清空后必发新请求，避免同 URL 命中缓存测不出来）
+    await p.locator('.zone-head button', { hasText: '关闭' }).click();
+    await p.waitForSelector('.player-zone .ph', { timeout: 8000 });
+    ok((await p.locator('.his-row').count()) === 5, '关闭播放后历史列表仍在（可从这里重开）');
+    // 断言可观察状态（不 waitForRequest：同一 URL 二次加载会命中浏览器缓存，不发网络请求，测不出来）
+    await p.locator('.his-row', { hasText: '视频1.mp4' }).first().click();
+    await p.waitForSelector('.zone-head', { timeout: 8000 });
+    // src 在断点查询（await /vc/progress）之后才赋值，等它落地再读
+    await p.waitForFunction(() => { const v = document.querySelector('.player-zone video'); return !!(v && v.src); }, null, { timeout: 8000 });
+    const hisSrc = decodeURIComponent(await p.locator('.player-zone video').evaluate((v) => v.src || ''));
+    ok((await p.locator('.zone-head', { hasText: '视频1.mp4' }).count()) === 1 && hisSrc.includes('path=电影A/视频1.mp4'),
+      '点击播放历史任意一行重新打开该文件（src 指向该文件）');
+    ok(perr.length === 0, '页面无 JS 错误（含新模块）' + (perr.length ? '：' + perr[0] : ''));
     // v1.9.27 回归：复制直链必须是完整绝对 URL——potplayer:// 协议调起与外部粘贴拿到相对路径就是废链
     // （曾因 localBase 内网访问时 mediaBase 为空串，拼出 /api/vc/file?... 无 host 残链）
     await p.evaluate(() => { window.__copied = ''; navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve(); }; });

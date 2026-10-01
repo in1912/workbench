@@ -905,6 +905,8 @@ CREATE TABLE IF NOT EXISTS vc_records (
   updated_at TEXT DEFAULT (datetime('now','localtime')),
   UNIQUE(user_id, path)
 );
+-- 播放历史按「最近打开/观看」倒序翻页（vc_records 一表两用：算进度 + 当播放历史）
+CREATE INDEX IF NOT EXISTS idx_vc_records_recent ON vc_records(user_id, updated_at DESC);
 
 -- ---------- 练琴录音（录音文件落全局上传路径，有效时长由有权限成员确认） ----------
 CREATE TABLE IF NOT EXISTS piano_records (

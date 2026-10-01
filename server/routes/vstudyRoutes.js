@@ -322,6 +322,41 @@ router.get('/vc/progress', (req, res) => {
   res.json({ record: r || null });
 });
 
+// ---------- 视频中心播放历史（vc_records 复用：一人一文件一行，按最近打开/观看倒序） ----------
+// 拆出「所在文件夹名」与「文件名」两列——库里存的是完整路径（根目录 + 相对路径，分隔符两种都可能出现）
+function splitPath(p) {
+  const s = String(p || '');
+  const segs = s.split(/[\\/]+/).filter(Boolean);
+  return { name: segs.length ? segs[segs.length - 1] : s, folder: segs.length >= 2 ? segs[segs.length - 2] : '' };
+}
+
+// 打开文件时调用：建档（无进度也算一条）+ 刷新最近打开时间，让刚点的文件立刻排到历史最上面
+router.post('/vc/open', (req, res) => {
+  const b = req.body || {};
+  const p = String(b.path || '');
+  if (!p) return res.status(400).json({ error: '缺少 path' });
+  const user = db.prepare('SELECT display_name, username FROM users WHERE id=?').get(req.user.id);
+  db.prepare(`
+    INSERT INTO vc_records(user_id, user_name, path, ext, opened_at, updated_at)
+    VALUES(?,?,?,?,datetime('now','localtime'),datetime('now','localtime'))
+    ON CONFLICT(user_id, path) DO UPDATE SET updated_at = datetime('now','localtime')
+  `).run(req.user.id, (user && (user.display_name || user.username)) || '', p, String(b.ext || ''));
+  res.json({ ok: true });
+});
+
+// 播放历史列表（只看本人，倒序分页——最上面是最近一次打开记录；默认 5 条/页）
+router.get('/vc/records', (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const pageSize = Math.max(1, Math.min(100, parseInt(req.query.pageSize, 10) || 5));
+  const total = db.prepare('SELECT COUNT(*) c FROM vc_records WHERE user_id=?').get(req.user.id).c;
+  const records = db.prepare(`
+    SELECT id, path, ext, duration_sec, position_sec, watched_sec, opened_at, updated_at
+    FROM vc_records WHERE user_id=?
+    ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?
+  `).all(req.user.id, pageSize, (page - 1) * pageSize).map((r) => ({ ...r, ...splitPath(r.path) }));
+  res.json({ total, page, pageSize, records });
+});
+
 // ---------- 学习会话（历史学习列表的数据源：每打开一个文件 = 一次会话） ----------
 // 打开文件时调用：先结清该文件此前未关闭的会话（异常退出遗留），再建档返回会话 id
 router.post('/vstudy/session/open', (req, res) => {

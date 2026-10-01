@@ -38,18 +38,64 @@
             <span class="muted" style="font-size:12px">{{ curMedia.ext.toUpperCase() }}</span>
             <span v-if="resumeInfo" class="lb resume" title="按上次观看位置自动续播">{{ resumeInfo }}</span>
             <span class="grow"></span>
+            <label class="lp" :title="'本文件所在文件夹内的媒体依次循环播放（' + playlist.length + ' 个）'">
+              <input type="checkbox" v-model="loopPlay"> 🔁 文件夹内循环
+            </label>
             <button class="small" @click="closeMedia">✕ 关闭</button>
           </div>
           <video v-show="curMedia" ref="videoEl" controls controlslist="nodownload" preload="auto" @timeupdate="onTimeUpdate" @pause="flushMedia" @ended="onEnded"></video>
-          <!-- 外部播放器调起：浏览器 <video> 解不动 HEVC 10bit/4K，交给本地播放器硬解；
-               联动脚本与「学习 → 视频教学」共用同一份（协议注册全局幂等，装一次两边都能用） -->
-          <div v-if="curMedia" class="ext-row">
-            <button class="small" @click="openExternal('potplayer')">▶ PotPlayer 播放</button>
-            <button class="small" @click="openExternal('vlc')">▶ VLC 播放</button>
-            <button class="small" @click="copyMediaUrl">🔗 复制直链</button>
-            <span class="muted ext-tip">HEVC / 10bit / 4K 请用外部播放器（浏览器解不动）；首次使用先<a href="#" @click.prevent="dlExtSetup">⬇ 安装联动脚本</a>（与视频教学共用一份，装过即免，自动识别已装的播放器，免管理员）</span>
-          </div>
           <div v-if="!curMedia" class="ph">🎞 视频播放区（mp4 · flv · webm）／ 🎵 音频（mp3）<br><span style="font-size:12px">在左侧目录点击媒体文件开始播放，进度自动记忆、下次从这里续播</span></div>
+
+          <!-- ============ 播放历史（一人一份，倒序；点任意一行即重新打开该文件） ============ -->
+          <div class="his">
+            <div class="his-head">
+              <span class="his-title">🕘 播放历史</span>
+              <span class="muted" style="font-size:12px">共 {{ hisTotal }} 条</span>
+              <span class="grow"></span>
+              <button class="small" @click="loadHistory(hisPage)">↻ 刷新</button>
+            </div>
+            <table class="his-tb">
+              <thead>
+                <tr><th class="c-time">时间</th><th class="c-dir">文件夹</th><th class="c-name">文件名</th><th class="c-path">完整路径</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in hisRows" :key="r.id" class="his-row" :class="{ cur: curMedia && r.path === displayPath(curMedia.rel) }"
+                    :title="'点击播放：' + r.path" @click="openFromHistory(r)">
+                  <td class="c-time" :title="r.updated_at || ''">{{ fmtTime(r.updated_at) }}</td>
+                  <td class="c-dir" :title="r.folder">{{ r.folder || '—' }}</td>
+                  <td class="c-name" :title="r.name">{{ r.name }}</td>
+                  <td class="c-path" :title="r.path">{{ r.path }}</td>
+                </tr>
+                <tr v-if="!hisRows.length"><td colspan="4" class="muted ld">暂无播放记录——点开任意视频后这里会出现记录</td></tr>
+              </tbody>
+            </table>
+            <div class="his-page">
+              <button class="small" :disabled="hisPage <= 1" @click="hisGo(hisPage - 1)">◀ 上一页</button>
+              <span class="muted" style="font-size:12px">第 {{ hisPage }} / {{ hisPages }} 页</span>
+              <button class="small" :disabled="hisPage >= hisPages" @click="hisGo(hisPage + 1)">下一页 ▶</button>
+              <span class="grow"></span>
+              <span class="muted" style="font-size:12px">每页</span>
+              <select v-model.number="hisPageSize" @change="onPageSize">
+                <option v-for="n in PAGE_SIZES" :key="n" :value="n">{{ n }}</option>
+              </select>
+              <span class="muted" style="font-size:12px">条</span>
+            </div>
+          </div>
+
+          <!-- 外部播放器调起（放在播放历史下方）：浏览器 <video> 解不动 HEVC 10bit/4K，交给本地播放器硬解；
+               联动脚本与「学习 → 视频教学」共用同一份（协议注册全局幂等，装一次两边都能用） -->
+          <div class="ext-row">
+            <template v-if="curMedia">
+              <button class="small" @click="openExternal('potplayer')">▶ PotPlayer 播放</button>
+              <button class="small" @click="openExternal('vlc')">▶ VLC 播放</button>
+              <button class="small" @click="copyMediaUrl">🔗 复制直链</button>
+            </template>
+            <span class="muted ext-tip">
+              HEVC / 10bit / 4K 请用外部播放器（浏览器解不动）；首次使用先<a href="#" @click.prevent="dlExtSetup">⬇ 安装联动脚本</a>（与视频教学共用一份，装过即免，自动识别已装的播放器，免管理员）；
+              还没装播放器？下载 <a href="https://www.videolan.org/" target="_blank" rel="noopener">VLC media player</a> ·
+              <a href="https://potplayer.daum.net/" target="_blank" rel="noopener">PotPlayer</a>
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -61,7 +107,7 @@
 // 保留：目录树 + Range 播放 + flv.js + 本地直连 + 外部播放器联动 + 进度记忆（断点续播）。
 // 去掉：学年/学科选择、文档预览、注意力点检、学时记账、学习会话/历史列表。
 // 进度口径与 vstudy 相同：position=历史最大播放位置、watched=实际观看增量，15 秒一批上报。
-import { onBeforeUnmount, onMounted, provide, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
 import { api } from '../api';
 import { localState, probeLocalBase, sameOriginBase } from '../utils/localBase';
 import VsTreeNode from '../learning/VsTreeNode.vue';
@@ -78,6 +124,19 @@ const treeError = ref('');
 const videoEl = ref(null);
 const curMedia = ref(null);          // { rel, name, ext }
 const resumeInfo = ref('');          // 断点续播提示（「已从 12:34 续播」）
+
+// ---------- 播放历史（vc_records，一人一份；倒序分页） ----------
+const PAGE_SIZES = [5, 10, 15, 30, 50];
+const hisRows = ref([]);
+const hisTotal = ref(0);
+const hisPage = ref(1);
+const hisPageSize = ref(5);          // 默认 5 条/页
+const hisPages = computed(() => Math.max(1, Math.ceil(hisTotal.value / hisPageSize.value)));
+
+// ---------- 文件夹内循环播放 ----------
+const loopPlay = ref(localStorage.getItem('vc_loop') !== '0'); // 默认开启
+const playlist = ref([]);            // 当前文件夹内的媒体列表（不含子文件夹）
+watch(loopPlay, (v) => { try { localStorage.setItem('vc_loop', v ? '1' : '0'); } catch { /* 隐私模式 */ } });
 
 let flvPlayer = null;
 let flushTimer = null;
@@ -119,6 +178,45 @@ async function toggleRoot() {
   }
 }
 
+// ---------- 播放历史 ----------
+function fmtTime(s) { return String(s || '').replace('T', ' ').slice(0, 16); } // 秒级截掉，列更紧凑
+async function loadHistory(page = hisPage.value) {
+  try {
+    const r = await api.get(`/vc/records?page=${page}&pageSize=${hisPageSize.value}`);
+    hisRows.value = r.records || [];
+    hisTotal.value = r.total || 0;
+    hisPage.value = r.page || 1;
+  } catch { /* 历史拉取失败不阻塞播放 */ }
+}
+function hisGo(p) {
+  const t = Math.min(Math.max(1, p), hisPages.value);
+  if (t === hisPage.value) return;
+  loadHistory(t);
+}
+// 改分页量：即使当前就在第 1 页也必须重拉（否则每页条数变了列表不刷新）
+function onPageSize() { loadHistory(1); }
+// 打开文件时建档：无进度也留一条，刚点开的文件立刻排到历史最上面
+async function touchOpen(rel, ext) {
+  try { await api.post('/vc/open', { path: displayPath(rel), ext: String(ext || '') }); } catch { /* 建档失败不影响播放 */ }
+  loadHistory(hisPage.value);
+}
+// 历史里存的是完整路径（根 + 相对路径）——反推相对路径才能重新打开；目录改过 → null
+function relFromDisplay(full) {
+  const norm = (x) => String(x || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const root = norm(cfg.value.root);
+  const s = norm(full);
+  if (!root) return s;
+  if (s === root) return '';
+  return s.startsWith(root + '/') ? s.slice(root.length + 1) : null;
+}
+function openFromHistory(r) {
+  const rel = relFromDisplay(r.path);
+  if (rel === null) { alert('这条记录不在当前视频目录内（目录配置可能已变），无法打开：\n' + r.path); return; }
+  const name = r.name || rel.split('/').pop();
+  const ext = String(r.ext || name.split('.').pop() || '').toLowerCase();
+  playMedia(rel, { name, ext, kind: 'media' });
+}
+
 // ---------- 媒体播放（mp4/mp3 原生；flv 用 flv.js 转封装）+ 断点续播 ----------
 function displayPath(rel) {
   const root = (cfg.value.root || '').replace(/[\\/]+$/, '');
@@ -138,6 +236,8 @@ async function playMedia(rel, entry) {
   const url = fileUrl(rel);
   track = { last: 0, watched: 0, maxPos: 0, dur: 0 };
   resumeInfo.value = '';
+  loadPlaylist(dirOf(rel));            // 当前文件夹内的媒体列表（循环播放用，不含子文件夹）
+  touchOpen(rel, entry.ext);           // 建档 + 刷新播放历史（无进度也留一条）
   // 断点续播：上次看到 >30s 且未到时长 95% 才续（接近看完的从头播）
   let seekTo = 0;
   try {
@@ -178,6 +278,27 @@ async function playMedia(rel, entry) {
 function destroyFlv() {
   if (flvPlayer) { try { flvPlayer.destroy(); } catch { /* 已销毁 */ } flvPlayer = null; }
 }
+// ---------- 文件夹内循环播放（当前文件夹内的媒体，不含子文件夹；默认开） ----------
+function dirOf(rel) {
+  const s = String(rel || '').replace(/\\/g, '/');
+  const i = s.lastIndexOf('/');
+  return i > 0 ? s.slice(0, i) : '';
+}
+async function loadPlaylist(dir) {
+  try {
+    const r = await api.get('/vc/tree?dir=' + encodeURIComponent(dir));
+    playlist.value = (r.entries || []).filter((e) => e.kind === 'media')
+      .map((e) => ({ rel: dir ? dir + '/' + e.name : e.name, name: e.name, ext: e.ext, kind: 'media' }));
+  } catch { playlist.value = []; }
+}
+function playNextInFolder() {
+  const list = playlist.value, cur = curMedia.value;
+  if (!list.length || !cur) return;
+  let i = list.findIndex((x) => x.rel === cur.rel);
+  i = i < 0 ? 0 : (i + 1) % list.length; // 最后一个回到第一个；只有一个文件就自身重播
+  const next = list[i];
+  if (next) playMedia(next.rel, next);
+}
 function closeMedia() {
   flushMedia();
   mediaSeq++; // 让挂在 video 上的续播回调（若有）失效
@@ -186,6 +307,7 @@ function closeMedia() {
   videoEl.value.load();
   curMedia.value = null;
   resumeInfo.value = '';
+  playlist.value = [];
   track = null;
 }
 // 外部播放器调起：potplayer:// vlc:// 协议交给本地播放器硬解（与视频教学同一套注册脚本）
@@ -214,7 +336,11 @@ function onTimeUpdate() {
   track.maxPos = Math.max(track.maxPos, t);
   if (v.duration && isFinite(v.duration)) track.dur = v.duration;
 }
-function onEnded() { if (track && videoEl.value) { track.maxPos = Math.max(track.maxPos, videoEl.value.duration || track.maxPos); } flushMedia(); }
+function onEnded() {
+  if (track && videoEl.value) { track.maxPos = Math.max(track.maxPos, videoEl.value.duration || track.maxPos); }
+  flushMedia();
+  if (loopPlay.value) playNextInFolder(); // 循环开启时接播文件夹内下一个
+}
 
 async function flushMedia() {
   if (!curMedia.value || !track) return;
@@ -238,6 +364,7 @@ onMounted(async () => {
   await loadCfg();
   if (cfg.value.root_ok) {
     if (!rootOpen.value) toggleRoot();          // 进页直接展开根目录
+    loadHistory(1);                             // 播放历史第一页
     flushTimer = setInterval(flushMedia, 15000); // 15 秒一批上报进度
   }
   applyLocal();
@@ -273,11 +400,31 @@ onBeforeUnmount(() => {
 .zone { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .zone-head { display: flex; align-items: center; gap: 10px; font-size: 13.5px; margin-bottom: 8px; }
 .zone-head .grow { flex: 1; }
-/* 播放器独占右侧整个高度（无文档区瓜分） */
-.player-zone video { width: 100%; max-height: 64vh; background: #000; border-radius: 8px; }
-/* 外部播放器按钮行：HEVC 10bit/4K 交给本地播放器 */
-.ext-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0 2px; }
-.ext-row .ext-tip { font-size: 12px; }
+/* 播放器（下方还挂着播放历史与外部播放器行，高度收一点） */
+.player-zone video { width: 100%; max-height: 56vh; background: #000; border-radius: 8px; }
+/* 文件夹内循环开关（播放中显示在标题行） */
+.zone-head .lp { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text3); cursor: pointer; user-select: none; white-space: nowrap; }
+.zone-head .lp input { margin: 0; cursor: pointer; }
+/* ---------- 播放历史 ---------- */
+.his { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.his-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.his-title { font-size: 13.5px; font-weight: 600; }
+.his-tb { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+.his-tb th { text-align: left; font-weight: 600; color: var(--text3); font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.his-tb td { padding: 5px 6px; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.his-tb .c-time { width: 120px; color: var(--text3); font-size: 12px; }
+.his-tb .c-dir { width: 16%; color: var(--text2); }
+.his-tb .c-name { width: 26%; }
+.his-tb .c-path { color: var(--text3); font-size: 12px; }
+.his-row { cursor: pointer; }
+.his-row:hover { background: var(--bg3); }
+.his-row.cur td { color: var(--accent); }
+.his-page { display: flex; align-items: center; gap: 8px; padding: 8px 0 2px; }
+.his-page button, .his-head button { white-space: nowrap; }
+.his-page select { flex: 0 0 auto; width: auto; background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 12.5px; }
+/* 外部播放器按钮行（置于播放历史下方）：HEVC 10bit/4K 交给本地播放器 */
+.ext-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0 2px; border-top: 1px solid var(--border); margin-top: 4px; }
+.ext-row .ext-tip { font-size: 12px; line-height: 1.7; }
 .ext-tip a { color: var(--accent); }
 .ph { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text3); font-size: 14px; min-height: 260px; text-align: center; }
 .small { background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer; text-decoration: none; }
