@@ -1616,7 +1616,8 @@ function migrateTtsToTools() {
   const fix = (d) => {
     if (getSetting(d, 'tts_merge_v165', false)) return;
     setSetting(d, 'tts_merge_v165', true);
-    const users = d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all();
+    // users 表只在主库（租户库没有——裸查会在每个新租户库首次进 forEachTenant 时打一条「no such table」噪音）
+    const users = (() => { try { return d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all(); } catch { return []; } })();
     for (const u of users) {
       let pages;
       try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
@@ -1691,6 +1692,41 @@ function migrateV170Pages() {
   console.log('[db] v1.7.0 模块重组授权迁移完成（业务系统/文件存档/全局搜索→效率工具，个人账务→家庭管理，用户管理→设置）');
 }
 migrateV170Pages();
+
+// 一次性迁移（2026-10 v1.9.22）：「Agent红绿灯」从智能家居页的 cclight 子 tab 升格为独立页 cclight。
+// 授权随之平移：开过 smarthome 页、且（未做页内细分=全开，或细分里勾过 cclight 子 tab）的用户补上 cclight 页；
+// smarthome 细分里的 cclight 键转成新页三个子 tab（intro/download/install）全开授权后删除（幂等，主库+租户库同跑）。
+function migrateCclightPage() {
+  const fix = (d) => {
+    if (getSetting(d, 'cclight_page_v1922', false)) return;
+    setSetting(d, 'cclight_page_v1922', true);
+    const users = (() => { try { return d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all(); } catch { return []; } })();
+    for (const u of users) {
+      let pages;
+      try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+      let tabs;
+      try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+      let changed = false;
+      const smTabs = Array.isArray(tabs.smarthome) ? tabs.smarthome : null;
+      const hadCclight = smTabs === null || smTabs.includes('cclight'); // 未细分=页内全开
+      if (Array.isArray(pages) && pages.length && pages.includes('smarthome') && hadCclight && !pages.includes('cclight')) {
+        pages.splice(pages.indexOf('smarthome') + 1, 0, 'cclight');
+        changed = true;
+      }
+      if (smTabs) {
+        if (smTabs.includes('cclight')) tabs.cclight = ['intro', 'download', 'install'];
+        tabs.smarthome = smTabs.filter((t) => t !== 'cclight'); // 死键清理（升格后 smarthome 不再有此 tab）
+        changed = true;
+      }
+      if (changed) d.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE id=?')
+        .run(JSON.stringify(pages), JSON.stringify(tabs), u.id);
+    }
+  };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] v1.9.22 Agent红绿灯升格独立页：用户授权已迁移');
+}
+migrateCclightPage();
 
 // 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
 // （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。

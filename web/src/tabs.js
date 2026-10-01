@@ -85,14 +85,20 @@ export const TAB_DEFS = {
   ],
   // 智能家居（2026-09 v1.6.8）：米家设备总览与控制 / 参数中英对照 / 扫码绑定设置
   // v1.6.29：移除「监控」tab（小米云已停 HLS 出流，事件凭证通道一并下线）
+  // v1.9.22：「Agent红绿灯」升格为独立页（见下方 cclight），不再是本页子 tab
   smarthome: [
     { key: 'mijia', label: '米家' },
     { key: 'terms', label: '参数翻译' },
-    // Agent红绿灯（v1.8.1）：ESP32-C3 三色灯 = Claude Code 状态指示（使用说明 + 刷机 + 文件下载）
-    { key: 'cclight', label: 'Agent红绿灯' },
     // 智能板（v1.9.11）：小智 Korvo2V3 语音板 = 装机向导 + 唤醒词编译烧录 + 语音控米家
     { key: 'xiaozhi', label: '智能板' },
     { key: 'settings', label: '设置' },
+  ],
+  // Agent红绿灯（v1.8.1 原为智能家居子 tab；v1.9.22 升格独立页）：
+  // 功能介绍（含灯效演示图）/ 下载安装包（含子文件清单）/ 安装步骤（刷版→电脑钩子→蓝牙配对）
+  cclight: [
+    { key: 'intro', label: '功能介绍' },
+    { key: 'download', label: '下载安装包' },
+    { key: 'install', label: '安装步骤' },
   ],
 };
 
