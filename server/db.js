@@ -1145,6 +1145,9 @@ addCol(db, 'messages', 'is_voice', 'INTEGER NOT NULL DEFAULT 0');
 addCol(db, 'messages', 'voice_secs', 'REAL DEFAULT 0');
 addCol(db, 'messages', 'voice_state', "TEXT DEFAULT ''");
 addCol(db, 'messages', 'voice_text', "TEXT DEFAULT ''");
+// v1.9.25：转写溯源——用的模型名 + 耗时毫秒（气泡下方小字展示）
+addCol(db, 'messages', 'voice_model', "TEXT DEFAULT ''");
+addCol(db, 'messages', 'voice_ms', 'INTEGER DEFAULT 0');
 // 桌面通知代理（v1.9.24）：notify_key=每用户接入密钥（下载安装脚本时生成，key+uid 即凭证，照剪贴板代理模式）；
 // notify_autoplay=语音消息弹窗时自动播放（默认 1）
 addCol(db, 'users', 'notify_key', "TEXT DEFAULT ''");

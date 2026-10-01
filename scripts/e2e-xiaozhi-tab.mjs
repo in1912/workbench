@@ -78,6 +78,10 @@ try {
   ok(alPut.status === 200 && alPut.j.device_aliases['123456789'] === '客厅大灯', '别名登记成功（did→别名对照）');
   const alClr = await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: '123456789', alias: '' } });
   ok(alClr.status === 200 && !alClr.j.device_aliases['123456789'], '空别名=解除登记');
+  // v1.9.25 回归：清空别名必须真正落库——旧 saveConfig 的合并语义（{...cur, ...patch}）会把删除的键
+  // 复活：响应里的对照表看着删了、读 config 又回来，正是「改为空不能保存生效」的根因
+  const cfgClr = await api('GET', '/api/xiaozhi/config', { token: T });
+  ok(cfgClr.status === 200 && !(cfgClr.j.config.device_aliases || {})['123456789'], '清空别名持久生效（config 不再含该 did——合并复活 bug 回归）');
   ok((await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: 'x!@#', alias: 'a' } })).status === 400, '非法 did 被拒');
   ok((await api('PUT', '/api/xiaozhi/device-alias', { token: T, body: { did: '123456789', alias: 'a'.repeat(33) } })).status === 400, '超长别名被拒（≤32）');
   ok((await api('PUT', '/api/xiaozhi/device-alias', { body: { did: '123456789', alias: 'a' } })).status === 401, '未登录登记别名 401');
@@ -233,6 +237,42 @@ try {
       if (s.failed) console.error('  失败原因：' + s.error);
       ok(s.failed !== true, '无失败');
     }
+  }
+
+  // —— 设备一览 UI（v1.9.25：默认展开 + 父设备标注）——
+  // 隔离库未绑米家，/xiaozhi/devices 走路由拦截喂模拟数据（接口真实形态见上方 bound=false 降级用例）
+  console.log('— 设备一览 UI（默认展开 / 父设备标注，mock 设备数据）');
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    const ctx = await br.newContext();
+    await ctx.addInitScript(([t, u]) => {
+      localStorage.setItem('wb_token', t);
+      localStorage.setItem('wb_user', u);
+      localStorage.setItem('xz_sub', 'voice'); // 直接落在「语音控米家」子 tab（设备一览所在）
+    }, [T, JSON.stringify(lg.j.user)]);
+    const p = await ctx.newPage();
+    const perr = [];
+    p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    await ctx.route('**/api/xiaozhi/devices**', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ bound: true, homes: ['我家'], devices: [
+        { did: '111', name: '客厅灯', home: '我家', room: '客厅', online: true, sw: { siid: 2, piid: 1, v: true }, t: null, h: null, alias: null },
+        { did: '222', name: '两路开关', home: '我家', room: '卧室', online: true, is_parent: true, sw: null, t: null, h: null, alias: null },
+      ] }),
+    }));
+    await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+    await p.waitForSelector('.xz-dev', { timeout: 10000 });
+    ok(true, '可控设备一览默认直接展开（不点标题就有 .xz-dev 行）');
+    ok((await p.locator('.xz-parent-tag').count()) === 1 && (await p.locator('.xz-parent-tag').first().innerText()) === '父设备', '父设备行渲染圆角「父设备」标签');
+    const parentRow = p.locator('.xz-dev', { hasText: '两路开关' });
+    ok((await parentRow.locator('.xz-toggle').count()) === 0 && (await parentRow.locator('.xz-alias').count()) === 0, '父设备行无开关按钮、无别名框');
+    const lampRow = p.locator('.xz-dev', { hasText: '客厅灯' });
+    ok((await lampRow.locator('.xz-toggle').count()) === 1 && (await lampRow.locator('.xz-alias').count()) === 1, '普通设备行仍有开关与别名框');
+    ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
+    await br.close();
+  } catch (e) {
+    ok(false, '设备一览 UI 段异常：' + e.message);
   }
 
   console.log(`\n结果：${passed} 通过 / ${failed} 失败`);

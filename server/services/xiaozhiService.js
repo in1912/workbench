@@ -49,7 +49,9 @@ function saveConfig(patch) {
     speaker: { ...cur.speaker, ...(patch.speaker || {}) },
     bridge: { ...cur.bridge, ...(patch.bridge || {}) },
     helper: { ...cur.helper, ...(patch.helper || {}) },
-    device_aliases: { ...cur.device_aliases, ...(patch.device_aliases || {}) },
+    // v1.9.25 修：patch 显式带 device_aliases 时用「替换」语义——合并会把已删除的别名键复活
+    // （清空别名保存后看似成功、刷新还在的 bug；全量 map 只由 setDeviceAlias 构造，安全替换）
+    device_aliases: patch.device_aliases !== undefined ? { ...patch.device_aliases } : { ...(cur.device_aliases || {}) },
     paths: { ...cur.paths, ...(patch.paths || {}) },
   };
   setSetting(db, CFG_KEY, next);
@@ -85,13 +87,20 @@ function bridgeKeyOk(req) {
 }
 
 // ---------- 设备拍平（桥接给云端 AI 的紧凑形态；砍 urn/model 等省流量） ----------
+// opts.includeParents（v1.9.25）：带上多路开关的父条目（is_parent=1、无开关）——只给面板「可控设备一览」
+// 标注用；AI 桥接的 list_devices 仍用瘦身清单（父条目不可直接控，回包里只会占流量，v1.9.13 教训）。
 const MAX_DEVICES = 150;
-async function listDevicesForBridge(fresh = false) {
+async function listDevicesForBridge(fresh = false, opts = {}) {
   const view = await mihome.getHomeView(!!fresh); // fresh=1 与「米家」tab 的强制同步同一条路
   const aliases = getConfig().device_aliases || {};
   const out = [];
   for (const h of view.homes || []) for (const r of h.rooms || []) for (const d of r.devices || []) {
-    if (d.is_parent) continue; // 多路开关的父条目无外层开关，各分路有独立卡片
+    if (d.is_parent) {
+      if (!opts.includeParents) continue; // 多路开关的父条目无外层开关，各分路有独立卡片
+      out.push({ did: d.did, name: d.name, home: h.name, room: r.name, online: !!d.online, is_parent: true, sw: null, t: null, h: null, alias: null });
+      if (out.length >= MAX_DEVICES) return out;
+      continue;
+    }
     out.push({
       did: d.did, name: d.name, home: h.name, room: r.name, online: !!d.online,
       sw: d.switch ? { siid: d.switch.siid, piid: d.switch.piid, v: d.switch.value === true } : null,

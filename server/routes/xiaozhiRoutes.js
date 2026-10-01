@@ -116,7 +116,7 @@ router.post('/xiaozhi/bridge', (req, res) => {
 // ---------- 可控设备（面板预览用；走登录态不走 key；与「米家」tab 同源，fresh=1 强刷云端） ----------
 router.get('/xiaozhi/devices', asyncH(async (req, res) => {
   try {
-    const devices = await svc.listDevicesForBridge(req.query.fresh === '1');
+    const devices = await svc.listDevicesForBridge(req.query.fresh === '1', { includeParents: true }); // v1.9.25：面板也标注父设备（无开关）
     // v1.9.17：家庭清单（默认家庭下拉用）随设备一起给，保持单一数据源
     const homes = [...new Set(devices.map((d) => d.home).filter(Boolean))];
     res.json({ bound: true, devices, homes });

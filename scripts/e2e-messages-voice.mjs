@@ -92,6 +92,14 @@ try {
   j = await r.json();
   ck('T8 群发语音 count=2', r.status === 200 && j.count === 2, JSON.stringify(j));
 
+  // v1.9.25：不带主题的语音 → 默认「<发送人>发出的语音信息」（列表/弹窗不再空标题）
+  r = await fetch(`${B}/api/messages/voice`, { method: 'POST', headers: A, body: JSON.stringify({ to_user: uAId, wav_b64: wav.toString('base64'), secs: 1 }) });
+  j = await r.json();
+  // 用发送人（admin）视角读同一条会话——uA 视角会把她收到的未读全标已读，殃及后面 B3 的轮询断言
+  const j9 = await (await fetch(`${B}/api/messages?user_id=${uAId}`, { headers: A })).json();
+  const m9 = (j9.messages || []).find((m) => m.id === j.id);
+  ck('T9 空主题语音默认「admin发出的语音信息」', r.status === 200 && j.id > 0 && m9 && m9.subject === 'admin发出的语音信息', JSON.stringify(m9));
+
   // ---------- 桌面通知代理 ----------
   r = await fetch(`${B}/api/messages/agent/script?type=install`, { headers: A });
   const cmdBuf = Buffer.from(await r.arrayBuffer());

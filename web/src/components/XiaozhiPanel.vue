@@ -284,14 +284,18 @@
           <div v-for="d in shownDevices" :key="d.did" class="xz-dev" :class="{ busy: d._busy }">
             <button v-if="d.sw" class="xz-toggle" :class="{ on: d.sw.v, wait: d._busy }" :disabled="!d.online || d._busy"
                     :title="d.online ? '快速通断测试' : '设备离线'" @click="toggleDevice(d)"><i></i></button>
-            <i v-else class="xz-dot" :class="{ 'xz-on': d.online }" :title="d.online ? '在线（无开关属性）' : '离线'"></i>
+            <i v-else class="xz-dot" :class="{ 'xz-on': d.online }" :title="d.online ? (d.is_parent ? '在线（父设备）' : '在线（无开关属性）') : '离线'"></i>
             <span class="xz-dev-name" :title="`${d.room === '未分区' ? '' : d.room + ' · '}${d.name}${d.home ? '（' + d.home + '）' : ''}`">{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
-            <span class="xz-alias-arrow" title="语音别名（登记后只认别名，本名退出匹配——重名设备消歧用）">叫→</span>
-            <input v-model="d.aliasDraft" class="xz-alias" placeholder="语音别名" maxlength="32"
-                   :disabled="!isAdmin" @blur="saveAlias(d)" @keyup.enter="$event.target.blur()" />
-            <button class="btn sm ghost xz-alias-save" :class="{ dirty: d.aliasDraft !== (d.alias || '') }"
-                    :disabled="!isAdmin || d.aliasDraft === (d.alias || '')" @mousedown.prevent @click="saveAlias(d)">存</button>
-            <small v-if="d.sw" class="xz-muted xz-sw-state">{{ d.sw.v ? '开' : '关' }}</small>
+            <!-- 父设备（v1.9.25）：多路开关的父条目——本体无开关无别名，各分路有独立卡片，这里只标注（照「米家」tab 的父设备标法） -->
+            <span v-if="d.is_parent" class="xz-parent-tag" title="多路开关的父设备——本体没有开关，各分路在下方独立可控">父设备</span>
+            <template v-else>
+              <span class="xz-alias-arrow" title="语音别名（登记后只认别名，本名退出匹配——重名设备消歧用）">叫→</span>
+              <input v-model="d.aliasDraft" class="xz-alias" placeholder="语音别名" maxlength="32"
+                     :disabled="!isAdmin" @blur="saveAlias(d)" @keyup.enter="$event.target.blur()" />
+              <button class="btn sm ghost xz-alias-save" :class="{ dirty: d.aliasDraft !== (d.alias || '') }"
+                      :disabled="!isAdmin || d.aliasDraft === (d.alias || '')" @mousedown.prevent @click="saveAlias(d)">存</button>
+              <small v-if="d.sw" class="xz-muted xz-sw-state">{{ d.sw.v ? '开' : '关' }}</small>
+            </template>
           </div>
         </div>
       </div>
@@ -429,7 +433,7 @@ const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false,
 const probeMsg = ref(''); const probeOk = ref(false);
 const spProbeMsg = ref(''); const spTestMsg = ref('');
 const testText = ref('');
-const devices = ref([]); const showDevices = ref(false);
+const devices = ref([]); const showDevices = ref(true); // v1.9.25：可控设备一览默认直接展开
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 
 // ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 ----------
@@ -867,6 +871,8 @@ onBeforeUnmount(() => {
 .xz-alias-save { flex: none; padding: 2px 8px !important; font-size: 12px; opacity: .45; }
 .xz-alias-save.dirty { opacity: 1; border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
 .xz-sw-state { margin-left: auto; flex: none; }
+/* 父设备圆角标签（v1.9.25）：行内式（本面板设备是行不是卡片，照「米家」tab 的 accent 底白字圆角观感） */
+.xz-parent-tag { flex: none; margin-left: 8px; font-size: 11px; line-height: 1; font-weight: 600; padding: 4px 9px; border-radius: 9px; background: var(--accent, #4f8cff); color: #fff; }
 .xz-live-frame { position: relative; margin-top: 12px; background: #0b1020; border-radius: 10px; overflow: hidden; }
 .xz-live-frame img { display: block; width: 100%; max-height: 62vh; object-fit: contain; }
 .xz-live-tag { position: absolute; top: 10px; left: 10px; font-size: 11px; letter-spacing: 1px; color: #ff6b6b; background: rgba(0,0,0,.55); border-radius: 4px; padding: 2px 8px; }

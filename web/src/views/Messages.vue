@@ -55,6 +55,8 @@
                 <template v-if="m.voice_text">{{ m.voice_text }}</template>
                 <button v-else-if="m.voice_state === 'pending'" class="vm-tag" disabled>转写中…</button>
                 <button v-else class="vm-tag" @click="retranscribe(m)">未转写 · 点我转文字</button>
+                <!-- v1.9.25：转写溯源小字——所用模型 + 转写耗时 -->
+                <div v-if="m.voice_text && m.voice_model" class="vm-meta">{{ m.voice_model }} · {{ (Math.max(0, m.voice_ms || 0) / 1000).toFixed(1) }} 秒转写</div>
               </div>
             </div>
             <div v-if="!msgs.length" class="empty" style="padding:30px 0">暂无沟通记录，发第一条消息吧</div>
@@ -272,6 +274,8 @@ onMounted(loadContacts);
 
 // ---------- 语音消息（v1.9.24）：录音 → 重采样 16k 单声道 PCM16 WAV → base64 上传 ----------
 // WAV 是刻意选择：桌面代理 SoundPlayer 任意 Windows 直接可播 + 转写引擎原生输入格式，无需解码器
+// v1.9.25：录音方法对齐「效率工具 → 录音转写」（VibeVoiceTab）——autoGainControl 自动增益、
+// 显式 opus 编码、每秒分片、分场景权限报错；此前无增益无分片，录出来的音量小且个别内核丢整段。
 const recording = ref(false);
 const recSecs = ref(0);
 const recBusy = ref(false);
@@ -282,15 +286,29 @@ let recTimer = null;
 let recT0 = 0;
 let recSend = false; // 停止时是否发送（false=取消）
 async function startRec() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { flash('当前浏览器不支持录音', 'err'); return; }
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { flash('当前浏览器不支持录音，请使用 Chrome / Edge 浏览器', 'err'); return; }
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-  } catch (e) { flash('无法访问麦克风：' + (e.message || e.name), 'err'); return; }
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (e) {
+    flash(e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError'
+      ? '浏览器已拒绝麦克风权限：点击地址栏左侧 🔒 图标 → 网站设置 → 麦克风 → 允许，然后重新录制'
+      : e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError'
+        ? '找不到麦克风设备：检查 Windows 设置→隐私→麦克风 是否开启，声音设置→录制设备 是否被禁用'
+        : e.name === 'NotReadableError'
+          ? '麦克风被其他程序占用（微信/腾讯会议/别的网页标签）：关掉后再试'
+          : '无法访问麦克风：' + (e.message || e.name), 'err');
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
   recChunks = [];
-  try { mediaRec = new MediaRecorder(mediaStream); } catch { flash('录音组件初始化失败', 'err'); stopTracks(); return; }
+  try { mediaRec = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : {}); }
+  catch { flash('录音组件初始化失败', 'err'); stopTracks(); return; }
   mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
   mediaRec.onstop = onRecStop;
-  mediaRec.start();
+  mediaRec.start(1000); // 每秒一片：边录边出数据，个别内核上不易丢整段（同 VibeVoiceTab）
   recording.value = true;
   recSecs.value = 0;
   recT0 = Date.now();
@@ -318,7 +336,7 @@ async function onRecStop() {
   stopTracks();
   recording.value = false;
   if (!sendIt) return; // 取消
-  if (blob.size < 500) { flash('录音太短，请重录', 'err'); return; }
+  if (blob.size < 1000 || secs < 1) { flash('录音太短，请重录', 'err'); return; }
   if (!recipients.value.length) { flash('请先选择收件人', 'err'); return; }
   recBusy.value = true;
   try {
@@ -332,31 +350,23 @@ async function onRecStop() {
   } catch (e) { flash('语音发送失败：' + e.message, 'err'); }
   recBusy.value = false;
 }
-// webm/opus 解码 → 混单声道 → 线性重采样 16k → PCM16 WAV → base64
+// webm/opus 解码 → OfflineAudioContext 渲染（内建抗混叠重采样 + 自动混单声道）→ PCM16 WAV → base64。
+// v1.9.25 前是手写线性插值降采样（48k→16k 无低通，高频镜像混进语音段——转写/听感受损的根因之一）。
 async function encodeWav16k(blob) {
   const AC = window.AudioContext || window.webkitAudioContext;
   const ac = new AC();
   try {
     const aud = await ac.decodeAudioData(await blob.arrayBuffer());
-    let mono = aud.getChannelData(0);
-    if (aud.numberOfChannels > 1) {
-      const c2 = aud.getChannelData(1);
-      mono = new Float32Array(mono.length);
-      for (let i = 0; i < mono.length; i++) mono[i] = (mono[i] + c2[i]) / 2;
-    }
-    const ratio = aud.sampleRate / 16000;
-    const outN = Math.max(1, Math.floor(mono.length / ratio));
-    const out = new Float32Array(outN);
-    for (let i = 0; i < outN; i++) {
-      const p = i * ratio;
-      const i0 = Math.floor(p);
-      const i1 = Math.min(i0 + 1, mono.length - 1);
-      const f = p - i0;
-      out[i] = mono[i0] * (1 - f) + mono[i1] * f;
-    }
-    const pcm = new Int16Array(out.length);
-    for (let i = 0; i < out.length; i++) {
-      const s = Math.max(-1, Math.min(1, out[i]));
+    const frames = Math.max(1, Math.ceil(aud.duration * 16000));
+    const off = new OfflineAudioContext(1, frames, 16000); // 1 声道 16k：浏览器自己做高质量重采样与混音
+    const src = off.createBufferSource();
+    src.buffer = aud;
+    src.connect(off.destination);
+    src.start();
+    const mono = (await off.startRendering()).getChannelData(0);
+    const pcm = new Int16Array(mono.length);
+    for (let i = 0; i < mono.length; i++) {
+      const s = Math.max(-1, Math.min(1, mono[i]));
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     const header = new ArrayBuffer(44);
@@ -395,6 +405,8 @@ async function retranscribe(m) {
     const r = await api.post(`/messages/voice/${m.id}/transcribe`, {});
     m.voice_text = r.voice_text || '';
     m.voice_state = 'done';
+    m.voice_model = r.voice_model || m.voice_model || '';
+    m.voice_ms = r.voice_ms ?? m.voice_ms ?? 0;
   } catch (e) { m.voice_state = 'failed'; flash('转写失败：' + e.message, 'err'); }
 }
 
@@ -428,12 +440,13 @@ onMounted(loadAgentPrefs);
 .bubble.mine .voice-msg { background: rgba(79, 124, 247, 0.12); }
 .bubble.mine .voice-msg:hover { background: rgba(79, 124, 247, 0.2); }
 .vm-icon { font-size: 15px; line-height: 1; }
-.bubble.mine .vm-icon { transform: scaleX(-1); } /* 自己发的：喇叭朝左（微信习惯） */
+/* v1.9.25：不再镜像翻转——自己发的语音三角也尖朝右（微信实际样式，旧版翻成朝左是错的） */
 .vm-bar { height: 14px; border-radius: 7px; background: repeating-linear-gradient(135deg, rgba(79, 124, 247, 0.65) 0 3px, rgba(79, 124, 247, 0.3) 3px 6px); min-width: 36px; }
 .vm-secs { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .voice-msg.playing .vm-bar { background: repeating-linear-gradient(135deg, #1e9e68 0 3px, rgba(30, 158, 104, 0.45) 3px 6px); }
 /* 语音转写文字 / 转写按钮 */
 .vm-text { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; color: var(--text); opacity: 0.92; }
+.vm-meta { margin-top: 3px; font-size: 11px; color: var(--muted); opacity: .85; white-space: normal; }
 .vm-tag { border: 1px dashed rgba(79, 124, 247, 0.5); background: transparent; color: rgba(79, 124, 247, 0.9); font-size: 12px; padding: 3px 10px; border-radius: 999px; cursor: pointer; }
 .vm-tag:hover { background: rgba(79, 124, 247, 0.12); }
 .vm-tag[disabled] { cursor: default; opacity: 0.6; }

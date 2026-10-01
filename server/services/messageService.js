@@ -215,8 +215,10 @@ function voiceTextOf(content) {
 }
 
 // 转写一条语音消息（成功/失败都会把 voice_state 落库，返回转写文字）。
-// 引擎选择跟随「录音转写」页的全局配置：server 模式按 server_engine（whisper 首选/vibeasr）；
-// custom 模式直连配置地址；client 拉取模式跑不了（任务队列绑定 vibe_records，与消息表耦合太深）。
+// 引擎选择（v1.9.25 起）：Whisper large-v3-turbo 优先（用户指定——消息场景短音频，turbo 快且准），
+// 装了就用、不看「录音转写」页的 server_engine；未装才回退配置的 VibeASR；都没有如实报错。
+// custom 模式仍直连配置地址（用户显式选的外部算力）；client 拉取模式跑不了（任务队列绑定 vibe_records）。
+// 耗时与所用模型随结果落 voice_ms/voice_model（气泡下方小字溯源）。
 async function transcribeVoice(d, id) {
   const row = d.prepare('SELECT * FROM messages WHERE id=?').get(Number(id) || 0);
   if (!row || !row.is_voice) throw new Error('不是语音消息');
@@ -224,6 +226,7 @@ async function transcribeVoice(d, id) {
   const fs = require('fs');
   const file = voiceFile(row.id);
   if (!fs.existsSync(file)) throw new Error('语音文件缺失');
+  const t0 = Date.now(); // 含引擎预热（模型加载也是用户等的一部分）
   const { getSetting } = require('../db');
   const s = getSetting(d, 'vibe_settings', {}) || {};
   const mode = ['server', 'custom'].includes(s.engine_mode) ? s.engine_mode : (s.base_url ? 'custom' : 'server');
@@ -233,16 +236,17 @@ async function transcribeVoice(d, id) {
     base = String(s.base_url || '').replace(/\/+$/, '');
     if (!base) throw new Error('未配置转写服务地址（录音转写页 → 算力来源）');
     model = String(s.model || 'vibevoice');
+  } else if (require('./whisperPaths').engineReady()) {
+    const wp = require('./whisperPaths'), ws = require('./whisperService');
+    await ws.ensureReady(['auto', 'zh', 'en', 'yue', 'ja', 'ko'].includes(s.whisper_lang) ? s.whisper_lang : 'auto');
+    base = `http://127.0.0.1:${wp.PORT}`; model = 'whisper-large-v3-turbo';
   } else if (s.server_engine === 'vibeasr') {
     const vp = require('./vibeasrPaths'), vs = require('./vibeasrService');
-    if (!vp.engineReady()) throw new Error('VibeASR 服务器引擎未安装（「录音转写」页可一键安装）');
+    if (!vp.engineReady()) throw new Error('Whisper 未安装，配置的 VibeASR 服务器引擎也未安装（「录音转写」页可一键安装）');
     await vs.ensureReady();
     base = `http://127.0.0.1:${vp.PORT}`; model = 'vibevoice';
   } else {
-    const wp = require('./whisperPaths'), ws = require('./whisperService');
-    if (!wp.engineReady()) throw new Error('Whisper 服务器引擎未安装（「录音转写」页可一键安装）');
-    await ws.ensureReady(['auto', 'zh', 'en', 'yue', 'ja', 'ko'].includes(s.whisper_lang) ? s.whisper_lang : 'auto');
-    base = `http://127.0.0.1:${wp.PORT}`; model = 'whisper-large-v3-turbo';
+    throw new Error('Whisper 服务器引擎未安装（「录音转写」页可一键安装）');
   }
   d.prepare("UPDATE messages SET voice_state='pending' WHERE id=?").run(row.id);
   try {
@@ -261,7 +265,8 @@ async function transcribeVoice(d, id) {
     const resp = await voicePostJson(base + '/v1/chat/completions', body, 5 * 60 * 1000);
     const text = voiceTextOf(resp.choices?.[0]?.message?.content ?? '').trim();
     if (!text) throw new Error('模型未返回转写内容');
-    d.prepare("UPDATE messages SET voice_state='done', voice_text=? WHERE id=?").run(text.slice(0, 5000), row.id);
+    d.prepare("UPDATE messages SET voice_state='done', voice_text=?, voice_model=?, voice_ms=? WHERE id=?")
+      .run(text.slice(0, 5000), model, Date.now() - t0, row.id);
     return text;
   } catch (e) {
     d.prepare("UPDATE messages SET voice_state='failed' WHERE id=?").run(row.id);

@@ -1333,9 +1333,11 @@ router.post('/messages/voice', (req, res) => {
   if (!ids.length || ids.some((id) => !id)) return res.status(400).json({ error: '收件人必填' });
   const valid = ids.filter((id) => db.prepare('SELECT id FROM users WHERE id=?').get(id));
   if (!valid.length) return res.status(400).json({ error: '收件用户不存在' });
+  // v1.9.25：语音条不带主题时默认「某某发出的语音信息」（列表页/弹窗不再显示干巴巴的空标题）
+  const subject = String(b.subject || '').trim() || `${messageService.userName(db, req.user.id)}发出的语音信息`;
   const sent = valid
     .map((id) => messageService.send(db, {
-      from_user: req.user.id, to_user: id, subject: String(b.subject || '').trim(), content: '',
+      from_user: req.user.id, to_user: id, subject, content: '',
       module: 'message', is_voice: 1, voice_secs: secs,
     }))
     .filter(Boolean);
@@ -1348,8 +1350,11 @@ router.post('/messages/voice', (req, res) => {
     try {
       const text = await messageService.transcribeVoice(db, sent[0]);
       if (sent.length > 1) {
+        // 群发各条同步转写结果与溯源（模型/耗时）——只转第一条，其余复制
+        const src = db.prepare('SELECT voice_model, voice_ms FROM messages WHERE id=?').get(sent[0]);
         const ph = sent.map(() => '?').join(',');
-        db.prepare(`UPDATE messages SET voice_state='done', voice_text=? WHERE id IN (${ph}) AND is_voice=1`).run(text, ...sent);
+        db.prepare(`UPDATE messages SET voice_state='done', voice_text=?, voice_model=?, voice_ms=? WHERE id IN (${ph}) AND is_voice=1`)
+          .run(text, src?.voice_model || '', src?.voice_ms || 0, ...sent);
       }
     } catch (e) {
       const ph = sent.map(() => '?').join(',');
@@ -1397,7 +1402,8 @@ router.post('/messages/voice/:id/transcribe', async (req, res) => {
   }
   try {
     const text = await messageService.transcribeVoice(db, row.id);
-    res.json({ ok: true, voice_text: text });
+    const r2 = db.prepare('SELECT voice_model, voice_ms FROM messages WHERE id=?').get(row.id);
+    res.json({ ok: true, voice_text: text, voice_model: r2?.voice_model || '', voice_ms: r2?.voice_ms || 0 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
