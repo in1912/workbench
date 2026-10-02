@@ -174,6 +174,22 @@ try {
     ok(ce('http://h:8642/hermes/v1') === 'http://h:8642/hermes/v1/chat/completions', '自定义前缀路径照原样拼（不猜）', ce('http://h:8642/hermes/v1'));
   }
 
+  console.log('— AI 回体质检 saneAnswer（v1.9.35：小模型会把说明书/念稿子当答案）');
+  {
+    const good = '装修预算一共三万五，地板两万，橱柜一万五。';
+    ok(svc.saneAnswer(good) === good, '正常口语答案原样放行');
+    ok(svc.saneAnswer('找到 3 条：笔记《甲》、待办《乙》') !== '', '确定性文案本身也过检（不是一票否决）');
+    const prod = '需要回答用户“最近的邮件”。检索结果有10条？全库计数没有给出。题目说问到数量时必须用给出的全库计数，'
+      + '这里没有给全库计数。不要 markdown、列表、引号、表情。';
+    ok(svc.saneAnswer(prod) === '', '生产实测的那段「说明书」被拒（这才是板子念不出口的那次）');
+    for (const frag of ['不要 markdown', '全库计数', '检索结果有 3 条', '最多念 6 条', '不超过 80 字', '口语回答', '作为语音助手', '不要复述问题']) {
+      ok(svc.saneAnswer(`这是答案，${frag}`) === '', `含「${frag}」的答案被拒（说明书的典型碎片）`);
+    }
+    ok(svc.saneAnswer('1. 第一条 2. 第二条 3. 第三条 4. 第四条') === '', '通篇编号罗列（≥3 条）被拒');
+    ok(svc.saneAnswer('我记了两件事：1. 交水电费 2. 取快递') !== '', '句中带两个编号的正常句子仍放行');
+    ok(svc.saneAnswer('') === '' && svc.saneAnswer('   ') === '' && svc.saneAnswer(null) === '', '空/空白/null 一律视为不可用');
+  }
+
   console.log('— 接入点 MCP 帧响应');
   const init = await bridge._respond({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   ok(init.result && init.result.protocolVersion === '2024-11-05' && init.result.capabilities.tools, 'initialize 回协议版本与 tools 能力');

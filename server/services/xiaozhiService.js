@@ -704,6 +704,23 @@ function digestResults(results) {
   return `找到 ${results.length} 条：${items.join('、')}`;
 }
 
+// AI 回体质检（v1.9.35）：生产用的 deepseek-flash 这类小模型，在「清单问句 + 10 条检索结果」这种长提示下
+// 偶尔会把**说明书当答案念出来**——实测 ask「最近的邮件」回的是「需要回答用户"最近的邮件"。检索结果有10条？
+// 全库计数没有给出。题目说问到数量时必须用给出的全库计数…不要 markdown、列表、引号、表情…」整段，
+// 虽然被 clampSpeech 截到 200 字，但那 200 字就是这段废话，板子会照着念给用户听。
+// 处理：命中「答案里绝不该出现的系统提示词/元话术」就整条丢弃，回落到上面那句确定性文案——
+// 比起赌模型这次不掉链子，念「找到 N 条：邮件《…》」至少信息是对的。
+const ANSWER_NOISE_RE = /(不要\s*markdown|不要\s*列表|不要\s*引号|不要\s*表情|不要复述|最多念|全库计数|检索结果|题目说|需要回答|作为(一个)?(语音)?助手|根据(系统)?提示|按(要求|规则)|不超过\s*\d+\s*字|口语回答|标题(要)?简短|前\s*\d+\s*条标题|字数限制)/i;
+function saneAnswer(text) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  if (ANSWER_NOISE_RE.test(s)) return '';
+  // 通篇「1. …2. …3. …」的念稿式罗列（系统提示明确禁止列表；这种答案语音里听着就是念稿子）
+  const numbered = s.match(/(^|\s)\d+[.、)）]/g) || [];
+  if (numbered.length >= 3) return '';
+  return s;
+}
+
 function buildDigest(results, { maxResults = 10, maxChars = 120 } = {}) {
   return results.slice(0, maxResults)
     .map((r, i) => `${i + 1}. [${r.type}] ${String(r.title || '').trim().slice(0, 60)} — ${String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, maxChars)}`)
@@ -796,7 +813,12 @@ async function askWorkbench(rawQ) {
       budget,
     );
     // AI 慢/出错都不算失败——确定性文案照样能念，比让用户干等或听「失败」强
-    if (r.ok && r.value) message = r.value;
+    // 回了废话（念说明书/念稿子）同样不算数，见 saneAnswer
+    if (r.ok && r.value) {
+      const clean = saneAnswer(r.value);
+      if (clean) message = clean;
+      else console.warn('[xiaozhi] AI 回体不合用，回落到确定性文案：', String(r.value).slice(0, 80));
+    }
   }
   return fitSpeech({ ok: true, count: results.length, message: clampSpeech(message) });
 }
@@ -981,6 +1003,7 @@ module.exports = {
   // v1.9.31 新增：语音查询 / 转交 agent / 凭证 / 审计 / 接入点状态
   askWorkbench, delegateAgent, listAgentLog, stripQuestion, searchCandidates, searchWithFallback, configuredQueryUser,
   countIntent, countAll, cjkGrams, matchedCategory, pureCategoryQuery, parseTimeRange,
+  digestResults, saneAnswer,
   getAgentKey, setAgentKey, clearAgentKey, hasAgentKey,
   getMcpToken, setMcpToken, hasMcpToken,
   setMcpState, getMcpState,

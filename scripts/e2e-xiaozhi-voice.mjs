@@ -287,6 +287,17 @@ try {
   const a4 = await bridge({ op: 'ask', keywords: '装修' });
   ok(a4.j.ok === true && a4.j.message === '装修预算一共三万五，地板两万，橱柜一万五。', 'AI 正常时用 AI 的话术', a4.j.message);
   ok(fake.hits.ai === 1, 'AI 接口被调用一次');
+  // v1.9.35：小模型偶尔把「说明书」当答案念出来（deepseek-flash 生产实测），必须丢掉回落到确定性文案
+  await useAI(0, '需要回答用户“最近的邮件”。检索结果有10条？全库计数没有给出。题目说问到数量时必须用给出的全库计数，'
+    + '这里没有给全库计数。用户问“最近的邮件”，属于清单，把检索到的条目标题挨个念出来，最多6条。不要 markdown、列表、引号、表情。');
+  const aGarbage = await bridge({ op: 'ask', keywords: '装修' });
+  ok(aGarbage.j.ok === true && /找到 \d+ 条/.test(aGarbage.j.message) && !/全库计数|不要 markdown/.test(aGarbage.j.message),
+    'AI 念说明书（回体带系统提示词）→ 丢掉，回落到确定性文案', aGarbage.j.message);
+  await useAI(0, '1. 第一条笔记 2. 第二条笔记 3. 第三条笔记');
+  const aNumbered = await bridge({ op: 'ask', keywords: '装修' });
+  ok(aNumbered.j.ok === true && /找到 \d+ 条/.test(aNumbered.j.message),
+    'AI 回通篇编号罗列（语音里就是念稿子）→ 也丢掉', aNumbered.j.message);
+
   await useAI(9000, '这句不该被等到');
   await putCfg({ query: { ai_timeout_ms: 1200 } }, T);
   const t0 = Date.now();
