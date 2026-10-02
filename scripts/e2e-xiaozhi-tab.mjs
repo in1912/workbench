@@ -323,6 +323,38 @@ try {
     ok(false, '语音助手 UI 段异常：' + e.message);
   }
 
+  // —— 子页签改名与排序（v1.9.33）——
+  console.log('— 「语音助手」→「贾维斯J.A.R.V.I.S.」并挪到第一个（v1.9.33）');
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    const ctx = await br.newContext();
+    // 故意不写 xz_sub：从没存过页签的人（新用户）必须落在第一个，也就是贾维斯
+    await ctx.addInitScript(([t, u]) => {
+      localStorage.setItem('wb_token', t);
+      localStorage.setItem('wb_user', u);
+    }, [T, JSON.stringify(lg.j.user)]);
+    const p = await ctx.newPage();
+    const perr = [];
+    p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+    await p.waitForSelector('.xz-tabs button', { timeout: 10000 });
+    const labels = await p.locator('.xz-tabs button').allTextContents();
+    ok(labels[0] === '贾维斯J.A.R.V.I.S.', `第一个子页签是「贾维斯J.A.R.V.I.S.」（实际「${labels[0]}」）`);
+    ok(labels.length === 6, `子页签仍是 6 个（${labels.length}）`, labels.join(' / '));
+    ok(!labels.some((l) => l.includes('语音助手')), '页签行里没有旧名「语音助手」的残留');
+    ok((await p.locator('text=🔎 语音查工作台资料').count()) === 1, '没存过页签时默认就落在贾维斯页（内容已在）');
+    await p.locator('.xz-tabs button', { hasText: '摄像头' }).click();
+    ok((await p.locator('text=🔎 语音查工作台资料').count()) === 0, '切走后贾维斯内容收起');
+    await p.locator('.xz-tabs button', { hasText: '贾维斯' }).click();
+    await p.waitForSelector('text=🔎 语音查工作台资料', { timeout: 5000 });
+    ok(true, '点「贾维斯J.A.R.V.I.S.」页签能切回来');
+    ok(perr.length === 0, '页面无 JS 错误', perr.join(' | '));
+    await br.close();
+  } catch (e) {
+    ok(false, '改名与排序段异常：' + e.message);
+  }
+
   // —— 语音助手两处上手修正（v1.9.32）——
   // ①「查谁的资料」是单选，而选择器组件只实现了多选显示：点中的人不出现标签/不打勾/占位不消失，看着像点不动
   console.log('— 「查谁的资料」单选要真的「选得中」（v1.9.32）');

@@ -18,14 +18,18 @@ const ok = (cond, name, extra) => {
 };
 
 try {
-  const { getTenantDb } = await import('../server/db.js');
+  const { db, getTenantDb } = await import('../server/db.js');
   const searchService = await import('../server/services/searchService.js');
   const tools = await import('../server/services/xiaozhiTools.js');
   const svc = await import('../server/services/xiaozhiService.js');
   const bridge = await import('../server/services/xiaozhiMcpBridge.js');
 
   console.log('— searchService（从 core.js 抽出，行为必须与原实现一致）');
-  const tdb = getTenantDb(1);
+  // 真实用户（fresh 库只有 id=1 的 dingtalk_bot，is_bot=1 → configuredQueryUser 会拒），
+  // 建一个真用户当「查谁的资料」的目标，它自己的租户库就是本用例的工作库
+  const uidRow = db.prepare("INSERT INTO users(username,password_hash,role) VALUES(?,?,?)").run('tester', 'x', 'admin');
+  const testUid = Number(uidRow.lastInsertRowid);
+  const tdb = getTenantDb(testUid);
   tdb.prepare("INSERT INTO notes(title,content,category) VALUES(?,?,?)").run('装修清单', '客厅地板两万，橱柜一万五', 'general');
   tdb.prepare("INSERT INTO todos(title,desc,due_date) VALUES(?,?,?)").run('装修验收', '下周去看工地', '2026-10-10');
   const r1 = searchService.search(tdb, '装修');
@@ -48,6 +52,40 @@ try {
   ok(svc.searchCandidates('装修').length === 1, '本来就像关键词的输入不额外造候选');
   ok(svc.searchCandidates('我的装修').includes('装修'), '候选里包含剥离后的单词');
   ok(svc.searchCandidates('').length === 0, '空串不产生候选');
+
+  console.log('— v1.9.33：日程 / 账务并入检索（events 原来根本不在检索范围内，「查一下我的日程」恒为 0）');
+  tdb.prepare("INSERT INTO events(title,desc,start_time,location) VALUES(?,?,?,?)").run('牙科复诊', '带上拍片结果', '2026-10-08 09:30', '市口腔医院');
+  tdb.prepare("INSERT INTO pay_bills(counterparty,goods,amount,inout,pay_time) VALUES(?,?,?,?,?)").run('星巴克', '拿铁两杯', 76, '支出', '2026-10-01 15:00:00');
+  ok(searchService.search(tdb, '牙科').results.some((r) => r.type === '日程' && r.title === '牙科复诊'), '日程能被搜到');
+  ok(searchService.search(tdb, '口腔医院').results.some((r) => r.type === '日程'), '日程的地点也进检索');
+  ok(searchService.search(tdb, '星巴克').results.some((r) => r.type === '账务'), '账务（对手方）能被搜到');
+
+  console.log('— v1.9.33：整句问句切 n-gram（「帮我查一下我的笔记有几篇」原来一个字都搜不到）');
+  ok(strip('帮我查一下我的笔记有几篇') === '笔记有几篇', `剥完是「笔记有几篇」（实际「${strip('帮我查一下我的笔记有几篇')}」）`);
+  ok(svc.searchCandidates('帮我查一下我的笔记有几篇').includes('笔记'), '候选里切出了「笔记」');
+  ok(svc.cjkGrams('笔记有几篇').slice(0, 4).includes('笔记'), '位置优先：靠前的字先切、同位置先长后短', svc.cjkGrams('笔记有几篇').slice(0, 5).join(','));
+  const fb2 = svc.searchWithFallback(tdb, '帮我查一下我的装修清单有几条');
+  ok(fb2.results.some((r) => r.title === '装修清单'), `整句问句能搜到（落到候选串「${fb2.used}」）`);
+
+  console.log('— v1.9.33：数量问句用 COUNT(*)（让 AI 数检索结果会把 21 条念成「找到三条」）');
+  ok(svc.countIntent('我有几篇笔记') && svc.countIntent('多少条待办') && svc.countIntent('一共几个日程'), '统计意图识别');
+  ok(svc.searchWithFallback(tdb, '我的日程').results.some((r) => r.type === '日程'), '「我的日程」走类别兜底（字面「日程」不在任何一条日程里）');
+  ok(svc.searchWithFallback(tdb, '我的待办').results.some((r) => r.type === '待办'), '「我的待办」走类别兜底');
+  ok(svc.searchWithFallback(tdb, 'zzz查无此物').results.length === 0, '既无子串命中也无类别词 → 老实回空，不硬凑');
+  ok(!svc.countIntent('装修清单'), '普通查询不误判成统计');
+  const cntLine = svc.countAll(tdb).join('、');
+  ok(/笔记 1 条/.test(cntLine) && /日程 1 条/.test(cntLine), `计数来自 COUNT(*)（${cntLine}）`);
+  // askWorkbench 走确定性路径（隔离库里没有 ai_config，不会去连 AI）
+  ok(svc.configuredQueryUser() === null, '还没配 uid 时取不到人（后面几行才配）');
+  svc.saveConfig({ query: { uid: testUid } });
+  ok(svc.configuredQueryUser()?.id === testUid, '配上 uid 后能取到这个人');
+  const a1 = await svc.askWorkbench('我有几篇笔记');
+  ok(a1.ok && /笔记 1 条/.test(a1.message), `「我有几篇笔记」直接回真数（${a1.message}）`);
+  const a2 = await svc.askWorkbench('帮我查一下我的装修清单有几条');
+  ok(a2.ok && a2.message.includes('装修清单'), `整句数量问句也能落到笔记内容（${String(a2.message).slice(0, 40)}）`);
+  const a3 = await svc.askWorkbench('查出我的日程');
+  ok(a3.ok && a3.message.includes('牙科复诊'), `「日程」查得到（${String(a3.message).slice(0, 40)}）`);
+  svc.saveConfig({ query: { uid: null } });
 
   console.log('— 点名判定');
   const ag = { name: '贾维斯', aliases: ['老贾'] };

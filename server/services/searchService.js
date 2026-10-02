@@ -16,6 +16,9 @@ function search(tdb, q, { limit } = {}) {
   };
   collect(tdb.prepare('SELECT id, title AS t, content AS _c, updated_at AS _t FROM notes WHERE title LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 10').all(like, like), '笔记', (r) => r.t);
   collect(tdb.prepare('SELECT id, title AS t, desc AS _c, due_date AS _t FROM todos WHERE title LIKE ? OR desc LIKE ? LIMIT 10').all(like, like), '待办', (r) => r.t);
+  // 日程（v1.9.33 补）：这张表原来**不在检索范围内**，于是「查一下我的日程」永远 0 结果
+  // （偶尔返回几条是别的表里恰好含「日程」二字，纯属巧合）——用户报「查不到内容」的主因之一
+  collect(tdb.prepare("SELECT id, title AS t, COALESCE(desc,'') AS _c, COALESCE(start_time,'') AS _t FROM events WHERE title LIKE ? OR desc LIKE ? OR location LIKE ? ORDER BY start_time DESC LIMIT 10").all(like, like, like), '日程', (r) => r.t);
   // 家庭事项/子女任务：随 family 共享开关选库
   const fdb = routedDb(tdb, 'family');
   collect(fdb.prepare('SELECT id, title AS t, desc AS _c, item_date AS _t FROM family_items WHERE title LIKE ? OR desc LIKE ? LIMIT 10').all(like, like), '家庭事项', (r) => r.t);
@@ -35,6 +38,11 @@ function search(tdb, q, { limit } = {}) {
   // 文件存档：文件名 + 解析文字（点击跳文件页）
   collect(tdb.prepare('SELECT id, filename AS t, text_content AS _c, created_at AS _t FROM files WHERE filename LIKE ? OR text_content LIKE ? ORDER BY id DESC LIMIT 10')
     .all(like, like), '文件', (r) => r.t, () => '/files');
+  // 账务（v1.9.33 补）：对手方 / 商品 / 备注。金额列不进检索——按关键词搜数字没意义
+  collect(tdb.prepare(`SELECT id, COALESCE(NULLIF(counterparty,''), NULLIF(goods,''), '(无对方)') AS t,
+    COALESCE(NULLIF(goods,''), NULLIF(remark,''), '') AS _c, COALESCE(NULLIF(pay_time,''), create_time, '') AS _t
+    FROM pay_bills WHERE counterparty LIKE ? OR goods LIKE ? OR remark LIKE ? ORDER BY id DESC LIMIT 10`)
+    .all(like, like, like), '账务', (r) => r.t);
   return { results: limit > 0 ? out.slice(0, limit) : out };
 }
 

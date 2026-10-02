@@ -218,6 +218,26 @@ try {
   const a3 = await bridge({ op: 'ask', keywords: '我的笔记里关于装修的内容是什么' });
   ok(a3.j.ok === true && a3.j.count >= 1, '整句经疑问词剥离后仍能搜到', a3.j.message);
 
+  console.log('— v1.9.33：日程/账务进检索 + 整句切词 + 类别兜底 + 数量问句');
+  await api('POST', '/api/events', { token: T, body: { title: '牙科复诊', desc: '带上拍片结果', start_time: '2099-10-08 09:30', location: '市口腔医院' } });
+  await api('POST', '/api/pay/bills', { token: T, body: { amount: 76, category: '餐饮', goods: '星巴克拿铁两杯' } });
+  const ev = await bridge({ op: 'ask', keywords: '牙科' });
+  ok(ev.j.ok === true && ev.j.message.includes('牙科复诊'), '日程进了检索范围（此前 events 表根本不在检索里）', ev.j.message);
+  const ev2 = await bridge({ op: 'ask', keywords: '口腔医院' });
+  ok(ev2.j.ok === true && ev2.j.count >= 1, '日程的地点也进检索', ev2.j.message);
+  const pb = await bridge({ op: 'ask', keywords: '星巴克' });
+  ok(pb.j.ok === true && pb.j.count >= 1, '账务（商品名）进了检索', pb.j.message);
+  const gram = await bridge({ op: 'ask', keywords: '帮我查一下我的装修清单有几条' });
+  ok(gram.j.ok === true && gram.j.count >= 1, '中文整句没有空格也能搜到（剥完剩一坨连写字 → n-gram 切词）', gram.j.message);
+  const cat = await bridge({ op: 'ask', keywords: '我的日程' });
+  ok(cat.j.ok === true && cat.j.count >= 1 && cat.j.message.includes('牙科复诊'), '「我的日程」走类别兜底拿到最近的日程（字面「日程」不在任何一条日程里）', cat.j.message);
+  const notesJ = (await api('GET', '/api/notes', { token: T })).j;
+  const noteCount = (Array.isArray(notesJ) ? notesJ : ((notesJ.items || notesJ.list || notesJ.data) || [])).length;
+  const cnt = await bridge({ op: 'ask', keywords: '我有几篇笔记' });
+  ok(cnt.j.ok === true && cnt.j.message.includes(`笔记 ${noteCount} 条`), `「我有几篇笔记」回真实计数（${noteCount}）而不是 AI 数的检索结果`, cnt.j.message);
+  const none = await bridge({ op: 'ask', keywords: '咸鱼饼干xyz' });
+  ok(none.j.ok === true && /没找到/.test(none.j.message), '既无命中又无类别词 → 仍然老实回「没找到」', none.j.message);
+
   console.log('— ask：AI 归纳与超时降级');
   await useAI(0, '装修预算一共三万五，地板两万，橱柜一万五。');
   const a4 = await bridge({ op: 'ask', keywords: '装修' });

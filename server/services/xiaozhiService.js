@@ -8,7 +8,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { db, getTenantDb, getSetting, setSetting, dataDir } = require('../db');
+const { db, getTenantDb, getSetting, setSetting, dataDir, routedDb } = require('../db');
 const mihome = require('./mihomeService');
 const searchService = require('./searchService');
 const aiService = require('./aiService');
@@ -395,7 +395,7 @@ function clampSpeech(s, max = 200) {
 
 // 整句 → 关键词：云端 LLM 很可能把「我的笔记里关于张三的内容」整句塞进来，
 // 而检索是 LIKE %q% 子串匹配，整句必然 0 结果。零结果时剥掉疑问词再搜一次兜底。
-const QUESTION_WORDS = ['请问', '帮我', '给我', '我想', '我要', '有没有', '有木有', '是什么', '有什么', '查一下', '查查', '找一下', '找找', '看看', '告诉我', '搜索', '搜一下', '一下', '笔记里', '记录里', '关于', '我的', '家里', '的吗', '是不是', '怎么样', '呢', '吗', '的', '？', '?', '。'];
+const QUESTION_WORDS = ['请问', '帮我', '给我', '我想', '我要', '有没有', '有木有', '是什么', '有什么', '查一下', '查查', '找一下', '找找', '看看', '告诉我', '搜索', '搜一下', '一下', '笔记里', '记录里', '关于', '我的', '家里', '的吗', '是不是', '怎么样', '呢', '吗', '的', '说下', '讲下', '列出', '列一下', '显示', '一共', '总共', '数量', '？', '?', '。'];
 function stripQuestion(q) {
   let t = String(q || '');
   for (const w of QUESTION_WORDS) t = t.split(w).join(' ');
@@ -406,6 +406,24 @@ function stripQuestion(q) {
 // 「剥离后逐个词」这一步是必须的：检索是 LIKE %x%（子串匹配），
 // 「我的笔记里关于装修的内容是什么」剥完会剩「装修 内容」，整串拿去匹配一个字都搜不到
 // ——e2e 实测踩到过。
+// 中文没有词边界：剥完疑问词常常剩一坨连写的字。生产实测「帮我查一下我的笔记有几篇」
+// 剥完是「笔记有几篇」——整串 LIKE 一个字都搜不到，于是当年就回「没找到」。
+// 再切一层 n-gram（4→3→2 字，各自按原序）兜底：这串由此切出「笔记」，能命中。
+function cjkGrams(s) {
+  const out = [];
+  for (const run of String(s || '').split(/[^一-龥A-Za-z0-9]+/)) {
+    if (run.length < 2) continue;
+    // 按「位置优先、长度次之」产出：靠前的字先切、同一个位置先长后短。
+    // 「笔记有几篇」由此第 3 个候选就是「笔记」；若改成按长度分层（4 字切完再切 3 字），
+    // 候选上限一截就把短的挤没了，等于白切。
+    for (let i = 0; i < run.length; i++) {
+      for (const n of [4, 3, 2]) {
+        if (i + n <= run.length) out.push(run.slice(i, i + n));
+      }
+    }
+  }
+  return out;
+}
 function searchCandidates(q) {
   const out = [String(q || '').trim()];
   const stripped = stripQuestion(q);
@@ -413,16 +431,78 @@ function searchCandidates(q) {
     out.push(stripped);
     const toks = stripped.split(/\s+/).filter((t) => t.length >= 2);
     if (toks.length > 1) out.push(...toks);
+    out.push(...cjkGrams(stripped));   // 与上面重叠的会被 dedup 掉，重复的代价为零
   }
-  return [...new Set(out.filter(Boolean))].slice(0, 6);
+  return [...new Set(out.filter(Boolean))].slice(0, 16);
 }
-// 依次试候选串，第一个有结果的就用
+// 类别词兜底：说「我的日程」时，字面「日程」不在**任何一条**日程里（标题是「牙科复诊」），
+// 子串匹配必然 0 结果——用户问的是「那张表里有什么」，不是「哪条里写了日程两个字」。
+// 只在候选串全部落空后才走，正常命中的查询一点不受影响。
+const CATEGORY_FALLBACK = [
+  ['日程', ['日程', '安排', '行程', '会议'], (d) => {
+    const q = (where, order) => `SELECT id, title AS title, COALESCE(desc,'') AS c, COALESCE(start_time,'') AS t
+      FROM events ${where} ORDER BY ${order} LIMIT 10`;
+    const up = d.prepare(q("WHERE COALESCE(start_time,'') >= datetime('now','localtime')", 'start_time ASC')).all();
+    // 未来的一件都没有时才回看最近的过去几条（用户问「我的日程」多半也想知道刚过去的那几件）
+    return up.length ? up : d.prepare(q('', 'start_time DESC')).all();
+  }],
+  ['笔记', ['笔记'], (d) => d.prepare('SELECT id, title AS title, content AS c, updated_at AS t FROM notes ORDER BY updated_at DESC LIMIT 10').all()],
+  ['待办', ['待办', '任务', 'todo'], (d) => d.prepare(`SELECT id, title AS title, COALESCE(desc,'') AS c, COALESCE(due_date,'') AS t
+    FROM todos WHERE COALESCE(done,0)=0 ORDER BY (COALESCE(due_date,'')='') ASC, due_date ASC LIMIT 10`).all()],
+  ['邮件', ['邮件', '邮箱', '收件箱'], (d) => d.prepare(`SELECT id, subject AS title, COALESCE(body, snippet, '') AS c, COALESCE(date, fetched_at, '') AS t
+    FROM emails ORDER BY id DESC LIMIT 10`).all()],
+  ['文件', ['文件', '存档'], (d) => d.prepare("SELECT id, filename AS title, COALESCE(text_content,'') AS c, created_at AS t FROM files ORDER BY id DESC LIMIT 10").all()],
+  ['账务', ['账务', '账单', '花销', '支出', '消费'], (d) => d.prepare(`SELECT id,
+    COALESCE(NULLIF(counterparty,''), NULLIF(goods,''), '(无对方)') AS title,
+    COALESCE(NULLIF(goods,''), NULLIF(remark,''), '') AS c,
+    COALESCE(NULLIF(pay_time,''), create_time, '') AS t FROM pay_bills ORDER BY id DESC LIMIT 10`).all()],
+];
+function categoryResults(tdb, q) {
+  const t = String(q || '');
+  const out = [];
+  for (const [label, words, run] of CATEGORY_FALLBACK) {
+    if (!words.some((w) => t.includes(w))) continue;
+    try {
+      for (const r of run(tdb)) out.push({ type: label, id: r.id, title: r.title, content: r.c || '', time: r.t || '' });
+    } catch (e) { console.error(`[xiaozhi] 类别兜底失败 ${label}`, e.message); }
+  }
+  return out;
+}
+// 依次试候选串，第一个有结果的就用；全落空再按「类别词」兜底
 function searchWithFallback(tdb, q) {
   for (const c of searchCandidates(q)) {
     const results = searchService.search(tdb, c).results;
     if (results.length) return { results, used: c };
   }
+  const byType = categoryResults(tdb, q);
+  if (byType.length) return { results: byType, used: `类别「${byType[0].type}」` };
   return { results: [], used: String(q || '').trim() };
+}
+
+// 数量类问句（「有几篇笔记」「多少条待办」）只能靠 COUNT(*)：检索每类上限 10 条，
+// 让 AI 去数检索结果必然数错——生产实测把 21 条笔记念成「找到三条」，用户当场就能听出来。
+const COUNT_WORDS = ['几篇', '几条', '几个', '几项', '几件', '几笔', '几封', '多少次', '多少', '数量', '一共', '总共'];
+function countIntent(q) {
+  const t = String(q || '');
+  return COUNT_WORDS.some((w) => t.includes(w));
+}
+// 全库计数（只数得动的几张主表）。表不存在就跳过——老库不一定每张都有，统计不是刚需。
+function countAll(tdb) {
+  const fdb = routedDb(tdb, 'family');
+  const jobs = [
+    ['笔记', tdb, 'notes'], ['待办', tdb, 'todos'], ['日程', tdb, 'events'],
+    ['家庭事项', fdb, 'family_items'], ['子女任务', fdb, 'kid_tasks'],
+    ['学习记录', tdb, 'learning_records'], ['剪贴板', tdb, 'clipboard_items'],
+    ['邮件', tdb, 'emails'], ['文件', tdb, 'files'],
+  ];
+  const out = [];
+  for (const [label, d, tbl] of jobs) {
+    try {
+      const r = d.prepare(`SELECT COUNT(*) AS n FROM ${tbl}`).get();
+      if (r && Number(r.n) > 0) out.push(`${label} ${Number(r.n)} 条`);
+    } catch { /* 表可能不存在 */ }
+  }
+  return out;
 }
 
 // uid 只从配置读（调用方——板子或云端——根本不知道 uid，不给自己开攻击面）。
@@ -453,7 +533,8 @@ function buildDigest(results, { maxResults = 10, maxChars = 120 } = {}) {
 
 const ASK_SYSTEM = '你是语音助手，下面是从用户个人数据库里检索到的条目。' +
   '用不超过 60 字的中文口语回答用户的问题，直接给结论。' +
-  '不要 markdown、不要列表、不要引号、不要表情符号。检索结果里没有的就说没找到，不要编。';
+  '不要 markdown、不要列表、不要引号、不要表情符号；不要复述问题、不要解释你是怎么查的。' +
+  '问到数量时必须用给出的「全库计数」，不要自己数检索结果。检索结果里没有的就说没找到，不要编。';
 
 async function askWorkbench(rawQ) {
   const q = String(rawQ || '').trim().slice(0, 200);
@@ -478,16 +559,26 @@ async function askWorkbench(rawQ) {
     console.error('[xiaozhi] ask 检索失败', e.message);
     return { ok: false, message: '查资料出错了，稍后再试' };
   }
-  if (!results.length) return fitSpeech({ ok: true, message: `没找到和「${q.slice(0, 20)}」相关的记录` });
+  // 「有几篇笔记」这类问句：条数只能来自 COUNT(*)，检索每类上限 10 条，让 AI 数会数错
+  const counts = countIntent(q) ? countAll(tdb) : [];
+  const countLine = counts.length ? `统计：${counts.join('、')}` : '';
+  if (!results.length) {
+    // 纯数量问句（「我记了几篇笔记」）本来就不该有检索命中，别回「没找到」
+    if (countLine) return fitSpeech({ ok: true, message: countLine });
+    return fitSpeech({ ok: true, message: `没找到和「${q.slice(0, 20)}」相关的记录` });
+  }
 
   const qc = cfg.query;
-  let message = digestResults(results);
+  let message = countLine ? `${countLine}。${digestResults(results)}` : digestResults(results);
   if (aiReady(tdb)) {
     const digest = buildDigest(results, { maxResults: Number(qc.max_results) || 10, maxChars: Number(qc.max_chars) || 120 });
     const budget = Math.min(Math.max(Number(qc.ai_timeout_ms) || 6000, 500), 60000);
+    const prompt = `问题：${q}\n\n` +
+      (countLine ? `全库计数（口径最准，问数量时用它）：${counts.join('、')}\n\n` : '') +
+      `检索结果：\n${digest}`;
     const r = await raceWithTimeout(
       aiService.chat(
-        [{ role: 'system', content: ASK_SYSTEM }, { role: 'user', content: `问题：${q}\n\n检索结果：\n${digest}` }],
+        [{ role: 'system', content: ASK_SYSTEM }, { role: 'user', content: prompt }],
         { maxTokens: 120, temperature: 0.2, tdb },
       ),
       budget,
@@ -677,6 +768,7 @@ module.exports = {
   noteBoardIp, getBoardInfo, appendChatLog, listChatLog,
   // v1.9.31 新增：语音查询 / 转交 agent / 凭证 / 审计 / 接入点状态
   askWorkbench, delegateAgent, listAgentLog, stripQuestion, searchCandidates, searchWithFallback, configuredQueryUser,
+  countIntent, countAll, cjkGrams,
   getAgentKey, setAgentKey, clearAgentKey, hasAgentKey,
   getMcpToken, setMcpToken, hasMcpToken,
   setMcpState, getMcpState,

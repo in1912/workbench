@@ -2,12 +2,13 @@
   <div class="xz-root">
     <!-- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 摄像头；v1.9.18 加视频对话 -->
     <div class="xz-tabs">
+      <!-- v1.9.33：语音助手改名为「贾维斯J.A.R.V.I.S.」并挪到第一个（用户要求——板子的主用途是问贾维斯） -->
+      <button :class="{ on: sub === 'assistant' }" @click="switchSub('assistant')">贾维斯J.A.R.V.I.S.</button>
       <button :class="{ on: sub === 'guide' }" @click="switchSub('guide')">🛠 装机向导</button>
       <button :class="{ on: sub === 'voice' }" @click="switchSub('voice')">🏠 语音控米家</button>
       <button :class="{ on: sub === 'live' }" @click="switchSub('live')">🎥 视频对话</button>
       <button :class="{ on: sub === 'history' }" @click="switchSub('history')">💬 对话记录</button>
       <button :class="{ on: sub === 'camera' }" @click="switchSub('camera')">📷 摄像头</button>
-      <button :class="{ on: sub === 'assistant' }" @click="switchSub('assistant')">🤖 语音助手</button>
     </div>
 
     <!-- ============ 装机向导 ============ -->
@@ -634,9 +635,10 @@ const testText = ref('');
 const devices = ref([]); const showDevices = ref(true); // v1.9.25：可控设备一览默认直接展开
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 
-// ---------- 子 tab：装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 / 语音助手(v1.9.31) ----------
-const SUBS = ['guide', 'voice', 'live', 'history', 'camera', 'assistant'];
-const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'guide');
+// ---------- 子 tab：贾维斯(v1.9.31，v1.9.33 挪到第一个) / 装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 ----------
+// 没存过页签时落在第一个（贾维斯）——它就是板子的主用途；存过的一律尊重用户上次的选择
+const SUBS = ['assistant', 'guide', 'voice', 'live', 'history', 'camera'];
+const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'assistant');
 function switchSub(s) {
   sub.value = s;
   localStorage.setItem('xz_sub', s);
