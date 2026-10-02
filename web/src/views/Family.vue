@@ -5,6 +5,7 @@
       <button v-if="canTab('family','family')" :class="{active: tab==='family'}" @click="tab='family'">通知</button>
       <button v-if="canTab('family','kids')" :class="{active: tab==='kids'}" @click="tab='kids'">子女学习</button>
       <button v-if="canTab('family','profiles')" :class="{active: tab==='profiles'}" @click="openProfiles">家庭人员档案</button>
+      <button v-if="canTab('family','story')" :class="{active: tab==='story'}" @click="tab='story'">儿童故事</button>
       <!-- 个人账务（原独立页并入，2026-09 v1.7.0）：最后一个 tab，内含 5 个子 tab -->
       <button v-if="canPay" :class="{active: tab==='pay'}" @click="tab='pay'">个人账务</button>
     </div>
@@ -149,6 +150,9 @@
       </div>
     </template>
 
+    <!-- ============ 儿童故事（v1.9.36，组件内部自带分页/弹窗/音频播放） ============ -->
+    <StoryPanel v-else-if="tab==='story'" />
+
     <!-- ============ 个人账务（原独立页整页并入，v1.7.0 最后一个 tab） ============ -->
     <PayPanel v-else-if="tab==='pay'" />
 
@@ -193,6 +197,8 @@ import { canTab, firstTab } from '../tabs';
 import { displayHtml, richHasContent } from '../utils/rich';
 // v1.7.0 个人账务整页并入（组件内部自带 5 个子 tab 与数据加载）
 import PayPanel from './Pay.vue';
+// v1.9.36 儿童故事（家庭共享：导入/AI 生成 → 文字转音频 → 播放/下载）
+import StoryPanel from './StoryPanel.vue';
 
 const route = useRoute();
 const tab = ref(firstTab('family', 'family'));
@@ -392,6 +398,9 @@ async function loadContacts() {
 onMounted(() => {
   // ?tab=pay 直达（旧 /pay 地址重定向过来）
   if (String(route.query.tab || '') === 'pay' && canPay.value) tab.value = 'pay';
+  // ?tab=story 直达（儿童故事）。深链必须过 canTab 校验：canTab 对 admin 的未知 key 也放行，
+  // 不校验的话 key 写错会落进下面 v-else 的空分支
+  if (String(route.query.tab || '') === 'story' && canTab('family', 'story')) tab.value = 'story';
   load(); loadContacts();
 });
 </script>

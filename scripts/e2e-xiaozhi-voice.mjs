@@ -355,6 +355,69 @@ try {
   const rr = await bridge({ op: 'ask', keywords: '贾维斯，帮我看看磁盘' });
   ok(rr.j.ok === true && fake.hits.hermes === 1, 'ask 带 agent 名字 → 自动转交 delegate', JSON.stringify(rr.j));
 
+  console.log('— v1.9.36 屏幕按钮③【对话AI】agent_chat（按钮本身就是点名 → 跳过「必须点名」那道闸）');
+  await sleep(5200); // 清空限流窗口
+  useHermes(0, '灯已经关了。');
+  const btn1 = await bridge({ op: 'agent_chat', text: '帮我把客厅的灯关了' });
+  ok(btn1.j.ok === true && btn1.j.mode === 'sync' && btn1.j.message === '灯已经关了。',
+    '不点名也照转给 agent，且答案原样回（板子直接念）', JSON.stringify(btn1.j));
+  ok(fake.hits.hermes === 1, '确实打到了 agent 接口');
+
+  const btnEmpty = await bridge({ op: 'agent_chat', text: '   ' });
+  ok(btnEmpty.j.ok === false && /再说一遍/.test(btnEmpty.j.message), '空内容回可念的提示（不是 500）', btnEmpty.j.message);
+
+  const btnRate = await bridge({ op: 'agent_chat', text: '接下来呢' });
+  ok(btnRate.j.ok === false && /稍等/.test(btnRate.j.message), '5 秒内连按两次被限流拦下（按钮不是无限制通道）', btnRate.j.message);
+
+  const btnRisky = await bridge({ op: 'agent_chat', text: '把 logs 目录删除了' });
+  ok(btnRisky.j.ok === false && /危险/.test(btnRisky.j.message), '危险动词照拦（按钮不免检）', btnRisky.j.message);
+
+  await putCfg({ agent: { enabled: false } }, T);
+  const btnOff = await bridge({ op: 'agent_chat', text: '现在几点' });
+  ok(btnOff.j.ok === false && /还没启用/.test(btnOff.j.message), 'agent 关闭时被拒且说清去哪开', btnOff.j.message);
+  await putCfg({ agent: { enabled: true } }, T);
+
+  await putCfg({ agent: { base_url: '' } }, T);
+  const btnUncfg = await bridge({ op: 'agent_chat', text: '在吗' });
+  ok(btnUncfg.j.ok === false && /还没配全/.test(btnUncfg.j.message), '没配全时回可念文案而不是抛', btnUncfg.j.message);
+
+  // 超时/连不上也必须翻成人话——固件拿到 message 就直接念，不能是个技术异常串
+  await putCfg({ agent: { base_url: 'http://127.0.0.1:9/v1' } }, T);
+  await sleep(5200);
+  const btnDead = await bridge({ op: 'agent_chat', text: '在吗' });
+  ok(btnDead.j.ok === false && /没办成/.test(btnDead.j.message) && /连不上|没回应/.test(btnDead.j.message),
+    'agent 连不上 → 回「没办成：连不上…」这类能念的话（且 HTTP 仍是 200）', btnDead.j.message);
+  await putCfg({ agent: { base_url: HERMES_BASE } }, T);
+
+  console.log('— v1.9.36 屏幕按钮④【测试】selftest（自检消息发 IM）');
+  ok((await putCfg({ test: { channel: 'wechat' } }, T)).status === 400, 'test.channel 白名单：乱填被拒 400');
+  const setCh = await putCfg({ test: { channel: 'feishu' } }, T);
+  ok(setCh.status === 200 && setCh.j.config.test.channel === 'feishu', 'test.channel 合法值保存成功');
+  ok((await api('GET', '/api/xiaozhi/config', { token: T })).j.config.test.channel === 'feishu', '重新读取仍是 feishu（真落库，不是内存假象）');
+
+  useHermes(0, '今天晴，22 度。');
+  const st1 = await bridge({ op: 'selftest' });
+  ok(st1.j.ok === false && st1.j.sent === false && st1.j.channel === 'feishu',
+    '没配飞书会话 → 明确回「没发出去」+ channel=feishu，而不是 500', JSON.stringify(st1.j));
+  ok(/测试消息没发出去/.test(st1.j.message), '回执是一句能念的中文', st1.j.message);
+  ok(fake.hits.hermes >= 2, `自检真的探了 agent（ping + 让它查天气，${fake.hits.hermes} 次调用）`);
+
+  await putCfg({ test: { channel: 'dingtalk' } }, T);
+  const st2 = await bridge({ op: 'selftest' });
+  ok(st2.j.channel === 'dingtalk' && /钉钉/.test(st2.j.message), '切到钉钉后走钉钉通道', st2.j.message);
+
+  // 没指定「查谁的资料」= 不知道该发给谁（钉钉/飞书绑定都是按人按租户存的）
+  await putCfg({ query: { uid: null } }, T);
+  const st3 = await bridge({ op: 'selftest' });
+  ok(st3.j.ok === false && /不知道发给谁/.test(st3.j.message), '没指定收件人时给出原因而不是静默失败', st3.j.message);
+  await putCfg({ query: { uid } }, T);
+
+  const btnLog = (await api('GET', '/api/xiaozhi/agent-log?limit=50', { token: T })).j.entries || [];
+  ok(btnLog.some((e) => e.mode === 'button' && e.status === 'ok' && /灯已经关了/.test(e.result || '')),
+    '按钮对话落审计（面板「Agent对话记录」能看到 mode=button）');
+  ok(btnLog.some((e) => e.mode === 'button' && e.status === 'rejected' && e.reason === 'risky'), '被拦下的那次也留痕');
+  ok(btnLog.some((e) => e.mode === 'button' && e.request === '自检'), '自检消息也留痕');
+
   console.log('— 审计留痕');
   const log = await api('GET', '/api/xiaozhi/agent-log?limit=50', { token: T });
   const entries = (log.j.entries) || [];

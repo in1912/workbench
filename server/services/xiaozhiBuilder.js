@@ -261,11 +261,18 @@ async function run(wake, cfg, doFlash, port) {
   const st = fs.statSync(bin);
   addLog(`✓ 编译完成：merged-binary.bin（${(st.size / 1048576).toFixed(1)} MB）`);
 
-  // ⑤ 烧录（不擦全片——保留 WiFi 配网与设备绑定；救援场景用面板里的手动命令全片擦除）
+  // ⑤ 烧录（保留 WiFi 配网与设备绑定；救援场景用面板里的手动命令全片擦除）
+  //
+  // 绝不能写 `write-flash 0x0 merged-binary.bin`：merge-bin 出来的是一张从 0x0 起、**空洞补 0xFF**
+  // 的连续镜像（实测 0x9000 nvs / 0xd000 otadata / 0xf000 phy_init 三处全 0xFF），
+  // 写在 0x0 就等于把 NVS 一起写成 0xFF → 每次烧录都清掉配网与设备绑定（2026-10-03 实证）。
+  // 改用 build/flash_args（IDF `idf.py flash` 的原生清单：bootloader/分区表/otadata/app/assets
+  // 各自的偏移，不含 nvs），与 merged 相比只少写那片 0xFF 填充。
   if (doFlash) {
     setStepProgress(4, 0.02);
-    addLog(`烧录到 ${port} @921600（约 1-2 分钟）…`);
-    const flashCmd = `${pyPrefix(det)} python -m esptool --chip esp32s3 -p ${port} -b 921600 --before default-reset --after hard-reset write-flash 0x0 "${bin}"`;
+    addLog(`烧录到 ${port} @921600（约 1-2 分钟；按分区偏移写，不动 NVS）…`);
+    const buildDir = path.join(det.paths.srcDir, 'build');
+    const flashCmd = `${pyPrefix(det)} cd /d "${buildDir}" && python -m esptool --chip esp32s3 -p ${port} -b 921600 --before default-reset --after hard-reset write-flash "@flash_args"`;
     await runCmd(flashCmd, {
       timeoutMs: 10 * 60 * 1000,
       onFrac: (f) => setStepProgress(4, f),

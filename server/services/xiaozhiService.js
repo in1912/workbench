@@ -14,6 +14,10 @@ const searchService = require('./searchService');
 const aiService = require('./aiService');
 const hermesService = require('./hermesService');
 const xiaozhiTools = require('./xiaozhiTools');
+// v1.9.36：【测试】按钮要把三段自检内容从 IM 发出去——推送两条通道 + agent 不通时的天气兜底
+const dingtalkService = require('./dingtalkService');
+const feishuService = require('./feishuService');
+const weatherService = require('./weatherService');
 const { encrypt, decrypt } = require('./businessSkillService');
 
 const CFG_KEY = 'xiaozhi_config';
@@ -46,6 +50,8 @@ const DEFAULT_CFG = {
   },
   // 官方 MCP 接入点（v1.9.31）：默认关闭；token 单独存 MCP_TOKEN_KEY（url 不含 token，可以明文存）
   mcp: { enabled: false, url: '' },
+  // 屏幕【测试】按钮（v1.9.36）：自检消息走哪条 IM——只发一条，不双发（用户指定）
+  test: { channel: 'dingtalk' }, // 'dingtalk' | 'feishu'
 };
 
 function getConfig() {
@@ -61,6 +67,7 @@ function getConfig() {
     query: { ...DEFAULT_CFG.query, ...(saved.query || {}) },
     agent: { ...DEFAULT_CFG.agent, ...(saved.agent || {}) },
     mcp: { ...DEFAULT_CFG.mcp, ...(saved.mcp || {}) },
+    test: { ...DEFAULT_CFG.test, ...(saved.test || {}) },
   };
 }
 function saveConfig(patch) {
@@ -79,6 +86,7 @@ function saveConfig(patch) {
     // aliases 同 device_aliases：显式带就整体替换，否则合并会把已删的别名复活
     agent: { ...cur.agent, ...(patch.agent || {}), ...(patch.agent && patch.agent.aliases !== undefined ? { aliases: [...patch.agent.aliases] } : {}) },
     mcp: { ...cur.mcp, ...(patch.mcp || {}) },
+    test: { ...cur.test, ...(patch.test || {}) },
   };
   setSetting(db, CFG_KEY, next);
   return next;
@@ -968,6 +976,119 @@ async function delegateAgent(rawText, { via = 'bridge' } = {}) {
   return fitSpeech({ ok: true, mode: 'sync', message: content });
 }
 
+// ---------- 屏幕按钮（v1.9.36）----------
+// 【对话AI】：板上按一下就直接跟自家 agent 说一句。与 delegateAgent 的唯一差别是**跳过「必须点名」**——
+// 按钮本身就是点名（用户是抬手按的，不是喊的）。其余闸门照留：开关 / 危险动词 / 限流 / 全程审计。
+// 超时给足 60 秒：这条路径没有 MQTT 那 8 秒的同步预算约束，板子等得起（等的时候屏幕上有「思考中」）。
+async function agentChatDirect(rawText) {
+  const text = String(rawText || '').trim().slice(0, 200);
+  const ag = getConfig().agent;
+  const t0 = Date.now();
+  const deny = (message, reason) => {
+    logAgent({ request: text, status: 'rejected', reason, mode: 'button', ms: Date.now() - t0 });
+    return fitSpeech({ ok: false, message, rejected: true });
+  };
+  if (!text) return deny('要问什么？再说一遍', 'empty');
+  if (!ag.enabled) return deny(`家里 agent 还没启用（去智能板配置页勾上「启用」）`, 'disabled');
+  if (ag.block_risky && RISKY_RE.test(text)) {
+    return deny('这条指令带危险操作，我先不转交——确认要办就去配置页关掉「危险词拦截」', 'risky');
+  }
+  if (!ag.base_url || !ag.model || !hasAgentKey()) return deny('家里 agent 还没配全（地址 / Agent 名 / 密钥）', 'unconfigured');
+  const rl = agentRateOk(Math.min(Math.max(Number(ag.rate_per_hour) || 20, 1), 500));
+  if (!rl.ok) return deny(rl.message, 'rate_limited');
+
+  try {
+    const r = await hermesService.ask({
+      baseUrl: ag.base_url, apiKey: getAgentKey(), model: ag.model, text, timeoutMs: 60000,
+    });
+    const content = clampSpeech(r.content);
+    logAgent({ request: text, status: 'ok', result: content.slice(0, 300), mode: 'button', ms: Date.now() - t0 });
+    return fitSpeech({ ok: true, mode: 'sync', message: content });
+  } catch (e) {
+    logAgent({ request: text, status: 'error', reason: e.message, mode: 'button', ms: Date.now() - t0 });
+    return fitSpeech({ ok: false, message: `${ag.name}那边没办成：${e.message}` });
+  }
+}
+
+// 【测试】：把三段自检（接入点状态 / agent 连通性 / agent 查的本地天气）拼一条消息，
+// 从配置好的那条 IM 通道发给「查谁的资料」那位成员。三段各自兜底——测试消息本身不该因为某一环不通就发不出去。
+async function runSelfTest() {
+  const cfg = getConfig();
+  const ag = cfg.agent;
+  const t0 = Date.now();
+  const who = configuredQueryUser(); // 收件人 = 「查谁的资料」那位；钉钉/飞书绑定都是按人按租户存的
+  let tdb = null;
+  if (who) { try { tdb = getTenantDb(who.id); } catch { tdb = null; } }
+
+  // ① 接入点（通道 A）连接状态
+  const mcp = getMcpState();
+  const mcpLine = mcp.connected
+    ? `接入点：已连接（${mcp.since ? new Date(mcp.since).toLocaleString('zh-CN') : '刚刚'}）`
+    : `接入点：未连接${mcp.last_error ? `（${String(mcp.last_error).slice(0, 80)}）` : ''}`;
+
+  // ② agent 连通性（只回耗时与成败，不回内容——与面板「测试连通性」同口径）
+  const agentReady = !!(ag.enabled && ag.base_url && ag.model && hasAgentKey());
+  let agentLine;
+  if (!ag.enabled) agentLine = `${ag.name}：未启用`;
+  else if (!agentReady) agentLine = `${ag.name}：未配全（地址 / Agent 名 / 密钥）`;
+  else {
+    const p = await hermesService.ping({ baseUrl: ag.base_url, apiKey: getAgentKey(), model: ag.model, timeoutMs: 15000 });
+    agentLine = p.ok ? `${ag.name}：连通（${p.ms} 毫秒）` : `${ag.name}：不通（${p.error}）`;
+  }
+
+  // ③ 用 agent 查本地天气；agent 不通就退回工作台自己的天气服务（恒回 {ok,error}，不抛）
+  let weatherLine = '';
+  if (agentReady) {
+    try {
+      const r = await hermesService.ask({
+        baseUrl: ag.base_url, apiKey: getAgentKey(), model: ag.model,
+        text: '查询一下我所在地的实时天气，用一句话说清楚', timeoutMs: 20000,
+      });
+      weatherLine = `本地天气（${ag.name} 查）：${clampSpeech(r.content)}`;
+    } catch (e) { weatherLine = `本地天气（${ag.name} 查）：没查到（${e.message}）`; }
+  }
+  if (!weatherLine || /没查到/.test(weatherLine)) {
+    let fb = '';
+    if (tdb) {
+      try {
+        const w = await weatherService.getWeather(tdb);
+        fb = w && w.ok
+          ? `${w.city || ''}${w.current ? `${w.current.text} ${w.current.temp}℃` : ''}`.trim()
+          : `取不到（${(w && w.error) || '未配置城市'}）`;
+      } catch (e) { fb = `取不到（${e.message}）`; }
+    } else fb = '取不到（没指定「查谁的资料」成员）';
+    weatherLine = `本地天气（工作台查）：${fb}`;
+  }
+
+  const body = `【小智接入自检】${who ? `\n收件人：${who.username}` : ''}\n${mcpLine}\n${agentLine}\n${weatherLine}`;
+
+  // 发送。两种 IM 的失败行为不一致，一律包起来：
+  // 钉钉 pushIfBound 未绑定回 false、API 错**抛异常**；飞书 sendMarkdown 无会话直接**抛异常**。
+  const ch = cfg.test && cfg.test.channel === 'feishu' ? 'feishu' : 'dingtalk';
+  let sent = false; let err = '';
+  if (!tdb) err = '没在智能板配置里指定「查谁的资料」成员，不知道发给谁';
+  else {
+    try {
+      if (ch === 'feishu') { await feishuService.sendMarkdown(tdb, '小智接入自检', body.replace(/\n/g, '\n\n')); sent = true; }
+      else {
+        sent = await dingtalkService.pushIfBound(tdb, body);
+        if (!sent) err = `${who.username} 还没绑定钉钉（去设置页绑一下）`;
+      }
+    } catch (e) { err = e.message; }
+  }
+
+  logAgent({
+    request: '自检', status: err ? 'error' : 'ok', reason: err,
+    result: body.replace(/\n/g, ' / ').slice(0, 300), mode: 'button', ms: Date.now() - t0,
+  });
+
+  // 屏幕上一句话能显示完的短回执（≤950 字节，fitSpeech 兜底）
+  const short = err
+    ? `测试消息没发出去：${err}`
+    : `测试消息已发到${ch === 'feishu' ? '飞书' : '钉钉'}。${mcp.connected ? '接入点已连接' : '接入点未连接'}；${agentReady ? `${ag.name}连通` : `${ag.name}不可用`}`;
+  return fitSpeech({ ok: !err, sent, channel: ch, message: clampSpeech(short) });
+}
+
 // 通道 A（官方 MCP 接入点）的连接状态：由 xiaozhiMcpBridge 回写，面板读它显示状态灯。
 // 放在这里而不是桥接模块内，是因为 getPublicConfig 要用，且避免路由层反向依赖桥接。
 const mcpState = { connected: false, since: 0, last_error: '' };
@@ -1029,7 +1150,10 @@ async function dispatch(op, body) {
     // v1.9.31：语音查工作台资料 / 转交家里 agent
     if (op === 'ask') return await askWorkbench(b.keywords || b.question || b.q || b.text);
     if (op === 'delegate') return await delegateAgent(b.request || b.text);
-    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll / chatlog / ask / delegate）` };
+    // v1.9.36：屏幕按钮 —— ③ 对话AI（跳过点名）/ ④ 测试（自检消息发 IM）
+    if (op === 'agent_chat') return await agentChatDirect(b.text || b.request);
+    if (op === 'selftest') return await runSelfTest();
+    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll / chatlog / ask / delegate / agent_chat / selftest）` };
   } catch (e) {
     console.error('[xiaozhi] bridge', op, e.message);
     return { ok: false, message: `桥接处理失败：${e.message}` };
@@ -1043,6 +1167,8 @@ module.exports = {
   noteBoardIp, getBoardInfo, appendChatLog, listChatLog,
   // v1.9.31 新增：语音查询 / 转交 agent / 凭证 / 审计 / 接入点状态
   askWorkbench, delegateAgent, listAgentLog, stripQuestion, searchCandidates, searchWithFallback, configuredQueryUser,
+  // v1.9.36：屏幕按钮（③ 对话AI 跳过点名 / ④ 测试发 IM 自检）
+  agentChatDirect, runSelfTest,
   countIntent, countAll, cjkGrams, matchedCategory, pureCategoryQuery, parseTimeRange,
   digestResults, saneAnswer,
   getAgentKey, setAgentKey, clearAgentKey, hasAgentKey,

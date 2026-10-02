@@ -147,6 +147,26 @@ CREATE TABLE IF NOT EXISTS family_images (
   data TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
+-- 儿童故事（v1.9.36，家庭管理页新 tab）：条目在库里，音频文件在 data/story-audio/ 下按 id 命名。
+-- 表属「家庭」共享族（全家共看），故 DDL 在主库块里也有一份，读写走 routedDb(req.tdb,'family')。
+-- audio_* 三列是「转音频」的结果：空 audio_path = 还没转过。voice_name 冗余存当时的音色显示名，
+-- 音色库改名或换模型后列表仍能显示当初用的是什么。
+CREATE TABLE IF NOT EXISTS kid_stories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  summary TEXT DEFAULT '',
+  content TEXT DEFAULT '',
+  source TEXT DEFAULT 'manual',
+  voice_id INTEGER,
+  voice_name TEXT DEFAULT '',
+  audio_path TEXT DEFAULT '',
+  audio_sec REAL DEFAULT 0,
+  audio_bytes INTEGER DEFAULT 0,
+  created_by INTEGER,
+  created_by_name TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
 
 CREATE TABLE IF NOT EXISTS learning_plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -728,6 +748,23 @@ CREATE TABLE IF NOT EXISTS family_images (
   size INTEGER DEFAULT 0,
   data TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+-- 儿童故事（v1.9.36）：结构与租户库同名表一致（routedDb 选库，两边共用 BUSINESS_DDL 里的定义）
+CREATE TABLE IF NOT EXISTS kid_stories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  summary TEXT DEFAULT '',
+  content TEXT DEFAULT '',
+  source TEXT DEFAULT 'manual',
+  voice_id INTEGER,
+  voice_name TEXT DEFAULT '',
+  audio_path TEXT DEFAULT '',
+  audio_sec REAL DEFAULT 0,
+  audio_bytes INTEGER DEFAULT 0,
+  created_by INTEGER,
+  created_by_name TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE TABLE IF NOT EXISTS family_profiles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1925,7 +1962,10 @@ for (const cb of importedCbs) cb();
 // 开=全员读主库同一份（都可读写）；关=各回各的租户库。
 // 切换时重平衡（rebalanceFamilyShare）：关=主库共享底账归还第一位管理员；开=以管理员当前数据重建底账。
 // 首次启用（migrateFamilyShare，守卫 family_share_v1）：把第一位管理员的租户家庭数据复制到主库作共享底账。
-const FAMILY_TABLES = ['family_items', 'kids', 'kid_tasks', 'family_profiles', 'family_images'];
+// kid_stories（v1.9.36）也在这份清单里：开关切换时它的**条目行**要跟着搬家（音频文件在磁盘上按 id 命名，
+// 复制保留原 id 所以文件照样对得上）。注意**不要**把它加进上面的 TENANT_TABLES——那份清单还喂给
+// cleanupMainBusinessTables()（会 DELETE 主库里清单内的表），新表列进去等于给自己埋一颗数据丢失的雷。
+const FAMILY_TABLES = ['family_items', 'kids', 'kid_tasks', 'family_profiles', 'family_images', 'kid_stories'];
 function firstAdmin() { return db.prepare("SELECT id, username FROM users WHERE role='admin' ORDER BY id LIMIT 1").get(); }
 // 整表镜像复制（replace=先清空目标表再插，保留原 id，消息中心 ref_id 引用不失效）
 function copyFamilyTables(src, dst, replace) {

@@ -605,6 +605,53 @@ try {
     ok(false, '接入点状态灯 UI 段异常：' + e.message);
   }
 
+  // 屏幕第 4 个按钮（【测试】）的自检消息走哪条 IM —— 存在贾维斯页的 agent 卡里
+  console.log('— 屏幕【测试】按钮的 IM 通道下拉（v1.9.36）');
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    const ctx = await br.newContext();
+    await ctx.addInitScript(([t, u]) => {
+      localStorage.setItem('wb_token', t);
+      localStorage.setItem('wb_user', u);
+      localStorage.setItem('xz_sub', 'assistant');
+    }, [T, JSON.stringify(lg.j.user)]);
+    const p = await ctx.newPage();
+    const perr = [];
+    p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+    await p.waitForSelector('text=🤖 转交家里 agent', { timeout: 10000 });
+    // 按 label 定位，别用 .first() select——这一页的 select 不止一个
+    const sel = p.locator('.xz-field', { hasText: '屏幕【测试】按钮走哪条' }).locator('select');
+    ok((await sel.count()) === 1, '「屏幕【测试】按钮走哪条」下拉渲染出来了');
+    const opts = (await sel.locator('option').allInnerTexts()).map((s) => s.trim());
+    ok(JSON.stringify(opts) === JSON.stringify(['钉钉', '飞书']), '只有钉钉/飞书两项（与后端白名单一致）', opts.join(','));
+    ok((await sel.inputValue()) === 'dingtalk', '默认钉钉');
+    ok((await p.locator('text=只发一条，不双发').count()) === 1, '旁边写清了「只发一条、不双发」和收件人是谁');
+
+    await sel.selectOption('feishu');
+    await p.locator('button', { hasText: '保存语音助手配置' }).click();
+    await p.waitForSelector('.msg.ok', { timeout: 8000 });
+    await p.waitForTimeout(1200); // 保存后会自动回读接入点状态
+    const cfgNow = await api('GET', '/api/xiaozhi/config', { token: T });
+    ok(cfgNow.j.config.test && cfgNow.j.config.test.channel === 'feishu',
+      `选飞书保存后真落库（test.channel=${cfgNow.j.config.test && cfgNow.j.config.test.channel}）`);
+    await p.reload();
+    await p.waitForSelector('text=🤖 转交家里 agent', { timeout: 10000 });
+    const sel2 = p.locator('.xz-field', { hasText: '屏幕【测试】按钮走哪条' }).locator('select');
+    ok((await sel2.inputValue()) === 'feishu', '刷新后回显 feishu（界面上看得见 = 库里存的对）');
+    // 复位成钉钉，别把这个状态留给手工继续跑的场景
+    await sel2.selectOption('dingtalk');
+    await p.locator('button', { hasText: '保存语音助手配置' }).click();
+    await p.waitForSelector('.msg.ok', { timeout: 8000 });
+    await p.waitForTimeout(600);
+    ok((await api('GET', '/api/xiaozhi/config', { token: T })).j.config.test.channel === 'dingtalk', '改回钉钉也能存（不是单向阀）');
+    ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
+    await br.close();
+  } catch (e) {
+    ok(false, '测试通道下拉 UI 段异常：' + e.message);
+  }
+
   console.log(`\n结果：${passed} 通过 / ${failed} 失败`);
   process.exitCode = failed ? 1 : 0;
 } catch (e) {

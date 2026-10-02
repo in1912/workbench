@@ -79,7 +79,8 @@ function pageForPath(p) {
   if (p.startsWith('/contacts')) return 'email'; // 邮箱页「通讯录」tab（email_contacts 表）
   if (p.startsWith('/notes')) return 'notes';
   if (p.startsWith('/todos') || p.startsWith('/events')) return 'tasks';
-  if (p.startsWith('/family') || p.startsWith('/kids') || p.startsWith('/kid-tasks') || p.startsWith('/family-profiles') || p.startsWith('/lunar')) return 'family';
+  // /story = 家庭管理页「儿童故事」tab（v1.9.36）。漏了这条就落 null=仅需登录，权限形同虚设（v1.9.9 fnos 踩过）
+  if (p.startsWith('/family') || p.startsWith('/kids') || p.startsWith('/kid-tasks') || p.startsWith('/family-profiles') || p.startsWith('/lunar') || p.startsWith('/story')) return 'family';
   // 学习计划/学习记录/复盘已移到「效率工具」页（2026-09 v1.2.0）
   if (p.startsWith('/learning') || p.startsWith('/reviews')) return 'tools';
   // 语音合成接口跨页共享：听写播报（学习页）与语音配音（效率工具页，2026-09 v1.6.5 移入）都用
@@ -138,6 +139,7 @@ const TAB_PATHS = {
     ['import', ['/pay/import', '/pay/train', '/pay/classify-ai']],
     ['bills', ['/pay/bills']],
     ['budget', ['/pay/budgets', '/pay/budget-compare']],
+    ['story', ['/story']],   // 儿童故事（v1.9.36）
   ],
   tasks: [
     ['todo', ['/todos']],

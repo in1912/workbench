@@ -511,7 +511,20 @@
             <span class="xz-muted">毫秒</span>
           </div>
         </div>
+        <div class="xz-field xz-field-s">
+          <label>屏幕【测试】按钮走哪条</label>
+          <div class="xz-inline">
+            <select v-model="form.test.channel" class="xz-mini" :disabled="!isAdmin">
+              <option value="dingtalk">钉钉</option>
+              <option value="feishu">飞书</option>
+            </select>
+          </div>
+        </div>
       </div>
+      <p class="xz-muted" style="margin:8px 0 0">
+        「屏幕【测试】按钮走哪条」= 板上第四个按钮按下后，那条自检消息（接入点状态 / agent 连通性 / agent 查的本地天气）
+        从哪个 IM 发出来。<b>只发一条，不双发</b>；收件人是上面「查谁的资料」那位成员绑定的账号（钉钉绑定、飞书会话都是按人按租户存的）。
+      </p>
       <div class="xz-cap xz-cap-warn" style="margin:10px 0 0">
         ⚠️ <b>超过「同步等待上限」的长任务，答案会从智能屏播出来，不是板子</b>——板子会先说「还在算，算好了我用智能屏告诉您」，
         算完由智能屏补播。这是板子固件的限制（云端驱动 TTS，工具调用必须同步返回），不是 bug。
@@ -670,6 +683,8 @@ const form = reactive({
   agentKey: '',   // 只写不读：留空 = 保持原值，服务端也只回 has_key 布尔
   mcp: { enabled: false, url: '' },
   mcpToken: '',
+  // v1.9.36 屏幕【测试】按钮走哪条 IM
+  test: { channel: 'dingtalk' },
 });
 const ports = ref([]);
 const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false, agentTest: false, agentLog: false, assistantSave: false, mcpState: false });
@@ -958,6 +973,8 @@ function syncForm(c) {
   form.agentKey = '';
   form.mcp = { enabled: !!m.enabled, url: m.url || '' };
   form.mcpToken = '';
+  const tst = c.test || {};
+  form.test = { channel: tst.channel === 'feishu' ? 'feishu' : 'dingtalk' };
 }
 
 async function loadAll() {
@@ -1092,6 +1109,7 @@ async function saveConfig(extra = {}) {
       sync_budget_ms: Number(form.agent.sync_budget_ms) || 8000,
     },
     mcp: { enabled: !!form.mcp.enabled, url: form.mcp.url },
+    test: { channel: form.test.channel === 'feishu' ? 'feishu' : 'dingtalk' },
     ...(form.agentKey.trim() ? { agent_key: form.agentKey.trim() } : {}),
     ...(form.mcpToken.trim() ? { mcp_token: form.mcpToken.trim() } : {}),
     ...extra,

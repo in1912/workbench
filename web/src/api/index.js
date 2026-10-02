@@ -78,7 +78,8 @@ async function rejectGatewayText(res) {
 // POST 不重试——新建类请求重发可能产生重复数据。
 const NET_RETRY = new Set(['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE']);
 
-async function request(method, url, body, retried = false) {
+// timeoutMs：常规接口 180s 够用；语音合成这类「可能含引擎冷启动/首次模型加载」的调用传 300000（见 api.postSlow）
+async function request(method, url, body, retried = false, timeoutMs = 180000) {
   const opts = { method, headers: {} };
   if (method === 'PATCH') {
     opts.method = 'PUT';
@@ -96,11 +97,11 @@ async function request(method, url, body, retried = false) {
   let full = withToken(base + url);
   if (method === 'PATCH') full += (full.includes('?') ? '&' : '?') + '_method=PATCH';
   try {
-    res = await fetch(full, { ...opts, signal: AbortSignal.timeout(180000) });
+    res = await fetch(full, { ...opts, signal: AbortSignal.timeout(timeoutMs) });
   } catch (e) {
     if (!retried && NET_RETRY.has(method) && e && e.name !== 'AbortError') {
       await new Promise((r) => setTimeout(r, 500));
-      return request(method, url, body, true);
+      return request(method, url, body, true, timeoutMs);
     }
     throw new Error('网络连接失败，请重试（若反复失败请检查网络或稍后再试）');
   }
@@ -134,7 +135,7 @@ async function request(method, url, body, retried = false) {
       try {
         const h2 = { ...opts.headers };
         delete h2.Authorization; // 只留 Content-Type / X-HTTP-Method；认证走 wb_token Cookie
-        const r2 = await fetch(base + url, { ...opts, headers: h2, signal: AbortSignal.timeout(180000) });
+        const r2 = await fetch(base + url, { ...opts, headers: h2, signal: AbortSignal.timeout(timeoutMs) });
         const t2 = await r2.text();
         if (r2.status === 200) {
           const d2 = JSON.parse(t2); // 仍非 JSON 会抛，落入下方统一报错
@@ -157,6 +158,8 @@ async function request(method, url, body, retried = false) {
 export const api = {
   get: (url) => request('GET', url),
   post: (url, body) => request('POST', url, body ?? {}),
+  // 长耗时 POST（语音合成：首次可能含引擎冷启动 + 670MB 模型下载）：超时放宽到 5 分钟
+  postSlow: (url, body) => request('POST', url, body ?? {}, false, 300000),
   put: (url, body) => request('PUT', url, body ?? {}),
   patch: (url, body) => request('PATCH', url, body ?? {}),
   del: (url) => request('DELETE', url),

@@ -15,6 +15,8 @@ export const TAB_DEFS = {
     { key: 'family', label: '通知' },
     { key: 'kids', label: '子女学习' },
     { key: 'profiles', label: '家庭人员档案' },
+    // 儿童故事（v1.9.36）：导入/AI 生成 → 文字转音频 → 板子或手机听
+    { key: 'story', label: '儿童故事' },
     // 个人账务从独立页并入（2026-09 v1.7.0），作为「家庭管理」最后一个 tab（内含 5 个子 tab）
     { key: 'pay', label: '个人账务' },
     // 隐藏伪 tab：个人账务内部的子功能细分（不出现在家庭页 tab 栏，权限表可勾选限制）

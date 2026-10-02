@@ -211,6 +211,16 @@ router.put('/xiaozhi/config', (req, res) => {
     }
     patch.mcp = m;
   }
+  // ---------- v1.9.36：屏幕【测试】按钮走哪条 IM ----------
+  if (b.test) {
+    const t = {};
+    if (b.test.channel !== undefined) {
+      const ch = String(b.test.channel || '').trim();
+      if (!['dingtalk', 'feishu'].includes(ch)) return res.status(400).json({ error: 'test.channel 只支持 dingtalk（钉钉）/ feishu（飞书）' });
+      t.channel = ch;
+    }
+    patch.test = t;
+  }
   // ---------- 敏感凭证：非空才写，空 = 保持原值（面板显示「已配置，留空保持不变」） ----------
   if (typeof b.agent_key === 'string' && b.agent_key.trim()) svc.setAgentKey(b.agent_key);
   if (b.agent_key_clear === true) svc.clearAgentKey();
