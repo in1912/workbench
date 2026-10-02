@@ -31,10 +31,27 @@ router.get('/xiaozhi/capabilities', (req, res) => {
 });
 
 // ---------- 配置（读：有 tab 权限即可，key 只给管理员；写：管理员） ----------
+// 接入点「为什么没连上」只给管理员看：last_error 是底层异常原文，可能带上带 token 的 URL，
+// 而 GET /xiaozhi/config 成员也读得到。给管理员的那份先把 token 抹掉再回。
+function publicWithMcpDetail(req) {
+  const pub = svc.getPublicConfig();
+  if (!req.user || req.user.role !== 'admin') return pub;
+  try {
+    const s = svc.getMcpState();
+    return {
+      ...pub,
+      mcp: {
+        ...pub.mcp,
+        since: s.since || 0,
+        last_error: String(s.last_error || '').replace(/([?&]token=)[^&\s]*/gi, '$1***'),
+      },
+    };
+  } catch { return pub; }
+}
 router.get('/xiaozhi/config', (req, res) => {
   res.json({
     // getPublicConfig 会带上 agent.has_key / mcp.token_set 两个布尔，但绝不带密钥本身
-    config: svc.getPublicConfig(),
+    config: publicWithMcpDetail(req),
     bridge_key: req.user.role === 'admin' ? svc.ensureBridgeKey() : undefined,
   });
 });
@@ -154,7 +171,7 @@ router.put('/xiaozhi/config', (req, res) => {
     }
     if (b.agent.model !== undefined) {
       const m = String(b.agent.model || '').trim();
-      if (m.length > 64) return res.status(400).json({ error: '模型名最长 64 个字' });
+      if (m.length > 64) return res.status(400).json({ error: 'Agent 名（档案名）最长 64 个字' });
       a.model = m;
     }
     const intIn2 = (v, lo, hi, label) => {
@@ -201,7 +218,7 @@ router.put('/xiaozhi/config', (req, res) => {
   const saved = svc.saveConfig(patch);
   // 接入点开关刚变化 → 通知桥接模块重连/断开（内部自己判，不在这里抛错）
   try { require('../services/xiaozhiMcpBridge').sync(saved); } catch (e) { console.warn('[xiaozhi] 接入点同步失败', e.message); }
-  res.json({ config: svc.getPublicConfig() });
+  res.json({ config: publicWithMcpDetail(req) });
 });
 
 // ---------- 桥接密钥轮换（旧固件立即失联，需重烧——面板会提示） ----------
@@ -383,7 +400,7 @@ router.get('/xiaozhi/agent-log', (req, res) => {
 router.post('/xiaozhi/agent-test', asyncH(async (req, res) => {
   if (!adminOnly(req, res)) return;
   const ag = svc.getConfig().agent;
-  if (!ag.base_url || !ag.model) return res.status(400).json({ error: '先填 agent 地址和模型名' });
+  if (!ag.base_url || !ag.model) return res.status(400).json({ error: '先填 agent 地址和 Agent 名（档案名）' });
   if (!svc.hasAgentKey()) return res.status(400).json({ error: '先填 agent 密钥' });
   const hermes = require('../services/hermesService');
   res.json(await hermes.ping({ baseUrl: ag.base_url, apiKey: svc.getAgentKey(), model: ag.model }));

@@ -364,7 +364,9 @@
     </template>
 
     <!-- ============ 摄像头（v1.9.17） ============ -->
-    <template v-else>
+    <!-- 这里**必须写全条件**：v1.9.31 加「语音助手」时把它单开成 v-if，而这块是链尾的 v-else，
+         于是语音助手页签下摄像头相册跟着一起渲染（v1.9.32 修） -->
+    <template v-else-if="sub === 'camera'">
       <div class="card">
         <h3 style="margin:0 0 4px">📷 摄像头相册（板子拍照存工作台）</h3>
         <p class="xz-muted" style="margin:0 0 14px">
@@ -467,8 +469,9 @@
           <span class="xz-hint">局域网地址，<b>不要暴露到公网</b></span>
         </div>
         <div class="xz-field">
-          <label>模型名</label>
+          <label>Agent 名</label>
           <input v-model="form.agent.model" :disabled="!isAdmin" placeholder="fnnas-feishu" />
+          <span class="xz-hint">填 agent 的 <b>profile 档案名</b>（Hermes 里就是那个档案 / 模型 ID，如 <code>fnnas-feishu</code>）——不是给它起的说话名，那个填在下面</span>
         </div>
         <div class="xz-field">
           <label>API 密钥</label>
@@ -531,11 +534,17 @@
           <div class="xz-inline">
             <input id="xz-mcp-on" v-model="form.mcp.enabled" type="checkbox" :disabled="!isAdmin" />
             <label for="xz-mcp-on" class="xz-check-lb">连接接入点</label>
-            <span class="xz-pill" :class="cfg.mcp?.connected ? 'ok' : 'bad'">
-              {{ cfg.mcp?.connected ? '● 已连接' : '○ 未连接' }}
-            </span>
+            <span class="xz-pill" :class="mcpPill.cls">{{ mcpPill.text }}</span>
+            <button v-if="isAdmin" class="btn sm ghost" :disabled="busy.mcpState" @click="checkMcp">
+              {{ busy.mcpState ? '查询中…' : '🔄 刷新状态' }}
+            </button>
           </div>
           <span class="xz-hint">令牌与地址都填好、并勾上这里，才会去连</span>
+          <span v-if="mcpMsg" class="xz-hint" :class="mcpPill.cls === 'ok' ? 'xz-ok' : 'xz-err'">{{ mcpMsg }}</span>
+          <span v-else-if="isAdmin && cfg.mcp?.last_error" class="xz-hint xz-err">最近一次失败：{{ cfg.mcp.last_error }}</span>
+          <span v-else-if="cfg.mcp?.connected && cfg.mcp?.since" class="xz-hint xz-ok">
+            已连上（{{ fmtTime(cfg.mcp.since) }}），掉线会自动重连
+          </span>
         </div>
         <div class="xz-field">
           <label>接入点地址</label>
@@ -618,7 +627,7 @@ const form = reactive({
   mcpToken: '',
 });
 const ports = ref([]);
-const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false, agentTest: false, agentLog: false, assistantSave: false });
+const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false, agentTest: false, agentLog: false, assistantSave: false, mcpState: false });
 const probeMsg = ref(''); const probeOk = ref(false);
 const spProbeMsg = ref(''); const spTestMsg = ref('');
 const testText = ref('');
@@ -635,7 +644,12 @@ function switchSub(s) {
   if (s === 'live') loadBoard();
   if (s === 'history') loadChat();
   if (s === 'camera') loadPhotos();
-  if (s === 'assistant') { loadUsers(); loadAgentLog(); }
+  if (s === 'assistant') {
+    loadUsers(); loadAgentLog();
+    stopMcpWatch();                 // 离开过再回来：重新问一次真实状态，别拖着上一轮的轮询
+    mcpMsg.value = '';
+    pollMcpOnce().catch(() => {});
+  } else stopMcpWatch();
 }
 
 // ---------- 语音助手（v1.9.31）：指定用户 + agent 连通性 + 转交流水 ----------
@@ -657,7 +671,9 @@ async function testAgent() {
   busy.agentTest = true; agentTestMsg.value = '';
   try {
     const r = await api.post('/xiaozhi/agent-test', {});
-    agentTestMsg.value = r.ok ? `✅ 通了，往返 ${r.ms}ms` : `❌ ${r.error}`;
+    // 失败时把「试的是哪个地址」一并说出来：404 这类错八成是地址少了 /v1 那一段，
+    // 只说「接口错误 404」等于让人去猜（用户就是这么撞上的）
+    agentTestMsg.value = r.ok ? `✅ 通了，往返 ${r.ms}ms` : `❌ ${r.error}${r.url ? `（试的地址：${r.url}）` : ''}`;
   } catch (e) { agentTestMsg.value = '❌ ' + e.message; }
   busy.agentTest = false;
 }
@@ -667,9 +683,70 @@ async function clearAgentKey() {
 }
 async function saveAssistant() {
   busy.assistantSave = true;
-  try { await saveConfig(); flashOk('已保存（密钥存好即生效）'); }
-  catch (e) { flashErr(e.message); }
+  try {
+    await saveConfig();
+    flashOk('已保存（密钥存好即生效）');
+    // 接入点是**异步**连的：保存这一刻必然还没握手完，回读一定是「未连接」。
+    // 不盯着刷新一会儿，界面就会一直挂着「未连接」——连上了也看不出来（v1.9.32 修）
+    if (form.mcp.enabled) watchMcp();
+    else { stopMcpWatch(); mcpMsg.value = ''; pollMcpOnce().catch(() => {}); }
+  } catch (e) { flashErr(e.message); }
   busy.assistantSave = false;
+}
+
+// ---------- 接入点连接状态（v1.9.32） ----------
+const mcpMsg = ref('');
+let mcpTimer = null;
+const mcpPill = computed(() => {
+  const m = cfg.value.mcp || {};
+  if (m.connected) return { cls: 'ok', text: '● 已连接' };
+  if (mcpMsg.value.startsWith('连接中')) return { cls: 'warn', text: '◌ 连接中…' };
+  if (mcpMsg.value) return { cls: 'bad', text: '○ 连不上' };
+  if (m.last_error) return { cls: 'bad', text: '○ 连不上' };
+  return { cls: 'bad', text: '○ 未连接' };
+});
+// 只回填状态字段，绝不动 form：轮询期间用户可能正在改配置，碰 form 会把输入抹掉
+function patchMcp(m, agent) {
+  cfg.value = {
+    ...cfg.value,
+    mcp: { ...(cfg.value.mcp || {}), ...m },
+    ...(agent ? { agent: { ...(cfg.value.agent || {}), has_key: !!agent.has_key } } : {}),
+  };
+}
+async function pollMcpOnce() {
+  const c = await api.get('/xiaozhi/config');
+  if (c && c.config) patchMcp(c.config.mcp || {}, c.config.agent);
+  return (c && c.config && c.config.mcp) || {};
+}
+function stopMcpWatch() { if (mcpTimer) { clearInterval(mcpTimer); mcpTimer = null; } }
+// 连上之前每 1.5s 问一次（最多 15s）；连上立刻停手，超时把原因写在状态下方
+function watchMcp() {
+  stopMcpWatch();
+  mcpMsg.value = '连接中…';
+  let n = 0;
+  mcpTimer = setInterval(async () => {
+    n += 1;
+    let m = {};
+    try { m = await pollMcpOnce(); } catch { /* 抖一下继续问 */ }
+    if (m.connected) { stopMcpWatch(); mcpMsg.value = ''; flashOk('接入点已连上'); return; }
+    if (n >= 10) {
+      stopMcpWatch();
+      mcpMsg.value = m.last_error
+        ? `连不上：${m.last_error}`
+        : '连不上：检查地址与 token 是否填全（桥接每 30s 会自动再试，改动后建议刷新页面看日志）';
+    }
+  }, 1500);
+}
+async function checkMcp() {
+  busy.mcpState = true;
+  mcpMsg.value = '连接中…';
+  try {
+    const m = await pollMcpOnce();
+    if (m.connected) { mcpMsg.value = ''; flashOk('接入点已连上'); }
+    else if (form.mcp.enabled) watchMcp();          // 勾着没连上：多半正在重连，再盯一轮
+    else mcpMsg.value = '还没勾「连接接入点」——勾上再保存才会去连';
+  } catch (e) { mcpMsg.value = '查询失败：' + e.message; }
+  busy.mcpState = false;
 }
 
 // ---------- 对话记录（v1.9.19）：聊天窗口，左=板子应答，右=用户指令；向上滚动翻更早 ----------
@@ -1049,9 +1126,13 @@ onMounted(async () => {
   st.value = await api.get('/xiaozhi/build/status').catch(() => st.value);
   if (st.value.running) startPoll();
   if (isAdmin && cap.value.canFlash) loadPorts();
+  // 子 tab 存在 localStorage 里：直接刷新页面回到「语音助手」时，switchSub 不会跑，
+  // 成员列表就是空的（下拉点开写「无匹配用户」，看着像选不了人）。这里补上首屏该拉的数据。
+  if (sub.value === 'assistant') { loadUsers(); loadAgentLog(); pollMcpOnce().catch(() => {}); }
 });
 onBeforeUnmount(() => {
   stopPoll();
+  stopMcpWatch();
   clearInterval(photoPollTimer);
   window.removeEventListener('keydown', onKey);
 });

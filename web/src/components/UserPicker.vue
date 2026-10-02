@@ -8,7 +8,7 @@
         ref="inputEl"
         v-model="q"
         class="up-input"
-        :placeholder="sel.length && multiple ? '' : placeholder"
+        :placeholder="sel.length ? '' : placeholder"
         @focus="open = true"
         @input="open = true"
         @keydown.enter.prevent="enterPick"
@@ -49,7 +49,16 @@ const q = ref('');
 const root = ref(null);
 const inputEl = ref(null);
 
-const sel = computed(() => (props.multiple ? (Array.isArray(props.modelValue) ? props.modelValue.map(Number) : []) : []));
+// 单选模式的 modelValue 是一个 number id（不是数组）。v1.9.31 只写了多选那一支，
+// 单选恒回 []：选中后没有 chip、下拉里不打勾、占位文字也不消失——值其实发出去了，
+// 但界面零反馈，看起来就是「点了勾不上」（v1.9.32 修）。这里统一成「已选 id 的数组」。
+const sel = computed(() => {
+  const v = props.modelValue;
+  if (props.multiple) return Array.isArray(v) ? v.map(Number) : [];
+  if (v === null || v === undefined || v === '') return [];
+  const n = Number(v);
+  return Number.isFinite(n) ? [n] : [];
+});
 const filtered = computed(() => {
   // users 非数组（调用方传错形状）时按空处理：渲染崩溃会表现为「下拉一点就消失」
   if (!Array.isArray(props.users)) return [];
@@ -94,8 +103,10 @@ function pick(u) {
   }
 }
 function remove(id) {
-  if (!props.multiple) return;
-  emit('update:modelValue', sel.value.filter((x) => x !== id));
+  if (props.multiple) { emit('update:modelValue', sel.value.filter((x) => x !== id)); return; }
+  // 单选：chip 上的 ✕ 就是「清空」——emit null 让上层回到「没选人」的显式状态
+  q.value = '';
+  emit('update:modelValue', null);
 }
 // 回车：列表只剩一个匹配时直接选中，方便键盘操作
 function enterPick() {

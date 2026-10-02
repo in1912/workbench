@@ -67,6 +67,19 @@ try {
   ok(tools.buildTools({ agent: { ...ag, enabled: false } }).length === 1, '停用时摘掉 delegate（不留必然被拒的入口）');
   ok(tools.buildTools({ agent: { enabled: true } }).length === 2, '没填名字时回落「贾维斯」且不崩');
 
+  console.log('— Hermes 接口地址归一（v1.9.32：少一段 /v1 会让「测试连通性」永远 404）');
+  {
+    const hermes = await import('../server/services/hermesService.js');
+    const ce = hermes.chatEndpoint;
+    // 面板里让大家填的就是「IP:端口」，这一段必须由我们补——实测 POST /chat/completions → 404
+    ok(ce('http://192.168.110.105:8642') === 'http://192.168.110.105:8642/v1/chat/completions', '只填 IP:端口 → 自动补 /v1/chat/completions', ce('http://192.168.110.105:8642'));
+    ok(ce('http://192.168.110.105:8642/') === 'http://192.168.110.105:8642/v1/chat/completions', '尾斜杠容忍', ce('http://192.168.110.105:8642/'));
+    ok(ce('http://h:8642/v1') === 'http://h:8642/v1/chat/completions', '已带 /v1 不重复补', ce('http://h:8642/v1'));
+    ok(ce('http://h:8642/v1/chat/completions') === 'http://h:8642/v1/chat/completions', '整条接口地址粘进来也不双重后缀', ce('http://h:8642/v1/chat/completions'));
+    ok(ce('https://api.deepseek.com') === 'https://api.deepseek.com/v1/chat/completions', 'https 无路径同理', ce('https://api.deepseek.com'));
+    ok(ce('http://h:8642/hermes/v1') === 'http://h:8642/hermes/v1/chat/completions', '自定义前缀路径照原样拼（不猜）', ce('http://h:8642/hermes/v1'));
+  }
+
   console.log('— 接入点 MCP 帧响应');
   const init = await bridge._respond({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   ok(init.result && init.result.protocolVersion === '2024-11-05' && init.result.capabilities.tools, 'initialize 回协议版本与 tools 能力');

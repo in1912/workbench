@@ -6,8 +6,18 @@
 // 安全前提：这个 base_url 指向的是能读写 NAS 文件的 agent，**绝不能暴露到公网**。
 // 工作台侧只做「点名才放行 + 限流 + 危险词拦截 + 审计」四道外围约束。
 
-const chatEndpoint = (base) =>
-  String(base || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '') + '/chat/completions';
+// Hermes 的 OpenAI 兼容接口在 /v1/chat/completions（实测：POST /chat/completions → 404，
+// POST /v1/chat/completions → 401/405，即路由只在后者）。面板里让大家填的是「IP:端口」，
+// 所以只填了主机名（没有路径）时自动补 /v1——否则一填就 404（v1.9.32 修）。
+// 已经带了路径的（如 …/hermes/v1、或整条 …/chat/completions）按原样走，不猜。
+const chatEndpoint = (base) => {
+  const b = String(base || '').trim().replace(/\/+$/, '');
+  if (/\/chat\/completions$/i.test(b)) return b;           // 整条接口地址粘进来了
+  let pathname = '';
+  try { pathname = new URL(b).pathname; } catch { /* 形状怪：按无路径处理 */ }
+  if (!pathname || pathname === '/') return b + '/v1/chat/completions';
+  return b.replace(/\/chat\/completions$/i, '') + '/chat/completions';
+};
 
 // 语音播报用的系统提示：Hermes 默认回答偏长（它是个会写 markdown 的 agent），
 // 不约束的话 TTS 会念一串列表符号和星号。
@@ -21,7 +31,7 @@ async function ask({ baseUrl, apiKey, model, text, systemPrompt, timeoutMs = 600
   const base = String(baseUrl || '').trim();
   if (!base) throw new Error('未配置 Hermes 地址');
   if (!apiKey) throw new Error('未配置 Hermes 密钥');
-  if (!model) throw new Error('未配置 Hermes 模型名');
+  if (!model) throw new Error('未配置 agent 档案名（面板里的「Agent 名」）');
   const task = String(text || '').trim().slice(0, 200);
   if (!task) throw new Error('要转交的内容为空');
 
@@ -50,6 +60,7 @@ async function ask({ baseUrl, apiKey, model, text, systemPrompt, timeoutMs = 600
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     if (res.status === 401) throw new Error('Hermes 密钥不对（401）');
+    if (res.status === 404) throw new Error(`Hermes 接口 404（地址不对——面板里只填 IP:端口 即可，路径会自动补）：${body.slice(0, 120)}`);
     throw new Error(`Hermes 接口错误 ${res.status}：${body.slice(0, 200)}`);
   }
   const data = await res.json();
@@ -59,14 +70,16 @@ async function ask({ baseUrl, apiKey, model, text, systemPrompt, timeoutMs = 600
   return { content, model: data.model || model, usage: data.usage || null };
 }
 
-// 连通性自检（面板「测试」按钮用）：只回耗时与是否通，不回内容——避免把 agent 的输出留在前端
+// 连通性自检（面板「测试」按钮用）：只回耗时与是否通，不回内容——避免把 agent 的输出留在前端。
+// 失败时回 url（我们实际试的那个地址）：404 类错误光看「接口错误」没法排查，地址得摆在眼前。
 async function ping({ baseUrl, apiKey, model, timeoutMs = 15000 }) {
   const t0 = Date.now();
+  const url = chatEndpoint(baseUrl);
   try {
     const r = await ask({ baseUrl, apiKey, model, text: '回复「在」一个字即可', timeoutMs });
     return { ok: true, ms: Date.now() - t0, chars: r.content.length };
   } catch (e) {
-    return { ok: false, ms: Date.now() - t0, error: e.message };
+    return { ok: false, ms: Date.now() - t0, error: e.message, url };
   }
 }
 

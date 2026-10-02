@@ -294,6 +294,9 @@ try {
     ok(true, '「语音查工作台资料」卡渲染');
     ok((await p.locator('text=🤖 转交家里 agent').count()) === 1 && (await p.locator('text=🔗 官方 MCP 接入点').count()) === 1, '「转交家里 agent」「官方 MCP 接入点」两张卡都在');
     ok((await p.locator('text=📜 转交流水').count()) === 1, '「转交流水」卡在');
+    // v1.9.32：摄像头那块是子页签链尾的 v-else 兜底，语音助手曾单开成并列的 v-if → 两个页签内容一起渲染
+    ok((await p.locator('text=📷 摄像头相册（板子拍照存工作台）').count()) === 0, '本页签不串出「摄像头相册」卡（v-else 兜底串页）');
+    ok((await p.locator('button', { hasText: '让板子拍一张' }).count()) === 0, '也没有「让板子拍一张」按钮');
     // 密钥：GET 只回布尔，输入框必须留空 + 靠 placeholder 提示，绝不能把密钥灌进 value
     const pw = p.locator('input[type="password"]');
     ok((await pw.count()) === 2, '两个密钥框（agent 密钥 / 接入点 token）都在');
@@ -310,10 +313,144 @@ try {
     await save.click();
     await p.waitForSelector('.msg.ok', { timeout: 8000 });
     ok(true, '点保存 → 服务端校验全过（未填智能屏 did 也不会被无关字段拦下）');
+    // 反向：切到「摄像头」页签，那块卡必须还在（别把兜底分支改没了）
+    await p.locator('.xz-tabs button', { hasText: '摄像头' }).click();
+    await p.waitForTimeout(400);
+    ok((await p.locator('text=📷 摄像头相册（板子拍照存工作台）').count()) === 1, '切到「摄像头」页签仍然显示相册卡（没修过头）');
     ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
     await br.close();
   } catch (e) {
     ok(false, '语音助手 UI 段异常：' + e.message);
+  }
+
+  // —— 语音助手两处上手修正（v1.9.32）——
+  // ①「查谁的资料」是单选，而选择器组件只实现了多选显示：点中的人不出现标签/不打勾/占位不消失，看着像点不动
+  console.log('— 「查谁的资料」单选要真的「选得中」（v1.9.32）');
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    const ctx = await br.newContext();
+    await ctx.addInitScript(([t, u]) => {
+      localStorage.setItem('wb_token', t);
+      localStorage.setItem('wb_user', u);
+      // 刷新页面直接落在这个子 tab（localStorage 里的 xz_sub）：成员列表必须自己加载，
+      // 此前只有「点页签切过来」才 loadUsers，刷新进来是空列表 → 点开写「无匹配用户」
+      localStorage.setItem('xz_sub', 'assistant');
+    }, [T, JSON.stringify(lg.j.user)]);
+    const p = await ctx.newPage();
+    const perr = [];
+    p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+    await p.waitForSelector('text=🔎 语音查工作台资料', { timeout: 10000 });
+    await p.locator('.up-box').first().click();
+    await p.waitForSelector('.up-item', { timeout: 8000 });
+    const items = await p.locator('.up-item').count();
+    ok(items > 0, `刷新后直接落在本页签也有成员可选（此前空列表）items=${items}`);
+    const firstRow = (await p.locator('.up-item').first().innerText()).trim();
+    await p.locator('.up-item').first().click();
+    await p.waitForTimeout(300);
+    const chips = p.locator('.up-chip');
+    ok((await chips.count()) === 1, '单选点中成员后出现选中标签（此前单选恒无标签）');
+    const chipTxt = (await chips.first().innerText()).replace('✕', '').trim();
+    ok(!!chipTxt && firstRow.includes(chipTxt), `标签上写的就是点中的那个人（${chipTxt}）`);
+    ok((await p.locator('.up-input').first().getAttribute('placeholder')) === '', '选中后占位提示让位（不再同时显示「选一个成员…」）');
+    await p.locator('.up-box').first().click();   // 再点开：已选行必须打勾
+    await p.waitForSelector('.up-item', { timeout: 8000 });
+    ok((await p.locator('.up-item.on').count()) === 1 && (await p.locator('.up-check.on').count()) === 1,
+      '下拉里已选行打勾（.up-item.on + .up-check.on）');
+    await p.locator('h3').first().click();        // 点卡片标题关下拉（收起走 document click）
+    await p.waitForTimeout(200);
+    await p.locator('.up-x').first().click();     // 单选也要能反悔
+    await p.waitForTimeout(250);
+    ok((await p.locator('.up-chip').count()) === 0, '标签上的 ✕ 能清空（单选也能反悔）');
+    // 选一个再存盘：界面上看得见的东西必须跟库里一致
+    await p.locator('.up-box').first().click();
+    await p.waitForSelector('.up-item', { timeout: 8000 });
+    await p.locator('.up-item').first().click();
+    await p.waitForTimeout(200);
+    await p.locator('button', { hasText: '保存语音助手配置' }).click();
+    await p.waitForSelector('.msg.ok', { timeout: 8000 });
+    await p.waitForTimeout(1200); // 保存后会自己回读一次接入点状态，别把这当成「页面在闪」
+    const cfgNow = await api('GET', '/api/xiaozhi/config', { token: T });
+    ok(cfgNow.j.config.query.uid > 0, `面板选中的成员真进了库（query.uid=${cfgNow.j.config.query.uid}）`);
+    await p.reload();                             // 刷新回显：值在库里还不够，界面得看得见
+    await p.waitForSelector('text=🔎 语音查工作台资料', { timeout: 10000 });
+    await p.waitForSelector('.up-chip', { timeout: 8000 });
+    ok((await p.locator('.up-chip').count()) === 1, '刷新页面后已选成员回显成标签');
+    ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
+    await br.close();
+  } catch (e) {
+    ok(false, '单选取人 UI 段异常：' + e.message);
+  }
+
+  // ② 接入点是异步连的：保存那一刻必然还没握手完。面板必须自己回来问，否则连上了也一直显示「未连接」
+  console.log('— 接入点状态灯自己刷新（v1.9.32：不再一直挂「未连接」）');
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    // A) 连上的情形：进页面时未连接，保存后桥接握手完成 → 面板轮询到「已连接」
+    {
+      const ctx = await br.newContext();
+      await ctx.addInitScript(([t, u]) => {
+        localStorage.setItem('wb_token', t); localStorage.setItem('wb_user', u);
+        localStorage.setItem('xz_sub', 'assistant');
+      }, [T, JSON.stringify(lg.j.user)]);
+      let handshook = false;   // 模拟桥接：保存（PUT）之后才握手完成
+      // 只劫持 GET，PUT 走真服务端（真实语义：保存那一刻它回的 connected 一定是 false）
+      await ctx.route('**/api/xiaozhi/config**', async (route) => {
+        const m = route.request().method();
+        if (m !== 'GET') { if (m === 'PUT') handshook = true; return route.continue(); }
+        const resp = await route.fetch();
+        const j = await resp.json();
+        j.config.mcp = { enabled: true, url: 'wss://api.xiaozhi.me/mcp/', token_set: true, connected: handshook, since: handshook ? Date.now() : 0 };
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(j) });
+      });
+      const p = await ctx.newPage();
+      const perr = [];
+      p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+      await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+      await p.waitForSelector('text=🔗 官方 MCP 接入点', { timeout: 10000 });
+      await p.waitForTimeout(700);
+      ok((await p.locator('.xz-pill').first().innerText()).includes('未连接'), '进页面时是「未连接」（还没连上）');
+      await p.locator('button', { hasText: '保存语音助手配置' }).click();
+      await p.waitForSelector('.msg.ok', { timeout: 8000 });
+      await p.waitForSelector('.xz-pill.ok', { timeout: 10000 });   // 此前这里永远等不到：界面再也不刷
+      ok((await p.locator('.xz-pill').first().innerText()).includes('已连接'), '保存后状态灯自己刷成「已连接」（此前一直挂「未连接」）');
+      ok((await p.locator('text=掉线会自动重连').count()) === 1, '连上后补一句连接时间 +「掉线会自动重连」');
+      ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
+      await ctx.close();
+    }
+    // B) 连不上的情形：要给原因，而不是只抛一个「未连接」让人猜
+    {
+      const ctx = await br.newContext();
+      await ctx.addInitScript(([t, u]) => {
+        localStorage.setItem('wb_token', t); localStorage.setItem('wb_user', u);
+        localStorage.setItem('xz_sub', 'assistant');
+      }, [T, JSON.stringify(lg.j.user)]);
+      await ctx.route('**/api/xiaozhi/config**', async (route) => {
+        if (route.request().method() !== 'GET') return route.continue();
+        const resp = await route.fetch();
+        const j = await resp.json();
+        j.config.mcp = { enabled: true, url: 'wss://api.xiaozhi.me/mcp/', token_set: true, connected: false, since: 0, last_error: 'connect ECONNREFUSED 127.0.0.1:1' };
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(j) });
+      });
+      const p = await ctx.newPage();
+      const perr = [];
+      p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+      await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+      await p.waitForSelector('text=🔗 官方 MCP 接入点', { timeout: 10000 });
+      await p.waitForTimeout(500);
+      await p.locator('button', { hasText: '刷新状态' }).click();
+      await p.waitForTimeout(600);
+      ok((await p.locator('.xz-pill').first().innerText()).includes('连接中'), '复查期间显示「连接中…」（不干等着也不误报未连接）');
+      await p.waitForSelector('.xz-err:has-text("ECONNREFUSED")', { timeout: 25000 });
+      ok(true, '连不上时直接写出失败原因（管理员可见；非管理员拿不到这个字段）');
+      ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
+      await ctx.close();
+    }
+    await br.close();
+  } catch (e) {
+    ok(false, '接入点状态灯 UI 段异常：' + e.message);
   }
 
   console.log(`\n结果：${passed} 通过 / ${failed} 失败`);

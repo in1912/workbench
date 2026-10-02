@@ -18,6 +18,8 @@ const { buildTools } = require('./xiaozhiTools');
 const PROTOCOL_VERSION = '2024-11-05';
 const BACKOFF_MIN = 3000;
 const BACKOFF_MAX = 300000;
+// serverInfo.version 跟着 package.json 走：写死一个版本号，下次发版必忘（v1.9.32 改）
+const PKG_VERSION = (() => { try { return require('../../package.json').version || '0.0.0'; } catch { return '0.0.0'; } })();
 
 let ws = null;
 let timer = null;
@@ -67,7 +69,7 @@ async function respond(msg) {
     return { id, result: {
       protocolVersion: (params && params.protocolVersion) || PROTOCOL_VERSION,
       capabilities: { tools: {} },
-      serverInfo: { name: 'personal-workbench', version: '1.9.31' },
+      serverInfo: { name: 'personal-workbench', version: PKG_VERSION },
     } };
   }
   if (method === 'notifications/initialized' || method === 'initialized') return null;
