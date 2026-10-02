@@ -238,6 +238,14 @@ try {
   const none = await bridge({ op: 'ask', keywords: '咸鱼饼干xyz' });
   ok(none.j.ok === true && /没找到/.test(none.j.message), '既无命中又无类别词 → 仍然老实回「没找到」', none.j.message);
 
+  console.log('— v1.9.34：类别词被别的表劫持（生产实测：「日程」二字在 6 条笔记/剪贴板里命中，「我的日程」就永远拿不到真日程）');
+  await api('POST', '/api/notes', { token: T, body: { content: '工作台侧栏一览\n新闻 邮箱 笔记 日程管理 听写 视频教学' } });
+  const cat2 = await bridge({ op: 'ask', keywords: '我的日程' });
+  ok(cat2.j.ok === true && cat2.j.message.includes('牙科复诊'),
+    '别处（笔记）出现「日程」二字也抢不走「我的日程」——纯类别问法只认该类别的真行', cat2.j.message);
+  const cat3 = await bridge({ op: 'ask', keywords: '侧栏一览' });
+  ok(cat3.j.ok === true && cat3.j.count >= 1, '问具体内容时仍按内容检索（不被类别兜底抢走）', cat3.j.message);
+
   console.log('— ask：AI 归纳与超时降级');
   await useAI(0, '装修预算一共三万五，地板两万，橱柜一万五。');
   const a4 = await bridge({ op: 'ask', keywords: '装修' });

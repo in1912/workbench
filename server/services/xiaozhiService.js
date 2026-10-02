@@ -457,6 +457,27 @@ const CATEGORY_FALLBACK = [
     COALESCE(NULLIF(goods,''), NULLIF(remark,''), '') AS c,
     COALESCE(NULLIF(pay_time,''), create_time, '') AS t FROM pay_bills ORDER BY id DESC LIMIT 10`).all()],
 ];
+// 问句里出现的第一个类别词（「我的日程」→ 日程）
+function matchedCategory(q) {
+  const t = String(q || '');
+  for (const [label, words] of CATEGORY_FALLBACK) if (words.some((w) => t.includes(w))) return label;
+  return null;
+}
+// 「纯类别问法」：整句就是在问这一类东西（「我的日程」「帮我查一下笔记有几条」），
+// 而不是在问某件具体的事（「关于泛微会议的笔记」）。
+// 判据 = 剥掉疑问词 + 全部类别词 + 量词/语气词后，剩不下什么。
+// 为什么必须区分（v1.9.34，生产实测）：检索是「按候选串逐个试、第一个有结果就返回」，
+// 而「日程」二字在生产数据里有 6 条笔记/剪贴板命中（如「家庭驾驶舱…日程管理…」），
+// 于是「我的日程」永远停在那 6 条无关记录上，AI 拿着它们答「没找到你的日程安排」——
+// 类别兜底排在「候选全落空」之后，这种情况下压根轮不到。
+function pureCategoryQuery(q) {
+  let rest = stripQuestion(q);
+  for (const [, words] of CATEGORY_FALLBACK) for (const w of words) rest = rest.split(w).join('');
+  // 剩下的若全是「问」的字（查/看/找/说…）与语气词，就当纯类别问法；
+  // 「查出我的日程」「帮我看看待办」都是这一类，而「关于泛微会议的笔记」会剩下「泛微」→ 不算
+  rest = rest.replace(/[几多有个条项件篇笔封次量数了的一共总呢吗啊吧么？?，,。.、!！~～\s查看见找搜询闻听说讲列显示告诉知道介绍帮给出处来去把让请我你他她它们和与及等]/g, '');
+  return rest.length < 2;
+}
 function categoryResults(tdb, q) {
   const t = String(q || '');
   const out = [];
@@ -470,7 +491,19 @@ function categoryResults(tdb, q) {
 }
 // 依次试候选串，第一个有结果的就用；全落空再按「类别词」兜底
 function searchWithFallback(tdb, q) {
-  for (const c of searchCandidates(q)) {
+  const cat = matchedCategory(q);
+  const cands = searchCandidates(q);
+  if (cat && pureCategoryQuery(q)) {
+    // 纯类别问法：只认该类别的真行（别的表恰好含这两个字不算数，见 pureCategoryQuery）
+    for (const c of cands) {
+      const results = searchService.search(tdb, c).results.filter((r) => r.type === cat);
+      if (results.length) return { results, used: c };
+    }
+    const mine = categoryResults(tdb, q).filter((r) => r.type === cat);
+    if (mine.length) return { results: mine, used: `类别「${cat}」` };
+    return { results: [], used: String(q || '').trim() };   // 这一类确实没数据 → 老实回空，别拿别的表凑
+  }
+  for (const c of cands) {
     const results = searchService.search(tdb, c).results;
     if (results.length) return { results, used: c };
   }
@@ -768,7 +801,7 @@ module.exports = {
   noteBoardIp, getBoardInfo, appendChatLog, listChatLog,
   // v1.9.31 新增：语音查询 / 转交 agent / 凭证 / 审计 / 接入点状态
   askWorkbench, delegateAgent, listAgentLog, stripQuestion, searchCandidates, searchWithFallback, configuredQueryUser,
-  countIntent, countAll, cjkGrams,
+  countIntent, countAll, cjkGrams, matchedCategory, pureCategoryQuery,
   getAgentKey, setAgentKey, clearAgentKey, hasAgentKey,
   getMcpToken, setMcpToken, hasMcpToken,
   setMcpState, getMcpState,

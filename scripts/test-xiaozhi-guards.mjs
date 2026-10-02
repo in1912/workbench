@@ -85,6 +85,22 @@ try {
   ok(a2.ok && a2.message.includes('装修清单'), `整句数量问句也能落到笔记内容（${String(a2.message).slice(0, 40)}）`);
   const a3 = await svc.askWorkbench('查出我的日程');
   ok(a3.ok && a3.message.includes('牙科复诊'), `「日程」查得到（${String(a3.message).slice(0, 40)}）`);
+
+  console.log('— v1.9.34：类别词被别的表「劫持」（生产实测：「日程」二字在 6 条笔记/剪贴板里命中，「我的日程」因此永远拿不到真日程）');
+  tdb.prepare("INSERT INTO notes(title,content,category) VALUES(?,?,?)").run('工作台说明', '侧栏有 新闻 邮箱 笔记 日程管理 听写 等入口', 'general');
+  tdb.prepare("INSERT INTO notes(title,content,category) VALUES(?,?,?)").run('泛微沟通会议', '泛微会议要点：OA 与金蝶协作', 'general');
+  ok(searchService.search(tdb, '日程').results.some((r) => r.type === '笔记'), '字面「日程」确实先命中了笔记（复现生产前提）');
+  const sh = svc.searchWithFallback(tdb, '我的日程');
+  ok(sh.results.length > 0 && sh.results.every((r) => r.type === '日程'),
+    `「我的日程」不再被笔记劫持（落到「${sh.used}」，首条「${sh.results[0]?.title}」）`);
+  const sh2 = svc.searchWithFallback(tdb, '查出我的日程');
+  ok(sh2.results.length > 0 && sh2.results.every((r) => r.type === '日程'), '「查出我的日程」这类带问句动词的同样认成纯类别问法');
+  ok(svc.pureCategoryQuery('我的日程') && svc.pureCategoryQuery('帮我查一下我的笔记有几篇') && !svc.pureCategoryQuery('关于泛微会议的笔记'),
+    '纯类别问法判定：我的日程 ✓ / 笔记有几篇 ✓ / 关于泛微会议的笔记 ✗');
+  const sh3 = svc.searchWithFallback(tdb, '关于泛微会议的笔记');
+  ok(sh3.results.some((r) => r.title === '泛微沟通会议'), `问具体内容时仍按内容检索，不被类别兜底抢走（落到「${sh3.used}」）`);
+  const a4 = await svc.askWorkbench('查出我的日程');
+  ok(a4.ok && a4.message.includes('牙科复诊'), `askWorkbench「查出我的日程」也拿得到真日程（${String(a4.message).slice(0, 40)}）`);
   svc.saveConfig({ query: { uid: null } });
 
   console.log('— 点名判定');
