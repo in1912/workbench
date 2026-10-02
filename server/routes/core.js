@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { routedDb, db, getTenantDb, getSetting, setSetting } = require('../db');
 const messageService = require('../services/messageService');
 const storagePaths = require('../services/storagePaths');
+const { search } = require('../services/searchService');
 
 // 给指定成员推送模块消息（家庭事项/子女学习登记时勾选；消息落主库永久留存）
 function pushModuleMessages(req, module, subject, content, refId) {
@@ -639,38 +640,9 @@ router.delete('/links/:id', (req, res) => {
 });
 
 // ---------- 全局搜索 ----------
+// v1.9.31：逻辑搬去 services/searchService.js（智能板语音查询要复用同一套），这里只留路由。
 router.get('/search', (req, res) => {
-  const q = (req.query.q || '').trim();
-  if (!q) return res.json({ results: [] });
-  const like = `%${q}%`;
-  const out = [];
-  const collect = (rows, type, titleOf, linkOf) => {
-    for (const r of rows) {
-      out.push({ type, id: r.id, title: titleOf(r), content: r._c || '', time: r._t || '', to: linkOf ? linkOf(r) : undefined });
-    }
-  };
-  collect(req.tdb.prepare('SELECT id, title AS t, content AS _c, updated_at AS _t FROM notes WHERE title LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 10').all(like, like), '笔记', (r) => r.t);
-  collect(req.tdb.prepare('SELECT id, title AS t, desc AS _c, due_date AS _t FROM todos WHERE title LIKE ? OR desc LIKE ? LIMIT 10').all(like, like), '待办', (r) => r.t);
-  // 家庭事项/子女任务：随 family 共享开关选库
-  const fdb = routedDb(req.tdb, 'family');
-  collect(fdb.prepare('SELECT id, title AS t, desc AS _c, item_date AS _t FROM family_items WHERE title LIKE ? OR desc LIKE ? LIMIT 10').all(like, like), '家庭事项', (r) => r.t);
-  collect(fdb.prepare("SELECT id, content AS t, '' AS _c, due_date AS _t FROM kid_tasks WHERE content LIKE ? LIMIT 10").all(like), '子女任务', (r) => r.t.slice(0, 60));
-  collect(req.tdb.prepare('SELECT id, content AS t, gains AS _c, record_date AS _t FROM learning_records WHERE content LIKE ? OR gains LIKE ? LIMIT 10').all(like, like), '学习记录', (r) => r.t.slice(0, 60));
-  collect(req.tdb.prepare("SELECT id, content AS t, '' AS _c, created_at AS _t FROM clipboard_items WHERE content LIKE ? LIMIT 10").all(like), '剪贴板', (r) => r.t.slice(0, 60));
-  // 新闻：标题/摘要（news 表无 content 列；按共享开关选库）
-  collect(routedDb(req.tdb, 'news').prepare('SELECT id, title AS t, summary AS _c, source AS _t FROM news WHERE title LIKE ? OR summary LIKE ? LIMIT 10')
-    .all(like, like), '新闻', (r) => r.t);
-  // 邮件：主题 + 正文全文
-  collect(req.tdb.prepare('SELECT id, subject AS t, COALESCE(body, snippet, \'\') AS _c, COALESCE(date, fetched_at, \'\') AS _t FROM emails WHERE subject LIKE ? OR body LIKE ? OR from_addr LIKE ? ORDER BY id DESC LIMIT 10')
-    .all(like, like, like), '邮件', (r) => r.t);
-  // AI 对话：消息内容（带会话标题，点击跳转 AI 助手对应会话）
-  collect(req.tdb.prepare(`SELECT m.id AS id, s.title AS t, m.content AS _c, m.created_at AS _t, s.id AS _sid
-    FROM ai_messages m JOIN ai_sessions s ON s.id = m.session_id
-    WHERE m.content LIKE ? ORDER BY m.id DESC LIMIT 10`).all(like), 'AI 对话', (r) => r.t, (r) => `/ai?session=${r._sid}`);
-  // 文件存档：文件名 + 解析文字（点击跳文件页）
-  collect(req.tdb.prepare('SELECT id, filename AS t, text_content AS _c, created_at AS _t FROM files WHERE filename LIKE ? OR text_content LIKE ? ORDER BY id DESC LIMIT 10')
-    .all(like, like), '文件', (r) => r.t, () => '/files');
-  res.json({ results: out });
+  res.json(search(req.tdb, req.query.q));
 });
 
 module.exports = router;

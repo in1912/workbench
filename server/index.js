@@ -120,6 +120,13 @@ app.use('/api', xiaozhiRoutes);
 app.use('/api', fnosRoutes);
 app.use('/api/ssl', sslRoutes);
 
+// 小智官方 MCP 接入点（v1.9.31，通道 A）：默认关闭，用户在智能板配置页勾选才连。
+// 出站 wss 连接由 xiaozhiMcpBridge 自己管理（退避重连 + 异常不上抛）；
+// 延后 2 秒再连，别和启动期的建库/定时任务抢时间。
+setTimeout(() => {
+  try { require('./services/xiaozhiMcpBridge').sync(); } catch (e) { console.warn('[server] 小智接入点启动失败:', e.message); }
+}, 2000).unref?.();
+
 // 健康检查（本地直连探测端点：公网页面要跨源 fetch 本地地址的 /api/health 判断可达性，放行跨源读取）
 app.get('/api/health', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

@@ -7,6 +7,7 @@
       <button :class="{ on: sub === 'live' }" @click="switchSub('live')">🎥 视频对话</button>
       <button :class="{ on: sub === 'history' }" @click="switchSub('history')">💬 对话记录</button>
       <button :class="{ on: sub === 'camera' }" @click="switchSub('camera')">📷 摄像头</button>
+      <button :class="{ on: sub === 'assistant' }" @click="switchSub('assistant')">🤖 语音助手</button>
     </div>
 
     <!-- ============ 装机向导 ============ -->
@@ -405,6 +406,186 @@
       </div>
     </div>
 
+    <!-- ============ 语音助手（v1.9.31）：查工作台数据 + 转交 NAS agent ============ -->
+    <template v-if="sub === 'assistant'">
+    <div class="card">
+      <h3 style="margin:0 0 4px">🔎 语音查工作台资料</h3>
+      <p class="xz-muted" style="margin:0 0 14px">
+        对板子说「查一下我的笔记」这类问题时，板子会去检索下面这个人的资料并口头答出来。
+        <b>没指定用户就查不了</b>——板子不知道查谁，这里必须先选一个。
+      </p>
+      <div class="xz-form">
+        <div class="xz-field">
+          <label>查谁的资料</label>
+          <UserPicker v-model="form.query.uid" :users="users" :multiple="false"
+                      :disabled="!isAdmin" placeholder="选一个成员…" />
+          <span class="xz-hint">范围：笔记 / 待办 / 家庭事项 / 子女任务 / 学习记录 / 剪贴板 / 新闻 / 邮件 / AI 对话 / 文件存档</span>
+        </div>
+        <div class="xz-field xz-field-s">
+          <label>最多取几条 / 每条截断</label>
+          <div class="xz-inline">
+            <input v-model.number="form.query.max_results" type="number" min="1" max="30" class="xz-mini" />
+            <span class="xz-muted">条，每条</span>
+            <input v-model.number="form.query.max_chars" type="number" min="20" max="500" class="xz-mini" />
+            <span class="xz-muted">字</span>
+          </div>
+          <span class="xz-hint">喂给 AI 归纳的量，太大拖慢回答</span>
+        </div>
+        <div class="xz-field xz-field-s">
+          <label>AI 归纳超时</label>
+          <div class="xz-inline">
+            <input v-model.number="form.query.ai_timeout_ms" type="number" min="500" max="60000" step="500" class="xz-mini" />
+            <span class="xz-muted">毫秒</span>
+          </div>
+          <span class="xz-hint">超过就直接念「找到 N 条：…」，不让板子干等</span>
+        </div>
+      </div>
+      <p class="xz-muted" style="font-size:12px;margin:8px 0 0">
+        没配置 AI 模型时自动走降级文案（只报条目标题），功能不受影响。
+      </p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px">🤖 转交家里 agent</h3>
+      <p class="xz-muted" style="margin:0 0 14px">
+        把任务交给局域网里那台能读写文件、跑代码的 agent（Hermes 之类）。
+        <b>只有用户点名它时才转交</b>：名字叫「{{ form.agent.name || '贾维斯' }}」，说「让{{ form.agent.name || '贾维斯' }}去做 X」就走它，
+        其它的仍由板子自己的小智 AI 回答。
+      </p>
+      <div class="xz-form">
+        <div class="xz-field">
+          <label>启用</label>
+          <div class="xz-inline">
+            <input id="xz-agent-on" v-model="form.agent.enabled" type="checkbox" :disabled="!isAdmin" />
+            <label for="xz-agent-on" class="xz-check-lb">允许板子语音调用它</label>
+          </div>
+          <span class="xz-hint">默认关闭 —— 不开的话任何人都喊不动它</span>
+        </div>
+        <div class="xz-field">
+          <label>agent 的地址（IP:端口）</label>
+          <input v-model="form.agent.base_url" :disabled="!isAdmin" placeholder="http://192.168.1.10:8642" />
+          <span class="xz-hint">局域网地址，<b>不要暴露到公网</b></span>
+        </div>
+        <div class="xz-field">
+          <label>模型名</label>
+          <input v-model="form.agent.model" :disabled="!isAdmin" placeholder="fnnas-feishu" />
+        </div>
+        <div class="xz-field">
+          <label>API 密钥</label>
+          <div class="xz-inline">
+            <input v-model="form.agentKey" type="password" :disabled="!isAdmin"
+                   :placeholder="cfg.agent?.has_key ? '已配置（留空保持不变）' : '粘贴 agent 的密钥'" />
+            <button v-if="isAdmin && cfg.agent?.has_key" class="btn sm ghost" @click="clearAgentKey">清除</button>
+          </div>
+          <span class="xz-hint">加密存库，读取接口永不回显</span>
+        </div>
+        <div class="xz-field">
+          <label>叫它的名字 / 别名</label>
+          <div class="xz-inline">
+            <input v-model="form.agent.name" class="xz-narrow" :disabled="!isAdmin" maxlength="16" />
+            <input v-model="form.agentAliases" :disabled="!isAdmin" placeholder="别名，逗号分隔（可留空）" />
+          </div>
+        </div>
+        <div class="xz-field">
+          <label>安全</label>
+          <div class="xz-inline">
+            <input id="xz-agent-reqname" v-model="form.agent.require_name" type="checkbox" :disabled="!isAdmin" />
+            <label for="xz-agent-reqname" class="xz-check-lb">必须点名才放行</label>
+            <input id="xz-agent-risky" v-model="form.agent.block_risky" type="checkbox" :disabled="!isAdmin" />
+            <label for="xz-agent-risky" class="xz-check-lb">拦截危险词</label>
+            <span class="xz-muted">每小时最多</span>
+            <input v-model.number="form.agent.rate_per_hour" type="number" min="1" max="500" class="xz-mini" :disabled="!isAdmin" />
+            <span class="xz-muted">次</span>
+          </div>
+        </div>
+        <div class="xz-field xz-field-s">
+          <label>同步等待上限</label>
+          <div class="xz-inline">
+            <input v-model.number="form.agent.sync_budget_ms" type="number" min="1000" max="120000" step="500" class="xz-mini" :disabled="!isAdmin" />
+            <span class="xz-muted">毫秒</span>
+          </div>
+        </div>
+      </div>
+      <div class="xz-cap xz-cap-warn" style="margin:10px 0 0">
+        ⚠️ <b>超过「同步等待上限」的长任务，答案会从智能屏播出来，不是板子</b>——板子会先说「还在算，算好了我用智能屏告诉您」，
+        算完由智能屏补播。这是板子固件的限制（云端驱动 TTS，工具调用必须同步返回），不是 bug。
+      </div>
+      <div class="xz-dl-row" style="margin-top:10px">
+        <button class="btn" :disabled="!isAdmin || busy.agentTest" @click="testAgent">
+          {{ busy.agentTest ? '测试中…' : '🔌 测试连通性' }}
+        </button>
+        <span v-if="agentTestMsg" class="xz-muted">{{ agentTestMsg }}</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px">🔗 官方 MCP 接入点（可选，二选一通道）</h3>
+      <p class="xz-muted" style="margin:0 0 14px">
+        小智控制台里的 <b>MCP 接入点</b>：勾上并填好地址、token 后，工作台会主动连过去，
+        语音就能调到上面这两个能力。<b>好处是以后加功能不用再烧固件</b>。
+        与「设备侧工具」是两条并行通道，同时开会重名——<b>只开一条</b>。
+      </p>
+      <div class="xz-form">
+        <div class="xz-field">
+          <label>启用</label>
+          <div class="xz-inline">
+            <input id="xz-mcp-on" v-model="form.mcp.enabled" type="checkbox" :disabled="!isAdmin" />
+            <label for="xz-mcp-on" class="xz-check-lb">连接接入点</label>
+            <span class="xz-pill" :class="cfg.mcp?.connected ? 'ok' : 'bad'">
+              {{ cfg.mcp?.connected ? '● 已连接' : '○ 未连接' }}
+            </span>
+          </div>
+          <span class="xz-hint">令牌与地址都填好、并勾上这里，才会去连</span>
+        </div>
+        <div class="xz-field">
+          <label>接入点地址</label>
+          <input v-model="form.mcp.url" :disabled="!isAdmin" placeholder="wss://api.xiaozhi.me/mcp/" />
+          <span class="xz-hint">
+            必须 wss://。控制台给的那条地址尾巴上有个 <code>?token=…</code>——<b>地址里只留到 /mcp/ 为止</b>，
+            后面那一长串填到下面的 token 框（放地址里会明文存库）
+          </span>
+        </div>
+        <div class="xz-field">
+          <label>接入点 token</label>
+          <input v-model="form.mcpToken" type="password" :disabled="!isAdmin"
+                 :placeholder="cfg.mcp?.token_set ? '已配置（留空保持不变）' : '粘贴小智控制台给的 token'" />
+          <span class="xz-hint">加密存库，读取接口永不回显</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="xz-dl-row" v-if="isAdmin" style="margin:0 0 14px">
+      <button class="btn primary" :disabled="busy.assistantSave" @click="saveAssistant">
+        {{ busy.assistantSave ? '保存中…' : '💾 保存语音助手配置' }}
+      </button>
+      <span class="xz-muted">密钥保存后即刻生效；接入点开关变化会自动重连</span>
+    </div>
+    <p v-else class="xz-muted">只有管理员能改这些设置。</p>
+
+    <div class="card">
+      <h3 style="margin:0 0 10px">📜 转交流水</h3>
+      <p class="xz-muted" style="margin:0 0 10px;font-size:12px">
+        谁在什么时候让 agent 办了什么、被哪道闸拦下——板子范围内谁都能喊，出事只能靠这条查。
+      </p>
+      <div class="xz-dl-row" style="margin-bottom:8px">
+        <button class="btn sm" :disabled="busy.agentLog" @click="loadAgentLog">{{ busy.agentLog ? '加载中…' : '🔄 刷新' }}</button>
+        <span v-if="agentLog.entries.length" class="xz-muted">{{ agentLog.entries.length }} 条</span>
+      </div>
+      <div v-if="agentLog.entries.length" class="xz-loglist">
+        <div v-for="e in agentLog.entries" :key="e.id" class="xz-logrow">
+          <span class="xz-muted">{{ fmtTime(e.ts) }}</span>
+          <span class="xz-pill" :class="e.status === 'ok' ? 'ok' : e.status === 'rejected' ? 'warn' : 'bad'">
+            {{ e.status === 'ok' ? '已办' : e.status === 'rejected' ? '已拦' : '出错' }}
+          </span>
+          <span class="xz-logreq">{{ e.request }}</span>
+          <span class="xz-muted xz-logwhy">{{ e.reason || e.result || '' }}</span>
+          <span class="xz-muted xz-logms">{{ e.ms }}ms</span>
+        </div>
+      </div>
+      <p v-else class="xz-muted">还没有记录。</p>
+    </div>
+    </template>
+
     <!-- 消息条 -->
     <div v-if="msg.err" class="msg err">{{ msg.err }}</div>
     <div v-if="msg.ok" class="msg ok">{{ msg.ok }}</div>
@@ -414,6 +595,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { api } from '../api';
+import UserPicker from './UserPicker.vue'; // 通用用户下拉（v1.9.31：指定查谁的资料）
 
 const isAdmin = (() => { try { return (JSON.parse(localStorage.getItem('wb_user') || '{}') || {}).role === 'admin'; } catch { return false; } })();
 
@@ -427,17 +609,24 @@ const form = reactive({
   bridge: { url: '' },
   helper: { url: '' },
   speaker: { did: '', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 },
+  // v1.9.31 语音助手
+  query: { uid: null, max_results: 10, max_chars: 120, ai_timeout_ms: 6000 },
+  agent: { enabled: false, name: '贾维斯', base_url: '', model: '', require_name: true, block_risky: true, rate_per_hour: 20, sync_budget_ms: 8000 },
+  agentAliases: '',
+  agentKey: '',   // 只写不读：留空 = 保持原值，服务端也只回 has_key 布尔
+  mcp: { enabled: false, url: '' },
+  mcpToken: '',
 });
 const ports = ref([]);
-const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false });
+const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false, agentTest: false, agentLog: false, assistantSave: false });
 const probeMsg = ref(''); const probeOk = ref(false);
 const spProbeMsg = ref(''); const spTestMsg = ref('');
 const testText = ref('');
 const devices = ref([]); const showDevices = ref(true); // v1.9.25：可控设备一览默认直接展开
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 
-// ---------- 子 tab（v1.9.17）：装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 ----------
-const SUBS = ['guide', 'voice', 'live', 'history', 'camera'];
+// ---------- 子 tab：装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 / 语音助手(v1.9.31) ----------
+const SUBS = ['guide', 'voice', 'live', 'history', 'camera', 'assistant'];
 const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'guide');
 function switchSub(s) {
   sub.value = s;
@@ -446,6 +635,41 @@ function switchSub(s) {
   if (s === 'live') loadBoard();
   if (s === 'history') loadChat();
   if (s === 'camera') loadPhotos();
+  if (s === 'assistant') { loadUsers(); loadAgentLog(); }
+}
+
+// ---------- 语音助手（v1.9.31）：指定用户 + agent 连通性 + 转交流水 ----------
+const users = ref([]);
+const agentLog = reactive({ entries: [] });
+const agentTestMsg = ref('');
+async function loadUsers() {
+  if (users.value.length) return; // 每次进 tab 不必重拉
+  try { users.value = (await api.get('/messages/contacts')).users || []; }
+  catch (e) { flashErr('用户列表加载失败：' + e.message); }
+}
+async function loadAgentLog() {
+  busy.agentLog = true;
+  try { agentLog.entries = (await api.get('/xiaozhi/agent-log?limit=30')).entries || []; }
+  catch (e) { flashErr('流水加载失败：' + e.message); }
+  busy.agentLog = false;
+}
+async function testAgent() {
+  busy.agentTest = true; agentTestMsg.value = '';
+  try {
+    const r = await api.post('/xiaozhi/agent-test', {});
+    agentTestMsg.value = r.ok ? `✅ 通了，往返 ${r.ms}ms` : `❌ ${r.error}`;
+  } catch (e) { agentTestMsg.value = '❌ ' + e.message; }
+  busy.agentTest = false;
+}
+async function clearAgentKey() {
+  try { const r = await api.put('/xiaozhi/config', { agent_key_clear: true }); cfg.value = r.config; flashOk('密钥已清除'); }
+  catch (e) { flashErr(e.message); }
+}
+async function saveAssistant() {
+  busy.assistantSave = true;
+  try { await saveConfig(); flashOk('已保存（密钥存好即生效）'); }
+  catch (e) { flashErr(e.message); }
+  busy.assistantSave = false;
 }
 
 // ---------- 对话记录（v1.9.19）：聊天窗口，左=板子应答，右=用户指令；向上滚动翻更早 ----------
@@ -572,6 +796,23 @@ function syncForm(c) {
     siid_exec: c.speaker.siid_exec ?? '', aiid_exec: c.speaker.aiid_exec ?? 4,
   };
   form.port = c.paths.serialPort || 'COM4';
+  // v1.9.31：语音助手。密钥字段一律留空——回显密钥会让「保存」变成「覆盖成掩码」
+  const q = c.query || {}; const a = c.agent || {}; const m = c.mcp || {};
+  form.query = {
+    uid: q.uid ?? null,
+    max_results: q.max_results ?? 10,
+    max_chars: q.max_chars ?? 120,
+    ai_timeout_ms: q.ai_timeout_ms ?? 6000,
+  };
+  form.agent = {
+    enabled: !!a.enabled, name: a.name || '贾维斯', base_url: a.base_url || '', model: a.model || '',
+    require_name: a.require_name !== false, block_risky: a.block_risky !== false,
+    rate_per_hour: a.rate_per_hour ?? 20, sync_budget_ms: a.sync_budget_ms ?? 8000,
+  };
+  form.agentAliases = (Array.isArray(a.aliases) ? a.aliases : []).join(', ');
+  form.agentKey = '';
+  form.mcp = { enabled: !!m.enabled, url: m.url || '' };
+  form.mcpToken = '';
 }
 
 async function loadAll() {
@@ -679,18 +920,41 @@ async function saveConfig(extra = {}) {
     channel: form.channel,
     bridge: { url: form.bridge.url.trim() },
     helper: { url: form.helper.url.trim() },
-    speaker: {
-      did: String(form.speaker.did).trim(),
-      siid_play: form.speaker.siid_play === '' ? null : Number(form.speaker.siid_play),
-      aiid_play: Number(form.speaker.aiid_play) || 3,
-      siid_exec: form.speaker.siid_exec === '' ? null : Number(form.speaker.siid_exec),
-      aiid_exec: Number(form.speaker.aiid_exec) || 4,
-    },
+    // did 为空就整块不发：服务端要求 did 是纯数字，发了必被 400 打回，
+    // 而「语音助手」页只想存 agent/接入点配置时并不该被智能屏那个字段拦住（空=保持原值）
+    ...(String(form.speaker.did).trim() ? {
+      speaker: {
+        did: String(form.speaker.did).trim(),
+        siid_play: form.speaker.siid_play === '' ? null : Number(form.speaker.siid_play),
+        aiid_play: Number(form.speaker.aiid_play) || 3,
+        siid_exec: form.speaker.siid_exec === '' ? null : Number(form.speaker.siid_exec),
+        aiid_exec: Number(form.speaker.aiid_exec) || 4,
+      },
+    } : {}),
     paths: { serialPort: form.port },
+    // v1.9.31 语音助手。密钥只在非空时发（服务端把空串当「保持原值」）
+    query: {
+      uid: form.query.uid === null || form.query.uid === '' ? null : Number(form.query.uid),
+      max_results: Number(form.query.max_results) || 10,
+      max_chars: Number(form.query.max_chars) || 120,
+      ai_timeout_ms: Number(form.query.ai_timeout_ms) || 6000,
+    },
+    agent: {
+      enabled: !!form.agent.enabled, name: form.agent.name, base_url: form.agent.base_url, model: form.agent.model,
+      aliases: form.agentAliases.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+      require_name: !!form.agent.require_name, block_risky: !!form.agent.block_risky,
+      rate_per_hour: Number(form.agent.rate_per_hour) || 20,
+      sync_budget_ms: Number(form.agent.sync_budget_ms) || 8000,
+    },
+    mcp: { enabled: !!form.mcp.enabled, url: form.mcp.url },
+    ...(form.agentKey.trim() ? { agent_key: form.agentKey.trim() } : {}),
+    ...(form.mcpToken.trim() ? { mcp_token: form.mcpToken.trim() } : {}),
     ...extra,
   };
   const r = await api.put('/xiaozhi/config', body);
   cfg.value = r.config;
+  // 密钥已入库，清掉本地明文，避免停在这个页面时一直被持在内存里
+  form.agentKey = ''; form.mcpToken = '';
   return r.config;
 }
 
@@ -834,8 +1098,24 @@ onBeforeUnmount(() => {
 .xz-field > label { font-size: 12px; color: var(--muted); }
 .xz-field-s { max-width: 240px; }
 .xz-field input, .xz-field select { min-width: 170px; }
+.xz-field input[type="checkbox"] { width: auto; min-width: 0; flex: none; }
+.xz-field textarea { min-width: 240px; }
 .xz-inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.xz-inline > .xz-check-lb { font-size: 13px; white-space: nowrap; }
 .xz-mini { width: 86px !important; min-width: 86px !important; }
+.xz-narrow { width: 130px !important; min-width: 130px !important; }
+.xz-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+/* 语音助手：转交流水的状态标签与行 */
+.xz-pill { flex: none; font-size: 11.5px; line-height: 1; padding: 3px 8px; border-radius: 9px; background: rgba(0,0,0,.06); color: var(--muted); }
+.xz-pill.ok { background: rgba(30,158,104,.15); color: var(--ok, #1e9e68); }
+.xz-pill.warn { background: rgba(234,179,8,.16); color: #a16207; }
+.xz-pill.bad { background: rgba(220,38,38,.12); color: var(--danger, #dc2626); }
+.xz-loglist { border-top: 1px dashed var(--border, #e5e7eb); }
+.xz-logrow { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px dashed var(--border, #e5e7eb); font-size: 13px; }
+.xz-logrow > .xz-muted:first-child { flex: none; font-size: 12px; white-space: nowrap; }
+.xz-logreq { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xz-logwhy { flex: 0 1 40%; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.xz-logms { flex: none; font-size: 12px; }
 .xz-actions { display: flex; gap: 10px; align-items: center; margin: 14px 0 10px; flex-wrap: wrap; }
 .xz-kv { display: flex; gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; }
 .xz-kv > span:first-child { color: var(--muted); min-width: 96px; }

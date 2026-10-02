@@ -49,6 +49,11 @@ router.get('/system-info', (req, res) => {
     name: getSetting('system_name', '全能工作台'),
     name_en: getSetting('system_name_en', 'Workbench'),
     version: getSetting('current_version', '') || 'v1.9.8',
+    // 运行时探针：容器里的 Node 版本只有到这里才问得到（无 SSH 环境排障用）。
+    // ws=false 意味着 Node < 22.4（内置全局 WebSocket 那时还没默认开启）——智能板
+    // 「官方 MCP 接入点」通道依赖它，会是「面板显示未连接但看不出原因」的根因
+    node: process.version,
+    ws: typeof globalThis.WebSocket === 'function',
   });
 });
 

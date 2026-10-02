@@ -8,11 +8,18 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { db, getSetting, setSetting, dataDir } = require('../db');
+const { db, getTenantDb, getSetting, setSetting, dataDir } = require('../db');
 const mihome = require('./mihomeService');
+const searchService = require('./searchService');
+const aiService = require('./aiService');
+const hermesService = require('./hermesService');
+const xiaozhiTools = require('./xiaozhiTools');
+const { encrypt, decrypt } = require('./businessSkillService');
 
 const CFG_KEY = 'xiaozhi_config';
 const KEY_KEY = 'xiaozhi_bridge_key';
+const AGENT_KEY_KEY = 'xiaozhi_agent_key';   // Hermes API key（AES-GCM 加密存；绝不随 getConfig 回给前端）
+const MCP_TOKEN_KEY = 'xiaozhi_mcp_token';   // 官方 MCP 接入点 token（同上）
 const PHOTO_PENDING_KEY = 'xiaozhi_photo_pending'; // 1=面板请求板子拍一张，板子轮询 poll 时消费
 const PHOTO_DIR = path.join(dataDir, 'xiaozhi', 'photos'); // 相册落盘目录（文件名 = 时间戳.jpg，文件系统即索引）
 const PHOTO_KEEP = 200; // 相册上限：超出时自动清最老的
@@ -27,6 +34,18 @@ const DEFAULT_CFG = {
   device_aliases: {}, // 语音别名对照表（v1.9.16：did → 别名；resolveDevice 与 list_devices 回包都认，纯映射不改设备真名）
   home_filter: 'all', // 设备一览默认显示的家庭（v1.9.17：'all'=全部；存家庭名，面板下拉选择）
   paths: {}, // 能力探测路径覆盖（admin 在面板改：srcDir/esptool/idfExportBat/idfGitDir/serialPort）
+  // 语音查询工作台数据（v1.9.31）：uid=查谁的租户库（null=未配置，ask 直接回「没配」）
+  query: { uid: null, max_results: 10, max_chars: 120, ai_timeout_ms: 6000 },
+  // 对接 NAS Hermes agent（v1.9.31）：默认关闭；密钥单独存 AGENT_KEY_KEY，不放这里（getConfig 会整包回前端）。
+  // base_url / model 给的是当前这台 NAS 的实测值（v1.9.31 轮次），面板里可改——
+  // 产品化给别的用户用时，这两项就是「填自己家 agent 地址」的位置。密钥**不给默认值**，必须自己填。
+  agent: {
+    enabled: false, name: '贾维斯', aliases: [],
+    base_url: 'http://192.168.110.105:8642', model: 'fnnas-feishu',
+    require_name: true, rate_per_hour: 20, block_risky: true, sync_budget_ms: 8000,
+  },
+  // 官方 MCP 接入点（v1.9.31）：默认关闭；token 单独存 MCP_TOKEN_KEY（url 不含 token，可以明文存）
+  mcp: { enabled: false, url: '' },
 };
 
 function getConfig() {
@@ -39,6 +58,9 @@ function getConfig() {
     helper: { ...DEFAULT_CFG.helper, ...(saved.helper || {}) },
     device_aliases: { ...(saved.device_aliases || {}) },
     paths: { ...(saved.paths || {}) },
+    query: { ...DEFAULT_CFG.query, ...(saved.query || {}) },
+    agent: { ...DEFAULT_CFG.agent, ...(saved.agent || {}) },
+    mcp: { ...DEFAULT_CFG.mcp, ...(saved.mcp || {}) },
   };
 }
 function saveConfig(patch) {
@@ -53,9 +75,39 @@ function saveConfig(patch) {
     // （清空别名保存后看似成功、刷新还在的 bug；全量 map 只由 setDeviceAlias 构造，安全替换）
     device_aliases: patch.device_aliases !== undefined ? { ...patch.device_aliases } : { ...(cur.device_aliases || {}) },
     paths: { ...cur.paths, ...(patch.paths || {}) },
+    query: { ...cur.query, ...(patch.query || {}) },
+    // aliases 同 device_aliases：显式带就整体替换，否则合并会把已删的别名复活
+    agent: { ...cur.agent, ...(patch.agent || {}), ...(patch.agent && patch.agent.aliases !== undefined ? { aliases: [...patch.agent.aliases] } : {}) },
+    mcp: { ...cur.mcp, ...(patch.mcp || {}) },
   };
   setSetting(db, CFG_KEY, next);
   return next;
+}
+
+// ---------- 敏感凭证（v1.9.31） ----------
+// Hermes API key 与接入点 token 都不放 xiaozhi_config——GET /xiaozhi/config 会把整个 config
+// 原样回给前端。单独存 settings 键 + AES-256-GCM 加密，UI 只拿得到「配没配」的布尔。
+function getAgentKey() { const v = getSetting(db, AGENT_KEY_KEY, ''); return v ? decrypt(v) : ''; }
+function setAgentKey(plain) {
+  const s = String(plain || '').trim();
+  if (s) setSetting(db, AGENT_KEY_KEY, encrypt(s));
+  return hasAgentKey();
+}
+function clearAgentKey() { setSetting(db, AGENT_KEY_KEY, ''); }
+function hasAgentKey() { return !!getSetting(db, AGENT_KEY_KEY, ''); }
+
+function getMcpToken() { const v = getSetting(db, MCP_TOKEN_KEY, ''); return v ? decrypt(v) : ''; }
+function setMcpToken(plain) {
+  const s = String(plain || '').trim();
+  if (s) setSetting(db, MCP_TOKEN_KEY, encrypt(s));
+  return hasMcpToken();
+}
+function hasMcpToken() { return !!getSetting(db, MCP_TOKEN_KEY, ''); }
+
+// 给前端看的配置：补两个「配没配」布尔，绝不带密钥本身
+function getPublicConfig() {
+  const c = getConfig();
+  return { ...c, agent: { ...c.agent, has_key: hasAgentKey() }, mcp: { ...c.mcp, token_set: hasMcpToken(), connected: mcpState.connected } };
 }
 
 // ---------- 别名登记（面板逐台编辑；语音解析按「真名/别名」同等匹配） ----------
@@ -322,6 +374,240 @@ function listChatLog({ beforeId, limit } = {}) {
   return { messages: rows.slice(0, lim).reverse(), has_more: rows.length > lim }; // 时间正序返回，prepend 用
 }
 
+// ========== 语音查询工作台数据 + 转交家里 agent（v1.9.31） ==========
+
+// 语音回包体积预算：官方 MCP 接入点约 1024 字节上限，设备侧 MCP 也吃紧。
+// 超了就把话再削短——宁可说半句，也不能整包被云端丢掉（丢了用户听到的是「发送失败」）。
+const SPEECH_BYTE_CAP = 950;
+function fitSpeech(obj) {
+  if (!obj || typeof obj.message !== 'string') return obj;
+  let m = obj.message;
+  while (Buffer.byteLength(JSON.stringify({ ...obj, message: m }), 'utf8') > SPEECH_BYTE_CAP && m.length > 8) {
+    m = m.slice(0, Math.max(8, Math.floor(m.length * 0.8))) + '…';
+  }
+  return { ...obj, message: m };
+}
+
+function clampSpeech(s, max = 200) {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+
+// 整句 → 关键词：云端 LLM 很可能把「我的笔记里关于张三的内容」整句塞进来，
+// 而检索是 LIKE %q% 子串匹配，整句必然 0 结果。零结果时剥掉疑问词再搜一次兜底。
+const QUESTION_WORDS = ['请问', '帮我', '给我', '我想', '我要', '有没有', '有木有', '是什么', '有什么', '查一下', '查查', '找一下', '找找', '看看', '告诉我', '搜索', '搜一下', '一下', '笔记里', '记录里', '关于', '我的', '家里', '的吗', '是不是', '怎么样', '呢', '吗', '的', '？', '?', '。'];
+function stripQuestion(q) {
+  let t = String(q || '');
+  for (const w of QUESTION_WORDS) t = t.split(w).join(' ');
+  return t.replace(/[，,。.、!！~～\s]+/g, ' ').trim();
+}
+
+// 检索候选串，按精确度递减：原句 → 剥离疑问词的整串 → 剥离后的单个词。
+// 「剥离后逐个词」这一步是必须的：检索是 LIKE %x%（子串匹配），
+// 「我的笔记里关于装修的内容是什么」剥完会剩「装修 内容」，整串拿去匹配一个字都搜不到
+// ——e2e 实测踩到过。
+function searchCandidates(q) {
+  const out = [String(q || '').trim()];
+  const stripped = stripQuestion(q);
+  if (stripped && stripped !== out[0]) {
+    out.push(stripped);
+    const toks = stripped.split(/\s+/).filter((t) => t.length >= 2);
+    if (toks.length > 1) out.push(...toks);
+  }
+  return [...new Set(out.filter(Boolean))].slice(0, 6);
+}
+// 依次试候选串，第一个有结果的就用
+function searchWithFallback(tdb, q) {
+  for (const c of searchCandidates(q)) {
+    const results = searchService.search(tdb, c).results;
+    if (results.length) return { results, used: c };
+  }
+  return { results: [], used: String(q || '').trim() };
+}
+
+// uid 只从配置读（调用方——板子或云端——根本不知道 uid，不给自己开攻击面）。
+// 必须查 users 表确认存在：getTenantDb 对任意数字会惰性建一个空库文件。
+function configuredQueryUser() {
+  const uid = Number(getConfig().query.uid);
+  if (!Number.isInteger(uid) || uid <= 0) return null;
+  return db.prepare('SELECT id, username FROM users WHERE id=? AND is_bot=0').get(uid) || null;
+}
+
+// 有没有配 AI（用于决定走 AI 归纳还是确定性拼串降级）
+function aiReady(tdb) {
+  try { return aiService.hasConfig(tdb); } catch { return false; }
+}
+
+// 确定性降级：不依赖 AI 也能念出一句有信息量的话
+function digestResults(results) {
+  const items = results.slice(0, 3).map((r) => `${r.type}《${String(r.title || '').trim().slice(0, 20)}》`);
+  return `找到 ${results.length} 条：${items.join('、')}`;
+}
+
+function buildDigest(results, { maxResults = 10, maxChars = 120 } = {}) {
+  return results.slice(0, maxResults)
+    .map((r, i) => `${i + 1}. [${r.type}] ${String(r.title || '').trim().slice(0, 60)} — ${String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, maxChars)}`)
+    .join('\n')
+    .slice(0, 1500);
+}
+
+const ASK_SYSTEM = '你是语音助手，下面是从用户个人数据库里检索到的条目。' +
+  '用不超过 60 字的中文口语回答用户的问题，直接给结论。' +
+  '不要 markdown、不要列表、不要引号、不要表情符号。检索结果里没有的就说没找到，不要编。';
+
+async function askWorkbench(rawQ) {
+  const q = String(rawQ || '').trim().slice(0, 200);
+  if (!q) return { ok: false, message: '没听清要查什么，再说一遍' };
+
+  const cfg = getConfig();
+  // 点名优先：说话里带了 agent 的名字，即使云端错调了 ask 也自动改道（用户预期是「叫谁谁来办」）
+  if (cfg.agent.enabled && xiaozhiTools.addressed(q, cfg.agent)) return delegateAgent(q, { via: 'ask-reroute' });
+
+  const user = configuredQueryUser();
+  if (!user) return { ok: false, message: '还没在智能板配置里指定要查谁的资料' };
+
+  let tdb;
+  try { tdb = getTenantDb(user.id); } catch (e) {
+    return { ok: false, message: `打不开资料库：${e.message}` };
+  }
+
+  let results;
+  try {
+    ({ results } = searchWithFallback(tdb, q));
+  } catch (e) {
+    console.error('[xiaozhi] ask 检索失败', e.message);
+    return { ok: false, message: '查资料出错了，稍后再试' };
+  }
+  if (!results.length) return fitSpeech({ ok: true, message: `没找到和「${q.slice(0, 20)}」相关的记录` });
+
+  const qc = cfg.query;
+  let message = digestResults(results);
+  if (aiReady(tdb)) {
+    const digest = buildDigest(results, { maxResults: Number(qc.max_results) || 10, maxChars: Number(qc.max_chars) || 120 });
+    const budget = Math.min(Math.max(Number(qc.ai_timeout_ms) || 6000, 500), 60000);
+    const r = await raceWithTimeout(
+      aiService.chat(
+        [{ role: 'system', content: ASK_SYSTEM }, { role: 'user', content: `问题：${q}\n\n检索结果：\n${digest}` }],
+        { maxTokens: 120, temperature: 0.2, tdb },
+      ),
+      budget,
+    );
+    // AI 慢/出错都不算失败——确定性文案照样能念，比让用户干等或听「失败」强
+    if (r.ok && r.value) message = r.value;
+  }
+  return fitSpeech({ ok: true, count: results.length, message: clampSpeech(message) });
+}
+
+// ---------- 转交家里 agent（三道闸 + 限流 + 审计 + 同步优先/智能屏补播兜底） ----------
+const RISKY_RE = /(删除|删掉|删了|清空|格式化|关机|重启|重装|卸载|覆盖|写入|执行|运行|安装|rm\s|format|shutdown|reboot|drop\s+table|delete|remove)/i;
+
+const agentHits = []; // 进程内滑动窗口即可——限流是防误触发风暴，不需要跨重启精确
+function agentRateOk(perHour) {
+  const now = Date.now();
+  const cutoff = now - 3600 * 1000;
+  while (agentHits.length && agentHits[0] < cutoff) agentHits.shift();
+  if (agentHits.length && now - agentHits[agentHits.length - 1] < 5000) {
+    return { ok: false, message: '刚收到一条，还在处理，稍等几秒再说' };
+  }
+  if (agentHits.length >= perHour) return { ok: false, message: `一小时最多转交 ${perHour} 次，稍后再试` };
+  agentHits.push(now);
+  return { ok: true };
+}
+
+function raceWithTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { done = true; resolve({ hit: true, ok: false }); } }, ms);
+    promise.then(
+      (value) => { if (!done) { done = true; clearTimeout(timer); resolve({ ok: true, value }); } },
+      (error) => { if (!done) { done = true; clearTimeout(timer); resolve({ ok: false, error: error.message || String(error) }); } },
+    );
+  });
+}
+
+const AGENTLOG_KEEP_MAX = 2000;
+function logAgent({ request, status, reason = '', result = '', mode = '', ms = 0 }) {
+  try {
+    db.prepare('INSERT INTO xiaozhi_agent_log (ts, request, status, reason, result, mode, ms) VALUES (?,?,?,?,?,?,?)')
+      .run(Date.now(), String(request || '').slice(0, 200), status, String(reason || '').slice(0, 300), String(result || '').slice(0, 300), mode, Math.round(ms) || 0);
+    const total = db.prepare('SELECT COUNT(*) c FROM xiaozhi_agent_log').get().c;
+    if (total > AGENTLOG_KEEP_MAX) {
+      db.prepare('DELETE FROM xiaozhi_agent_log WHERE id IN (SELECT id FROM xiaozhi_agent_log ORDER BY id LIMIT ?)')
+        .run(total - AGENTLOG_KEEP_MAX);
+    }
+  } catch (e) { console.warn('[xiaozhi] 转交审计写入失败:', e.message); }
+}
+function listAgentLog({ beforeId, limit } = {}) {
+  const lim = Math.min(Math.max(Number(limit) || 30, 1), 200);
+  const before = Number(beforeId) || null;
+  const rows = before
+    ? db.prepare('SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log WHERE id < ? ORDER BY id DESC LIMIT ?').all(before, lim + 1)
+    : db.prepare('SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log ORDER BY id DESC LIMIT ?').all(lim + 1);
+  return { entries: rows.slice(0, lim), has_more: rows.length > lim };
+}
+
+async function delegateAgent(rawText, { via = 'bridge' } = {}) {
+  const ag = getConfig().agent;
+  const text = String(rawText || '').trim().slice(0, 200);
+  const t0 = Date.now();
+  // 所有拒绝都走这里：留痕 + 回一句能被念出来的话
+  const deny = (message, reason) => {
+    logAgent({ request: text, status: 'rejected', reason, ms: Date.now() - t0 });
+    return fitSpeech({ ok: false, message, rejected: true });
+  };
+
+  if (!text) return deny('要办什么？再说一遍', 'empty');
+  if (!ag.enabled) return deny(`家里 agent 还没启用（去智能板配置页勾上「启用」）`, 'disabled');
+  if (ag.require_name && !xiaozhiTools.addressed(text, ag)) {
+    return deny(`要用「${ag.name}」这个名字叫我，我才去办`, 'not_addressed');
+  }
+  if (ag.block_risky && RISKY_RE.test(text)) {
+    return deny('这条指令带危险操作，我先不转交——确认要办就去配置页关掉「危险词拦截」', 'risky');
+  }
+  if (!ag.base_url || !ag.model || !hasAgentKey()) {
+    return deny('家里 agent 还没配全（地址 / 模型 / 密钥）', 'unconfigured');
+  }
+  const rl = agentRateOk(Math.min(Math.max(Number(ag.rate_per_hour) || 20, 1), 500));
+  if (!rl.ok) return deny(rl.message, 'rate_limited');
+
+  const budget = Math.min(Math.max(Number(ag.sync_budget_ms) || 8000, 1000), 120000);
+  let p;
+  try {
+    p = hermesService.ask({ baseUrl: ag.base_url, apiKey: getAgentKey(), model: ag.model, text });
+  } catch (e) {
+    logAgent({ request: text, status: 'error', reason: e.message, ms: Date.now() - t0 });
+    return fitSpeech({ ok: false, message: `联系不上${ag.name}：${e.message}` });
+  }
+
+  const r = await raceWithTimeout(p, budget);
+  if (r.hit) {
+    // 慢任务：先把「我去问了」回给板子（保住这轮对话），结果算完了由智能屏补播。
+    // 注意这里**不 abort**——promise 继续跑，否则补播就没了。
+    p.then((res) => {
+      logAgent({ request: text, status: 'ok', result: res.content.slice(0, 300), mode: 'async', ms: Date.now() - t0 });
+      speakerAction('play', clampSpeech(res.content)).catch(() => {});
+    }).catch((e) => {
+      logAgent({ request: text, status: 'error', reason: e.message, mode: 'async', ms: Date.now() - t0 });
+      speakerAction('play', `${ag.name}那边出错了`).catch(() => {});
+    });
+    logAgent({ request: text, status: 'ok', result: '(已回执，等结果)', mode: 'async-receipt', ms: Date.now() - t0 });
+    return fitSpeech({ ok: true, mode: 'async', message: `${ag.name}还在算，算好了我用智能屏告诉您` });
+  }
+  if (!r.ok) {
+    logAgent({ request: text, status: 'error', reason: r.error, ms: Date.now() - t0 });
+    return fitSpeech({ ok: false, message: `${ag.name}那边没办成：${r.error}` });
+  }
+  const content = clampSpeech(r.value.content);
+  logAgent({ request: text, status: 'ok', result: content.slice(0, 300), mode: 'sync', ms: Date.now() - t0 });
+  return fitSpeech({ ok: true, mode: 'sync', message: content });
+}
+
+// 通道 A（官方 MCP 接入点）的连接状态：由 xiaozhiMcpBridge 回写，面板读它显示状态灯。
+// 放在这里而不是桥接模块内，是因为 getPublicConfig 要用，且避免路由层反向依赖桥接。
+const mcpState = { connected: false, since: 0, last_error: '' };
+function setMcpState(patch) { Object.assign(mcpState, patch); return { ...mcpState }; }
+function getMcpState() { return { ...mcpState }; }
+
 // ---------- 桥接统一入口（POST /xiaozhi/bridge，index.js EXEMPT + key） ----------
 // 返回恒为业务 JSON（ok/message），HTTP 层只对密钥错回 403——固件侧好把 message 直接念给用户。
 async function dispatch(op, body) {
@@ -374,7 +660,10 @@ async function dispatch(op, body) {
       const n = appendChatLog(b.messages);
       return { ok: true, message: n ? `已记录 ${n} 条对话` : '' };
     }
-    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll / chatlog）` };
+    // v1.9.31：语音查工作台资料 / 转交家里 agent
+    if (op === 'ask') return await askWorkbench(b.keywords || b.question || b.q || b.text);
+    if (op === 'delegate') return await delegateAgent(b.request || b.text);
+    return { ok: false, message: `未知操作 ${op || '(空)'}（支持 ping / list_devices / control / status / exec_text / speak / poll / chatlog / ask / delegate）` };
   } catch (e) {
     console.error('[xiaozhi] bridge', op, e.message);
     return { ok: false, message: `桥接处理失败：${e.message}` };
@@ -382,8 +671,13 @@ async function dispatch(op, body) {
 }
 
 module.exports = {
-  getConfig, saveConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk,
+  getConfig, saveConfig, getPublicConfig, ensureBridgeKey, rotateBridgeKey, bridgeKeyOk,
   listDevicesForBridge, setDeviceAlias, dispatch, speakerAction, ensureSpeakerPoints,
   setPhotoPending, listPhotos, savePhoto, deletePhoto, photoPath,
   noteBoardIp, getBoardInfo, appendChatLog, listChatLog,
+  // v1.9.31 新增：语音查询 / 转交 agent / 凭证 / 审计 / 接入点状态
+  askWorkbench, delegateAgent, listAgentLog, stripQuestion, searchCandidates, searchWithFallback, configuredQueryUser,
+  getAgentKey, setAgentKey, clearAgentKey, hasAgentKey,
+  getMcpToken, setMcpToken, hasMcpToken,
+  setMcpState, getMcpState,
 };

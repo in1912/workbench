@@ -9,6 +9,7 @@ const path = require('path');
 const httpGet = require('http').get; // MJPEG 长连接代理（板子是纯 http 内网地址）
 const { Readable } = require('stream');
 const auth = require('../auth');
+const { db } = require('../db');
 const svc = require('../services/xiaozhiService');
 const paths = require('../services/xiaozhiPaths');
 const builder = require('../services/xiaozhiBuilder');
@@ -32,7 +33,8 @@ router.get('/xiaozhi/capabilities', (req, res) => {
 // ---------- 配置（读：有 tab 权限即可，key 只给管理员；写：管理员） ----------
 router.get('/xiaozhi/config', (req, res) => {
   res.json({
-    config: svc.getConfig(),
+    // getPublicConfig 会带上 agent.has_key / mcp.token_set 两个布尔，但绝不带密钥本身
+    config: svc.getPublicConfig(),
     bridge_key: req.user.role === 'admin' ? svc.ensureBridgeKey() : undefined,
   });
 });
@@ -94,7 +96,112 @@ router.put('/xiaozhi/config', (req, res) => {
     }
     patch.paths = out;
   }
-  res.json({ config: svc.saveConfig(patch) });
+  // ---------- v1.9.31：语音查询范围 ----------
+  if (b.query) {
+    const q = {};
+    if (b.query.uid !== undefined) {
+      if (b.query.uid === null || b.query.uid === '') q.uid = null;
+      else {
+        const uid = Number(b.query.uid);
+        // 必须真在 users 表里且不是机器人——getTenantDb 对任意数字都会惰性建一个空库，
+        // 光看数字合法会得到一个永远搜不到东西的「正常」配置，排查起来很费劲
+        if (!Number.isInteger(uid) || uid <= 0 || !db.prepare('SELECT id FROM users WHERE id=? AND is_bot=0').get(uid)) {
+          return res.status(400).json({ error: '指定的用户不存在（不能是机器人账号）' });
+        }
+        q.uid = uid;
+      }
+    }
+    const intIn = (v, lo, hi, label) => {
+      if (v === undefined) return undefined;
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`${label} 需为 ${lo}-${hi} 的整数`);
+      return n;
+    };
+    try {
+      const mr = intIn(b.query.max_results, 1, 30, '最多取几条');
+      const mc = intIn(b.query.max_chars, 20, 500, '每条截断长度');
+      const at = intIn(b.query.ai_timeout_ms, 500, 60000, 'AI 归纳超时');
+      if (mr !== undefined) q.max_results = mr;
+      if (mc !== undefined) q.max_chars = mc;
+      if (at !== undefined) q.ai_timeout_ms = at;
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+    patch.query = q;
+  }
+  // ---------- v1.9.31：转交家里 agent ----------
+  if (b.agent) {
+    const a = {};
+    if (b.agent.enabled !== undefined) a.enabled = !!b.agent.enabled;
+    if (b.agent.require_name !== undefined) a.require_name = !!b.agent.require_name;
+    if (b.agent.block_risky !== undefined) a.block_risky = !!b.agent.block_risky;
+    if (b.agent.name !== undefined) {
+      const n = String(b.agent.name || '').trim();
+      if (!n || n.length > 16) return res.status(400).json({ error: 'agent 名字需为 1-16 个字' });
+      a.name = n;
+    }
+    if (b.agent.aliases !== undefined) {
+      const list = (Array.isArray(b.agent.aliases) ? b.agent.aliases : [])
+        .map((s) => String(s || '').trim()).filter(Boolean);
+      if (list.length > 8) return res.status(400).json({ error: '别名最多 8 个' });
+      if (list.some((s) => s.length > 16)) return res.status(400).json({ error: '单个别名最长 16 个字' });
+      a.aliases = [...new Set(list)];
+    }
+    if (b.agent.base_url !== undefined) {
+      const url = String(b.agent.base_url || '').trim();
+      if (url && !/^https?:\/\/[\w.:%-]+(:\d+)?(\/[\w./%:-]*)?$/.test(url)) {
+        return res.status(400).json({ error: 'agent 地址格式不对（http://内网IP:8642）' });
+      }
+      a.base_url = url.replace(/\/+$/, '');
+    }
+    if (b.agent.model !== undefined) {
+      const m = String(b.agent.model || '').trim();
+      if (m.length > 64) return res.status(400).json({ error: '模型名最长 64 个字' });
+      a.model = m;
+    }
+    const intIn2 = (v, lo, hi, label) => {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`${label} 需为 ${lo}-${hi} 的整数`);
+      return n;
+    };
+    try {
+      if (b.agent.rate_per_hour !== undefined) a.rate_per_hour = intIn2(b.agent.rate_per_hour, 1, 500, '每小时上限');
+      if (b.agent.sync_budget_ms !== undefined) a.sync_budget_ms = intIn2(b.agent.sync_budget_ms, 1000, 120000, '同步等待上限');
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+    patch.agent = a;
+  }
+  // 名字撞唤醒词：喊唤醒词会把每句话都当成「点名 agent」，误触发到没法用
+  const cur = svc.getConfig();
+  const effWake = patch.wake ? patch.wake.display : cur.wake.display;
+  const effAgent = patch.agent && patch.agent.name ? patch.agent.name : cur.agent.name;
+  if (svc && effAgent && effAgent.toLowerCase() === String(effWake || '').toLowerCase()) {
+    return res.status(400).json({ error: `agent 名字不能和唤醒词「${effWake}」相同——否则每句话都会被当成在叫它` });
+  }
+  // ---------- v1.9.31：官方 MCP 接入点 ----------
+  if (b.mcp) {
+    const m = {};
+    if (b.mcp.enabled !== undefined) m.enabled = !!b.mcp.enabled;
+    if (b.mcp.url !== undefined) {
+      const url = String(b.mcp.url || '').trim();
+      // 控制台给的那条地址自带 ?token=…：token 必须走下面的「接入点 token」框（单独加密存库）。
+      // 混进地址就等于明文躺在 xiaozhi_config 里 —— GET /xiaozhi/config 会把整个 config 回给前端（成员也读得到）
+      if (/[?&]token=/i.test(url)) {
+        return res.status(400).json({ error: '地址里不要带 token —— 把 ?token= 后面那一长串填到下面「接入点 token」框里（放进地址会明文存库并回显给成员）' });
+      }
+      // 接入点固定是 wss；只收 wss:// 避免有人把内网 http 地址填进来白连
+      if (url && !/^wss:\/\/[\w.-]+(:\d+)?(\/[\w./%:@-]*)?(\?[\w.=&%:@-]*)?$/.test(url)) {
+        return res.status(400).json({ error: '接入点地址需为 wss:// 开头（小智控制台里复制的那个，去掉 ?token=… 部分）' });
+      }
+      m.url = url;
+    }
+    patch.mcp = m;
+  }
+  // ---------- 敏感凭证：非空才写，空 = 保持原值（面板显示「已配置，留空保持不变」） ----------
+  if (typeof b.agent_key === 'string' && b.agent_key.trim()) svc.setAgentKey(b.agent_key);
+  if (b.agent_key_clear === true) svc.clearAgentKey();
+  if (typeof b.mcp_token === 'string' && b.mcp_token.trim()) svc.setMcpToken(b.mcp_token);
+  const saved = svc.saveConfig(patch);
+  // 接入点开关刚变化 → 通知桥接模块重连/断开（内部自己判，不在这里抛错）
+  try { require('../services/xiaozhiMcpBridge').sync(saved); } catch (e) { console.warn('[xiaozhi] 接入点同步失败', e.message); }
+  res.json({ config: svc.getPublicConfig() });
 });
 
 // ---------- 桥接密钥轮换（旧固件立即失联，需重烧——面板会提示） ----------
@@ -266,6 +373,21 @@ router.get('/xiaozhi/board', (req, res) => res.json(svc.getBoardInfo()));
 router.get('/xiaozhi/chatlog', (req, res) => {
   res.json(svc.listChatLog({ beforeId: req.query.before_id, limit: req.query.limit }));
 });
+
+// ---------- v1.9.31：转交家里 agent 的审计流水 + 连通性自检 ----------
+// GET /xiaozhi/agent-log：谁在什么时候让 agent 办了什么、被哪道闸拦下（登录 + tab 即可看）
+router.get('/xiaozhi/agent-log', (req, res) => {
+  res.json(svc.listAgentLog({ beforeId: req.query.before_id, limit: req.query.limit }));
+});
+// POST /xiaozhi/agent-test：只回耗时与成败，不回 agent 的输出——避免把 NAS 侧内容留在前端
+router.post('/xiaozhi/agent-test', asyncH(async (req, res) => {
+  if (!adminOnly(req, res)) return;
+  const ag = svc.getConfig().agent;
+  if (!ag.base_url || !ag.model) return res.status(400).json({ error: '先填 agent 地址和模型名' });
+  if (!svc.hasAgentKey()) return res.status(400).json({ error: '先填 agent 密钥' });
+  const hermes = require('../services/hermesService');
+  res.json(await hermes.ping({ baseUrl: ag.base_url, apiKey: svc.getAgentKey(), model: ag.model }));
+}));
 
 // ---------- 智能屏动作点位自动探测 + 试播/转述测试（登录 + tab 即可） ----------
 router.post('/xiaozhi/speaker-probe', asyncH(async (req, res) => {

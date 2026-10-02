@@ -275,6 +275,47 @@ try {
     ok(false, '设备一览 UI 段异常：' + e.message);
   }
 
+  // —— 语音助手 UI（v1.9.31：新子 tab 渲染 / 密钥只回布尔 / 勾选框不被全局样式撑开）——
+  console.log('— 语音助手 UI（新字段读得到、密钥不回显、保存键能过校验）');
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    const ctx = await br.newContext();
+    await ctx.addInitScript(([t, u]) => {
+      localStorage.setItem('wb_token', t);
+      localStorage.setItem('wb_user', u);
+      localStorage.setItem('xz_sub', 'assistant'); // 直接落在「语音助手」子 tab
+    }, [T, JSON.stringify(lg.j.user)]);
+    const p = await ctx.newPage();
+    const perr = [];
+    p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+    await p.waitForSelector('text=🔎 语音查工作台资料', { timeout: 10000 });
+    ok(true, '「语音查工作台资料」卡渲染');
+    ok((await p.locator('text=🤖 转交家里 agent').count()) === 1 && (await p.locator('text=🔗 官方 MCP 接入点').count()) === 1, '「转交家里 agent」「官方 MCP 接入点」两张卡都在');
+    ok((await p.locator('text=📜 转交流水').count()) === 1, '「转交流水」卡在');
+    // 密钥：GET 只回布尔，输入框必须留空 + 靠 placeholder 提示，绝不能把密钥灌进 value
+    const pw = p.locator('input[type="password"]');
+    ok((await pw.count()) === 2, '两个密钥框（agent 密钥 / 接入点 token）都在');
+    const vals = await pw.evaluateAll((els) => els.map((e) => e.value));
+    ok(vals.every((v) => v === ''), '密钥框不回显任何值（只靠 placeholder 提示）');
+    // 勾选框必须保持原生小尺寸——style.css 会把非 checkbox 的 input 拉成 100% 宽，
+    // 而 .xz-field input 的 min-width:170px 会把 checkbox 也撑开（这条断言就是防它回潮）
+    const w = await p.locator('#xz-agent-on').boundingBox();
+    ok(w && w.width < 40, `勾选框保持原生宽度（${w ? Math.round(w.width) : '?'}px，没被全局/表单样式撑开）`);
+    ok((await p.locator('.xz-pill').first().innerText()).includes('未连接'), '接入点连接状态灯有内容（未配置 → 未连接）');
+    // 显式保存：密钥与名字不做「敲一下就存」的自动保存，必须有个按钮；点它要能过服务端校验
+    const save = p.locator('button', { hasText: '保存语音助手配置' });
+    ok((await save.count()) === 1, '有显式保存按钮（密钥/名字不进防抖自动保存）');
+    await save.click();
+    await p.waitForSelector('.msg.ok', { timeout: 8000 });
+    ok(true, '点保存 → 服务端校验全过（未填智能屏 did 也不会被无关字段拦下）');
+    ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
+    await br.close();
+  } catch (e) {
+    ok(false, '语音助手 UI 段异常：' + e.message);
+  }
+
   console.log(`\n结果：${passed} 通过 / ${failed} 失败`);
   process.exitCode = failed ? 1 : 0;
 } catch (e) {

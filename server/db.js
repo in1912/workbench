@@ -682,6 +682,20 @@ CREATE TABLE IF NOT EXISTS xiaozhi_chat_log (
   role TEXT NOT NULL,           -- user / assistant
   text TEXT NOT NULL
 );
+-- 转交家里 agent 的审计流水（v1.9.31，主库）：谁在什么时候让 agent 办了什么、成没成。
+-- 必留痕的理由：板子物理可及范围内的任何人都能触发 agent，出事后没有这条就查不出是谁说的什么。
+-- status: ok / rejected（被闸拦下，reason 记是哪道）/ error；mode: sync / async / async-receipt。
+CREATE TABLE IF NOT EXISTS xiaozhi_agent_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  request TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT DEFAULT '',
+  result TEXT DEFAULT '',
+  mode TEXT DEFAULT '',
+  ms INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_xiaozhi_agent_log_ts ON xiaozhi_agent_log(ts);
 -- 家庭与子女（按 family 共享开关路由：开=读主库全员共用，关=读各租户库独立）
 -- 结构与租户库同名表一致（routedDb 选库，两边共用同一份 DDL 定义见上方业务表）
 CREATE TABLE IF NOT EXISTS family_items (
