@@ -28,6 +28,15 @@ RUN npx playwright install chromium
 COPY server/ ./server/
 COPY --from=web-builder /build/web/dist ./web/dist
 
+# 运行时还需要的东西（原来漏了——镜像里没有它们时，测评中心 H5、录音转写页、智作平台全都缺）
+COPY web/index.html web/vite.config.js ./web/
+COPY web/src/ ./web/src/
+COPY web/public/ ./web/public/   # 测评中心 H5 等运行时静态资源
+COPY scripts/ ./scripts/         # 服务端/客户端辅助脚本（对外分发的 .ps1/.cmd 从这里取）
+COPY tts/ ./tts/                 # 语音配音：脚本与空 voices（模型权重由页面一键安装器按需下载）
+COPY vibeasr/ ./vibeasr/         # 独立转写引擎客户端（linux/win 预编译）
+COPY zhizu/ ./zhizu/             # 智作平台子应用
+
 ENV PORT=3000
 ENV DATA_DIR=/data
 VOLUME ["/data"]

@@ -24,6 +24,9 @@ __pycache__/
 hf-cache/
 tts/hf-cache/
 tts/MOSS-TTS-Nano/
+# 合成语音缓存（内容是用户要求的朗读文本 → 属个人数据，且可重新生成；2026-10-02 起不入库）
+tts/cache/
+tts/generated_audio/
 
 # ========== 日志 ==========
 Logs/

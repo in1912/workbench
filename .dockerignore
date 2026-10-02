@@ -4,3 +4,20 @@ web/dist
 data
 .git
 *.log
+
+# 以下目录现在会被 COPY 进镜像，构建上下文里必须排掉它们的重货（否则 docker build 传几百 MB）
+tts/cache
+tts/MOSS-TTS-Nano
+tts/.venv
+tts/hf-cache
+tts/generated_audio
+zhizu/node_modules
+zhizu/data
+img
+Logs
+fnos
+*.fpk
+*.zip
+*.tar.gz
+.env
+ssl
