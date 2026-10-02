@@ -35,8 +35,14 @@ if (!fs.existsSync(PKG_DIR)) fs.mkdirSync(PKG_DIR, { recursive: true });
 // 部署包下发（clientFileList 只认 *.exe/*.dll，Linux 产物不会被误发）。
 // whisper.cpp 引擎二进制在 server/whisper/<plat>-<arch>/（server/ 前缀天然过应用白名单，
 // 不设独立顶层 whisper/ 目录——旧容器白名单会跳过新前缀，v1.5.0 踩过同款鸡生蛋）。
-const INCLUDE_DIRS = ['server', 'web/src', 'web/public', 'scripts', 'tts', 'vibeasr'];
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__', '.venv', 'hf-cache', 'models', 'cache', 'voices', 'tmp', 'generated_audio', 'examples']);
+// zhizu/（智作平台子服务，v1.6.2）：只带代码 + web/dist 构建产物，绝不带运行数据。
+// 子进程数据库走持久卷 /data/zhizu（zhizuService 里 DATA_DIR 命名空间化）；仓库里的
+// zhizu/data/ 是本地开发库，靠 EXCLUDE_DIRS 里的 'data' 排除（各子树下均无同名目录，加它无副作用）。
+// 为什么现在才加：应用侧 applyTargetPath 一直认 zhizu/ 前缀，打包侧却漏了它，于是包永远不含
+// zhizu —— 2026-10-02 容器被重建（可写层清空，/app/zhizu 随之消失）后，应用 1.9.29 包也救不回来，
+// 智作平台从此停在「正在启动，请稍候…」（子服务目录不存在 → zhizuService.start() 直接跳过）。
+const INCLUDE_DIRS = ['server', 'web/src', 'web/public', 'scripts', 'tts', 'vibeasr', 'zhizu'];
+const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__', '.venv', 'hf-cache', 'models', 'cache', 'voices', 'tmp', 'generated_audio', 'examples', 'data']);
 function isRootFileIncluded(name) {
   if (name === 'Dockerfile' || name === 'docker-compose.yml' || name === '.dockerignore') return true;
   return /\.(js|vue|json|css|html|md|sh|bat|ps1|yml|yaml|txt)$/.test(name);

@@ -332,8 +332,13 @@ function closeMedia() {
   closeSession(mediaSessionId); // 会话盖章关闭时间
   mediaSessionId = 0;
   destroyFlv();
-  videoEl.value.removeAttribute('src');
-  videoEl.value.load();
+  // videoEl 只在「浏览」分支渲染（v-else），从没进过浏览页就被卸载时它是 null：
+  // 无条件解引用会抛 TypeError: Cannot read properties of null (reading 'removeAttribute')
+  // （2026-10-02 生产 #/learning 切 tab 报错，栈顶 pn=closeMedia ← stopAll ← onBeforeUnmount）
+  if (videoEl.value) {
+    videoEl.value.removeAttribute('src');
+    videoEl.value.load();
+  }
   curMedia.value = null;
   track = null;
   attnCancel();

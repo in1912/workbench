@@ -303,8 +303,12 @@ function closeMedia() {
   flushMedia();
   mediaSeq++; // 让挂在 video 上的续播回调（若有）失效
   destroyFlv();
-  videoEl.value.removeAttribute('src');
-  videoEl.value.load();
+  // 同 Learning/VStudyPanel：videoEl 被 v-else（!cfg.root_ok）挡着，未渲染即卸载时为 null，
+  // 无条件解引用会抛 TypeError: Cannot read properties of null (reading 'removeAttribute')
+  if (videoEl.value) {
+    videoEl.value.removeAttribute('src');
+    videoEl.value.load();
+  }
   curMedia.value = null;
   resumeInfo.value = '';
   playlist.value = [];

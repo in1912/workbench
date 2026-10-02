@@ -56,7 +56,8 @@ function addDirEntries(entries, absDir, prefix) {
 }
 
 // server/ 源码文件清单（与升级页扫描同一套排除规则）
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__']);
+// 'data'：zhizu/data/ 是本地开发库（子进程数据库在生产走持久卷 /data/zhizu），绝不入包
+const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__', 'data']);
 function walkServer(rel, out) {
   const abs = path.join(ROOT, rel);
   for (const ent of fs.readdirSync(abs, { withFileTypes: true })) {
@@ -100,7 +101,14 @@ async function main() {
   // 2) 组装 zip 条目
   const entries = [];
   const manifest = [];
-  for (const rel of walkServer('server', [])) {
+  // zhizu/（智作平台子服务，v1.6.2）：代码 + web/dist 构建产物随包，容器里落到 /app/zhizu
+  // （子进程数据库另走持久卷 /data/zhizu，zhizu/data/ 由 EXCLUDE_DIRS 的 'data' 排除）。
+  // 为什么必须带：打包侧此前漏了它，包永远不含 zhizu —— 2026-10-02 容器被重建（可写层清空、
+  // /app/zhizu 随之消失）后，连 apply 全量包也救不回来，智作平台只能一直停在「正在启动，请稍候…」。
+  // 应用侧 applyTargetPath 早就认 zhizu/ 前缀，两端从此对齐。
+  const srcRels = walkServer('server', []);
+  if (fs.existsSync(path.join(ROOT, 'zhizu'))) srcRels.push(...walkServer('zhizu', []));
+  for (const rel of srcRels) {
     const data = fs.readFileSync(path.join(ROOT, rel));
     entries.push({ name: rel, data });
     manifest.push({ path: rel, size: data.length, hash: hashBuf(data) });
