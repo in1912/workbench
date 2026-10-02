@@ -4,6 +4,8 @@
     <div class="xz-tabs">
       <!-- v1.9.33：语音助手改名为「贾维斯J.A.R.V.I.S.」并挪到第一个（用户要求——板子的主用途是问贾维斯） -->
       <button :class="{ on: sub === 'assistant' }" @click="switchSub('assistant')">贾维斯J.A.R.V.I.S.</button>
+      <!-- v1.9.35：转交流水从贾维斯页里单拎出来（用户要求——它是排障用的，和配置不该挤在一屏） -->
+      <button :class="{ on: sub === 'agentlog' }" @click="switchSub('agentlog')">📜 Agent对话记录</button>
       <button :class="{ on: sub === 'guide' }" @click="switchSub('guide')">🛠 装机向导</button>
       <button :class="{ on: sub === 'voice' }" @click="switchSub('voice')">🏠 语音控米家</button>
       <button :class="{ on: sub === 'live' }" @click="switchSub('live')">🎥 视频对话</button>
@@ -571,15 +573,52 @@
       <span class="xz-muted">密钥保存后即刻生效；接入点开关变化会自动重连</span>
     </div>
     <p v-else class="xz-muted">只有管理员能改这些设置。</p>
+    </template>
 
+    <!-- ============ Agent 对话记录（v1.9.35）：转交流水单开一页，可筛选 + 翻页 ============ -->
+    <template v-if="sub === 'agentlog'">
     <div class="card">
-      <h3 style="margin:0 0 10px">📜 转交流水</h3>
+      <h3 style="margin:0 0 10px">📜 Agent对话记录</h3>
       <p class="xz-muted" style="margin:0 0 10px;font-size:12px">
         谁在什么时候让 agent 办了什么、被哪道闸拦下——板子范围内谁都能喊，出事只能靠这条查。
+        四项筛选都是模糊匹配（日期只认那天整天）。
       </p>
-      <div class="xz-dl-row" style="margin-bottom:8px">
-        <button class="btn sm" :disabled="busy.agentLog" @click="loadAgentLog">{{ busy.agentLog ? '加载中…' : '🔄 刷新' }}</button>
-        <span v-if="agentLog.entries.length" class="xz-muted">{{ agentLog.entries.length }} 条</span>
+      <div class="xz-form xz-filters">
+        <div class="xz-field xz-field-s">
+          <label>日期范围</label>
+          <div class="xz-inline">
+            <input v-model="logQ.from" type="date" class="xz-date" />
+            <span class="xz-muted">至</span>
+            <input v-model="logQ.to" type="date" class="xz-date" />
+          </div>
+        </div>
+        <div class="xz-field xz-field-s">
+          <label>状态类型</label>
+          <select v-model="logQ.status" class="xz-mini">
+            <option value="">全部</option>
+            <option value="ok">已办</option>
+            <option value="rejected">已拦</option>
+            <option value="error">出错</option>
+          </select>
+        </div>
+        <div class="xz-field xz-field-s">
+          <label>语音内容</label>
+          <input v-model="logQ.request" placeholder="说的那句话里含…" @keyup.enter="searchLog" />
+        </div>
+        <div class="xz-field xz-field-s">
+          <label>反馈内容</label>
+          <input v-model="logQ.feedback" placeholder="回复或拒绝原因里含…" @keyup.enter="searchLog" />
+        </div>
+      </div>
+      <div class="xz-dl-row" style="margin:10px 0 10px">
+        <button class="btn primary sm" :disabled="busy.agentLog" @click="searchLog">{{ busy.agentLog ? '查询中…' : '🔍 查询' }}</button>
+        <button class="btn sm ghost" :disabled="busy.agentLog" @click="resetLog">清空条件</button>
+        <button class="btn sm" :disabled="busy.agentLog" @click="loadAgentLog(agentLog.page)">{{ busy.agentLog ? '加载中…' : '🔄 刷新' }}</button>
+        <span class="xz-muted">每页</span>
+        <select v-model.number="logQ.pageSize" class="xz-mini" @change="searchLog">
+          <option v-for="n in LOG_PAGE_SIZES" :key="n" :value="n">{{ n }}</option>
+        </select>
+        <span class="xz-muted">行</span>
       </div>
       <div v-if="agentLog.entries.length" class="xz-loglist">
         <div v-for="e in agentLog.entries" :key="e.id" class="xz-logrow">
@@ -592,7 +631,12 @@
           <span class="xz-muted xz-logms">{{ e.ms }}ms</span>
         </div>
       </div>
-      <p v-else class="xz-muted">还没有记录。</p>
+      <p v-else class="xz-muted">{{ busy.agentLog ? '查询中…' : (agentLog.total ? '这一页没有记录。' : '没有符合条件的记录。') }}</p>
+      <div class="xz-dl-row" style="margin-top:10px">
+        <button class="btn sm" :disabled="busy.agentLog || agentLog.page <= 1" @click="loadAgentLog(agentLog.page - 1)">‹ 上一页</button>
+        <span class="xz-muted">第 {{ agentLog.page }} / {{ agentLog.pages }} 页 · 共 {{ agentLog.total }} 条</span>
+        <button class="btn sm" :disabled="busy.agentLog || agentLog.page >= agentLog.pages" @click="loadAgentLog(agentLog.page + 1)">下一页 ›</button>
+      </div>
     </div>
     </template>
 
@@ -635,9 +679,9 @@ const testText = ref('');
 const devices = ref([]); const showDevices = ref(true); // v1.9.25：可控设备一览默认直接展开
 const devBound = ref(null); const devMsg = ref(''); // null=未加载；false=未绑米家（面板要能区分 0 台的两种原因）
 
-// ---------- 子 tab：贾维斯(v1.9.31，v1.9.33 挪到第一个) / 装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 ----------
+// ---------- 子 tab：贾维斯(v1.9.31，v1.9.33 挪到第一个) / Agent对话记录(v1.9.35) / 装机向导 / 语音控米家 / 视频对话 / 对话记录 / 摄像头 ----------
 // 没存过页签时落在第一个（贾维斯）——它就是板子的主用途；存过的一律尊重用户上次的选择
-const SUBS = ['assistant', 'guide', 'voice', 'live', 'history', 'camera'];
+const SUBS = ['assistant', 'agentlog', 'guide', 'voice', 'live', 'history', 'camera'];
 const sub = ref(SUBS.includes(localStorage.getItem('xz_sub')) ? localStorage.getItem('xz_sub') : 'assistant');
 function switchSub(s) {
   sub.value = s;
@@ -646,28 +690,50 @@ function switchSub(s) {
   if (s === 'live') loadBoard();
   if (s === 'history') loadChat();
   if (s === 'camera') loadPhotos();
+  if (s === 'agentlog') loadAgentLog();
   if (s === 'assistant') {
-    loadUsers(); loadAgentLog();
+    loadUsers();
     stopMcpWatch();                 // 离开过再回来：重新问一次真实状态，别拖着上一轮的轮询
     mcpMsg.value = '';
     pollMcpOnce().catch(() => {});
   } else stopMcpWatch();
 }
 
-// ---------- 语音助手（v1.9.31）：指定用户 + agent 连通性 + 转交流水 ----------
+// ---------- 语音助手（v1.9.31）：指定用户 + agent 连通性 ----------
 const users = ref([]);
-const agentLog = reactive({ entries: [] });
 const agentTestMsg = ref('');
 async function loadUsers() {
   if (users.value.length) return; // 每次进 tab 不必重拉
   try { users.value = (await api.get('/messages/contacts')).users || []; }
   catch (e) { flashErr('用户列表加载失败：' + e.message); }
 }
-async function loadAgentLog() {
+
+// ---------- Agent对话记录（原「转交流水」，v1.9.35 单开一页 + 筛选翻页） ----------
+// 默认 20 行、可翻页、页量可改；四个筛选走后端（不是前端过滤——记录会攒到 2000 条，全塞给浏览器不合适）
+const LOG_PAGE_SIZES = [5, 10, 20, 30, 50, 100];
+const logQ = reactive({ from: '', to: '', status: '', request: '', feedback: '', pageSize: 20 });
+const agentLog = reactive({ entries: [], total: 0, page: 1, pages: 1 });
+async function loadAgentLog(page = 1) {
   busy.agentLog = true;
-  try { agentLog.entries = (await api.get('/xiaozhi/agent-log?limit=30')).entries || []; }
-  catch (e) { flashErr('流水加载失败：' + e.message); }
+  try {
+    const qs = new URLSearchParams({ page: String(page), page_size: String(logQ.pageSize) });
+    if (logQ.from) qs.set('from', logQ.from);
+    if (logQ.to) qs.set('to', logQ.to);
+    if (logQ.status) qs.set('status', logQ.status);
+    if (logQ.request.trim()) qs.set('request', logQ.request.trim());
+    if (logQ.feedback.trim()) qs.set('feedback', logQ.feedback.trim());
+    const r = await api.get('/xiaozhi/agent-log?' + qs.toString());
+    agentLog.entries = r.entries || [];
+    agentLog.total = r.total ?? agentLog.entries.length;
+    agentLog.page = r.page || 1;
+    agentLog.pages = r.pages || 1;
+  } catch (e) { flashErr('记录加载失败：' + e.message); }
   busy.agentLog = false;
+}
+function searchLog() { loadAgentLog(1); }   // 改条件一律回到第 1 页，否则会停在一个不存在的页码上
+function resetLog() {
+  Object.assign(logQ, { from: '', to: '', status: '', request: '', feedback: '' });
+  loadAgentLog(1);
 }
 async function testAgent() {
   busy.agentTest = true; agentTestMsg.value = '';
@@ -1130,7 +1196,8 @@ onMounted(async () => {
   if (isAdmin && cap.value.canFlash) loadPorts();
   // 子 tab 存在 localStorage 里：直接刷新页面回到「语音助手」时，switchSub 不会跑，
   // 成员列表就是空的（下拉点开写「无匹配用户」，看着像选不了人）。这里补上首屏该拉的数据。
-  if (sub.value === 'assistant') { loadUsers(); loadAgentLog(); pollMcpOnce().catch(() => {}); }
+  if (sub.value === 'assistant') { loadUsers(); pollMcpOnce().catch(() => {}); }
+  if (sub.value === 'agentlog') loadAgentLog();
 });
 onBeforeUnmount(() => {
   stopPoll();
@@ -1186,6 +1253,9 @@ onBeforeUnmount(() => {
 .xz-inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .xz-inline > .xz-check-lb { font-size: 13px; white-space: nowrap; }
 .xz-mini { width: 86px !important; min-width: 86px !important; }
+/* Agent对话记录筛选条（v1.9.35）：date 框装不下 YYYY-MM-DD 加日历图标，86px 会把它挤成一团 */
+.xz-date { width: 150px !important; min-width: 150px !important; }
+.xz-filters .xz-field-s { max-width: 300px; }
 .xz-narrow { width: 130px !important; min-width: 130px !important; }
 .xz-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
 /* 语音助手：转交流水的状态标签与行 */

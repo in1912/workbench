@@ -862,13 +862,54 @@ function logAgent({ request, status, reason = '', result = '', mode = '', ms = 0
     }
   } catch (e) { console.warn('[xiaozhi] 转交审计写入失败:', e.message); }
 }
-function listAgentLog({ beforeId, limit } = {}) {
-  const lim = Math.min(Math.max(Number(limit) || 30, 1), 200);
-  const before = Number(beforeId) || null;
-  const rows = before
-    ? db.prepare('SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log WHERE id < ? ORDER BY id DESC LIMIT ?').all(before, lim + 1)
-    : db.prepare('SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log ORDER BY id DESC LIMIT ?').all(lim + 1);
-  return { entries: rows.slice(0, lim), has_more: rows.length > lim };
+// 转交记录 = 排障用的，得能翻历史（v1.9.35 从「只给最近 N 条」升级成翻页 + 条件筛选）
+const AGENTLOG_PAGE_SIZES = [5, 10, 20, 30, 50, 100];
+const AGENTLOG_STATUSES = ['ok', 'rejected', 'error'];
+// LIKE 的 % 与 _ 要转义，否则用户搜个「100%」会变成通配符、搜「a_b」会连 aXb 一起中
+const escapeLike = (s) => String(s).replace(/[\\%_]/g, (m) => '\\' + m);
+// 'YYYY-MM-DD' → 当天 00:00 本地时间的毫秒。前端 date 输入框给的就是这个格式；
+// 手动拼 Date 解析这种串会按 UTC 算，这里用 new Date(y, m-1, d) 保证按本地时区
+function dayStartMs(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+  if (!m) return null;
+  const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+function listAgentLog({ beforeId, limit, page, pageSize, from, to, status, request, feedback } = {}) {
+  // 旧的 before_id/limit 游标式调用保留（无需翻页的场景，也给老前端留条路）
+  if (beforeId || (limit && !page && !pageSize && !from && !to && !status && !request && !feedback)) {
+    const lim = Math.min(Math.max(Number(limit) || 30, 1), 200);
+    const before = Number(beforeId) || null;
+    const rows = before
+      ? db.prepare('SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log WHERE id < ? ORDER BY id DESC LIMIT ?').all(before, lim + 1)
+      : db.prepare('SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log ORDER BY id DESC LIMIT ?').all(lim + 1);
+    return { entries: rows.slice(0, lim), has_more: rows.length > lim };
+  }
+
+  const where = [];
+  const args = [];
+  const f = Number(from) || dayStartMs(from);
+  const t = Number(to) || dayStartMs(to);
+  if (f) { where.push('ts >= ?'); args.push(f); }
+  if (t) { where.push('ts < ?'); args.push(t + 86400000); }   // 含「到」那天整天
+  if (AGENTLOG_STATUSES.includes(status)) { where.push('status = ?'); args.push(status); }
+  if (request) { where.push("request LIKE ? ESCAPE '\\'"); args.push('%' + escapeLike(request) + '%'); }
+  // 反馈 = 拒绝原因 或 agent 的回话（界面上就是这么并排显示的，搜哪边都该中）
+  if (feedback) {
+    where.push("(reason LIKE ? ESCAPE '\\' OR result LIKE ? ESCAPE '\\')");
+    const like = '%' + escapeLike(feedback) + '%';
+    args.push(like, like);
+  }
+  const clause = where.length ? ' WHERE ' + where.join(' AND ') : '';
+
+  const size = AGENTLOG_PAGE_SIZES.includes(Number(pageSize)) ? Number(pageSize) : 20;
+  const total = db.prepare('SELECT COUNT(*) c FROM xiaozhi_agent_log' + clause).get(...args).c;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const p = Math.min(Math.max(Number(page) || 1, 1), pages);
+  const entries = db.prepare(
+    'SELECT id, ts, request, status, reason, result, mode, ms FROM xiaozhi_agent_log' + clause + ' ORDER BY id DESC LIMIT ? OFFSET ?'
+  ).all(...args, size, (p - 1) * size);
+  return { entries, total, page: p, pages, pageSize: size, has_more: p < pages };
 }
 
 async function delegateAgent(rawText, { via = 'bridge' } = {}) {

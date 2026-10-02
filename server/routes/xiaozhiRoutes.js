@@ -393,8 +393,15 @@ router.get('/xiaozhi/chatlog', (req, res) => {
 
 // ---------- v1.9.31：转交家里 agent 的审计流水 + 连通性自检 ----------
 // GET /xiaozhi/agent-log：谁在什么时候让 agent 办了什么、被哪道闸拦下（登录 + tab 即可看）
+// v1.9.35：支持翻页（page/pageSize，页量 5/10/20/30/50/100）+ 条件筛选（日期范围 / 状态 / 语音内容 / 反馈内容，均模糊）
 router.get('/xiaozhi/agent-log', (req, res) => {
-  res.json(svc.listAgentLog({ beforeId: req.query.before_id, limit: req.query.limit }));
+  const q = req.query;
+  res.json(svc.listAgentLog({
+    beforeId: q.before_id, limit: q.limit,
+    page: q.page, pageSize: q.page_size || q.pageSize,
+    from: q.from, to: q.to, status: q.status,
+    request: q.request, feedback: q.feedback,
+  }));
 });
 // POST /xiaozhi/agent-test：只回耗时与成败，不回 agent 的输出——避免把 NAS 侧内容留在前端
 router.post('/xiaozhi/agent-test', asyncH(async (req, res) => {

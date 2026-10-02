@@ -293,7 +293,9 @@ try {
     await p.waitForSelector('text=🔎 语音查工作台资料', { timeout: 10000 });
     ok(true, '「语音查工作台资料」卡渲染');
     ok((await p.locator('text=🤖 转交家里 agent').count()) === 1 && (await p.locator('text=🔗 官方 MCP 接入点').count()) === 1, '「转交家里 agent」「官方 MCP 接入点」两张卡都在');
-    ok((await p.locator('text=📜 转交流水').count()) === 1, '「转交流水」卡在');
+    // v1.9.35：转交流水已单拎成「Agent对话记录」页签——贾维斯页里不该再有它（配置与流水不挤一屏）
+    // 注意断言必须限定 .card：页签栏那颗按钮的文案也是「📜 Agent对话记录」，按 text= 数会把它算进去
+    ok((await p.locator('.card h3', { hasText: 'Agent对话记录' }).count()) === 0, '「Agent对话记录」卡不再挤在贾维斯页');
     // v1.9.32：摄像头那块是子页签链尾的 v-else 兜底，语音助手曾单开成并列的 v-if → 两个页签内容一起渲染
     ok((await p.locator('text=📷 摄像头相册（板子拍照存工作台）').count()) === 0, '本页签不串出「摄像头相册」卡（v-else 兜底串页）');
     ok((await p.locator('button', { hasText: '让板子拍一张' }).count()) === 0, '也没有「让板子拍一张」按钮');
@@ -341,8 +343,8 @@ try {
     await p.waitForSelector('.xz-tabs button', { timeout: 10000 });
     const labels = await p.locator('.xz-tabs button').allTextContents();
     ok(labels[0] === '贾维斯J.A.R.V.I.S.', `第一个子页签是「贾维斯J.A.R.V.I.S.」（实际「${labels[0]}」）`);
-    ok(labels.length === 6, `子页签仍是 6 个（${labels.length}）`, labels.join(' / '));
-    ok(!labels.some((l) => l.includes('语音助手')), '页签行里没有旧名「语音助手」的残留');
+    ok(labels.length === 7, `子页签仍是 7 个（${labels.length}）`, labels.join(' / '));
+    ok(labels[1] === '📜 Agent对话记录', `第二个子页签是「Agent对话记录」（实际「${labels[1]}」）`);    ok(!labels.some((l) => l.includes('语音助手')), '页签行里没有旧名「语音助手」的残留');
     ok((await p.locator('text=🔎 语音查工作台资料').count()) === 1, '没存过页签时默认就落在贾维斯页（内容已在）');
     await p.locator('.xz-tabs button', { hasText: '摄像头' }).click();
     ok((await p.locator('text=🔎 语音查工作台资料').count()) === 0, '切走后贾维斯内容收起');
@@ -353,6 +355,124 @@ try {
     await br.close();
   } catch (e) {
     ok(false, '改名与排序段异常：' + e.message);
+  }
+
+  // —— 转交流水单拎成「Agent对话记录」页签 + 筛选翻页（v1.9.35）——
+  // 它以前挤在贾维斯页最下面：那一页是「配置」，这一块是「排障」，混在一屏得往下滚老远才看得见
+  console.log('— 「Agent对话记录」页签：筛选 + 翻页（v1.9.35）');
+  // 造数据走真链路：agent 默认关闭 → 每次 delegate 都落一条「已拦」记录，正好是要展示的形态
+  // 注意 bridge_key 在前面「桥接」段被轮换过，cfg 里那份是旧的（旧 key 会 403 静默零条），这里必须重读
+  const cfgNow = await api('GET', '/api/xiaozhi/config', { token: T });
+  const bkey = cfgNow.j.bridge_key;
+  ok(bkey !== cfg.j.bridge_key, '取到轮换后的新桥接密钥（旧的那份已失效）');
+  const seeded = ['让贾维斯看看磁盘', '让贾维斯整理一下照片', '我要买牛奶', '让贾维斯删掉旧备份',
+                  '让贾维斯查一下天气', '记一下明天开会', '让贾维斯看看内存', '随便说点什么'];
+  let seededOk = 0;
+  for (const req of seeded) {
+    const r = await api('POST', `/api/xiaozhi/bridge?k=${bkey}`, { body: { op: 'delegate', request: req } });
+    if (r.status === 200) seededOk++;
+  }
+  ok(seededOk === seeded.length, `8 次 delegate 全部落库（${seededOk}/8，agent 未启用 → 每条都是「已拦」）`);
+  const gl = await api('GET', '/api/xiaozhi/agent-log', { token: T });
+  ok(gl.status === 200 && gl.j.total === seeded.length && gl.j.pageSize === 20 && gl.j.pages === 1,
+    `接口默认每页 20 行、8 条一页装下（total=${gl.j.total} pageSize=${gl.j.pageSize}）`);
+  const glP = await api('GET', '/api/xiaozhi/agent-log?page=2&page_size=5', { token: T });
+  ok(glP.j.entries.length === 3 && glP.j.pages === 2 && glP.j.page === 2, '每页 5 行 → 8 条分 2 页，第 2 页 3 条');
+  const glF = await api('GET', '/api/xiaozhi/agent-log?request=' + encodeURIComponent('贾维斯') + '&status=rejected', { token: T });
+  ok(glF.j.total === 5, `筛选「语音含贾维斯 + 状态已拦」命中 5 条（${glF.j.total}）`);
+  try {
+    const { chromium } = await import('playwright');
+    const br = await chromium.launch();
+    const ctx = await br.newContext();
+    // 落地在贾维斯页：切过去要能自己把记录拉回来（switchSub 里挂的 loadAgentLog）
+    // ⚠️ addInitScript 每次导航（含 reload）都会重跑——这里必须用「没存过才写」的写法，
+    //    否则后面 reload 断言页签记忆时会被它硬掰回 assistant，永远测不过（真踩过）
+    await ctx.addInitScript(([t, u]) => {
+      localStorage.setItem('wb_token', t);
+      localStorage.setItem('wb_user', u);
+      if (!localStorage.getItem('xz_sub')) localStorage.setItem('xz_sub', 'assistant');
+    }, [T, JSON.stringify(lg.j.user)]);
+    const p = await ctx.newPage();
+    const perr = []; const reqs = [];
+    p.on('pageerror', (e) => perr.push(String(e).slice(0, 120)));
+    p.on('request', (r) => { if (r.url().includes('/xiaozhi/agent-log')) reqs.push(r.url()); });
+    await p.goto(`${B}/#/smart-home?tab=xiaozhi`);
+    await p.waitForSelector('.xz-tabs button', { timeout: 10000 });
+    ok(reqs.length === 0, '停在贾维斯页时不拉记录（不再白跑一次接口）');
+    await p.locator('.xz-tabs button', { hasText: 'Agent对话记录' }).click();
+    await p.waitForSelector('.card h3:has-text("Agent对话记录")', { timeout: 5000 });
+    ok(true, '点「📜 Agent对话记录」页签能切过去，卡渲染出来');
+    await p.waitForFunction(() => performance.getEntriesByType('resource').some((e) => e.name.includes('/xiaozhi/agent-log')), null, { timeout: 5000 }).catch(() => {});
+    ok(reqs.length >= 1, `切过来自动拉了记录（${reqs.length} 次请求）`);
+    ok((await p.locator('text=🔎 语音查工作台资料').count()) === 0, '本页签里没有贾维斯那三张配置卡（真的分开了）');
+    ok((await p.locator('text=板子范围内谁都能喊').count()) === 1, '保留了「板子范围内谁都能喊，出事只能靠这条查」的说明');
+    // 每条都带 状态 / 语音内容 / 反馈 / 耗时（排障就靠这几列）
+    ok((await p.locator('.xz-logrow').count()) === 8, `列表渲染 8 行（${await p.locator('.xz-logrow').count()}）`);
+    ok((await p.locator('.xz-logrow .xz-pill').first().innerText()).includes('已拦'), '状态列显示「已拦」');
+    ok(await p.locator('.xz-logrow .xz-logms').first().innerText().then((s) => /\d+ms/.test(s)), '耗时列显示 ms');
+    // 翻页控件 + 页量选择
+    const sizeSel = p.locator('.card select').last();
+    const opts = await sizeSel.locator('option').allTextContents();
+    ok(opts.join(',') === '5,10,20,30,50,100', `页量可选 5/10/20/30/50/100（实际 ${opts.join(',')}）`);
+    ok((await sizeSel.inputValue()) === '20', '默认每页 20 行');
+    ok((await p.locator('text=第 1 / 1 页').count()) === 1, '显示「第 1 / 1 页」+ 总条数');
+    ok(await p.locator('button:has-text("上一页")').isDisabled(), '第 1 页时「上一页」禁用');
+    await sizeSel.selectOption('5');
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 5, `改成每页 5 行后只剩 5 行（${await p.locator('.xz-logrow').count()}）`);
+    ok((await p.locator('text=第 1 / 2 页').count()) === 1, '总页数跟着变 2');
+    await p.locator('button:has-text("下一页")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 3, `翻到第 2 页剩 3 行（${await p.locator('.xz-logrow').count()}）`);
+    ok((await p.locator('text=第 2 / 2 页').count()) === 1, '页码变成第 2 / 2 页');
+    ok(await p.locator('button:has-text("下一页")').isDisabled(), '最后一页「下一页」禁用');
+    await p.locator('button:has-text("上一页")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('text=第 1 / 2 页').count()) === 1, '「上一页」能退回第 1 页');
+    // 四项筛选（都模糊）
+    await p.locator('.xz-filters input').nth(2).fill('贾维斯');   // 0/1 是日期框，2 是语音内容
+    await p.locator('button:has-text("查询")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 5 && (await p.locator('text=第 1 / 1 页').count()) === 1,
+      `按语音内容筛「贾维斯」→ 5 条 1 页（${await p.locator('.xz-logrow').count()}）`);
+    await p.locator('.xz-filters input').nth(3).fill('没这个词');  // 3 是反馈内容
+    await p.locator('button:has-text("查询")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 0 && (await p.locator('text=没有符合条件的记录').count()) === 1,
+      '按反馈内容筛一个不存在的词 → 0 条并给出空态文案');
+    await p.locator('button:has-text("清空条件")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 5, '清空条件后回到未筛选（页量仍是 5）');
+    // 日期范围：明天 → 一条都没有（今天造的数据都不在范围内）
+    // 注意别用 toISOString().slice(0,10)：那是 UTC 日期，本地 +8 时区下午之前算出来会是「今天」
+    const dTm = new Date(Date.now() + 86400000);
+    const tomorrow = `${dTm.getFullYear()}-${String(dTm.getMonth() + 1).padStart(2, '0')}-${String(dTm.getDate()).padStart(2, '0')}`;
+    await p.locator('.xz-filters input[type="date"]').first().fill(tomorrow);
+    await p.locator('button:has-text("查询")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 0, '日期范围从明天起 → 0 条');
+    await p.locator('button:has-text("清空条件")').click();
+    await p.waitForTimeout(600);
+    ok((await p.locator('.xz-logrow').count()) === 5, '清空日期条件后恢复');
+    ok(perr.length === 0, '页面无 JS 错误', perr.join(' | '));
+    // 切走再切回：每进一次都重拉（别把旧的留着当最新）
+    const before = reqs.length;
+    await p.locator('.xz-tabs button', { hasText: '摄像头' }).click();
+    await p.waitForTimeout(300);
+    ok((await p.locator('.card h3:has-text("Agent对话记录")').count()) === 0, '切走后记录卡收起');
+    await p.locator('.xz-tabs button', { hasText: 'Agent对话记录' }).click();
+    await p.waitForSelector('.card h3:has-text("Agent对话记录")', { timeout: 5000 });
+    await p.waitForTimeout(500);
+    ok(reqs.length > before, '再切回来会重新拉一次（不是拿旧数据糊弄）');
+    // 页签选择记忆：刷新页面还得落在这个页签
+    // （刷新后整套 SPA + 页面 chunk 都要重跑一遍，先等面板挂上再等卡——8s 单等这一条会偶发超时）
+    await p.reload();
+    await p.waitForSelector('.xz-tabs button', { timeout: 20000 });
+    await p.waitForSelector('.card h3:has-text("Agent对话记录")', { timeout: 20000 });
+    ok(true, '刷新页面仍落在「Agent对话记录」页签（localStorage 记忆）');
+    await br.close();
+  } catch (e) {
+    ok(false, 'Agent对话记录页签段异常：' + e.message);
   }
 
   // —— 语音助手两处上手修正（v1.9.32）——

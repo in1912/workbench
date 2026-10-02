@@ -190,6 +190,58 @@ try {
     ok(svc.saneAnswer('') === '' && svc.saneAnswer('   ') === '' && svc.saneAnswer(null) === '', '空/空白/null 一律视为不可用');
   }
 
+  console.log('— Agent对话记录：翻页 + 四项模糊筛选（v1.9.35 从「只给最近 30 条」升级）');
+  {
+    // logAgent 不外传，直接插库；ts 固定才测得了日期范围（用本地 10:00，避开时区边界）
+    db.prepare('DELETE FROM xiaozhi_agent_log').run();
+    const ins = db.prepare('INSERT INTO xiaozhi_agent_log (ts, request, status, reason, result, mode, ms) VALUES (?,?,?,?,?,?,?)');
+    const day = (s) => new Date(`${s}T10:00:00`).getTime();
+    ins.run(day('2026-09-30'), '让贾维斯看看磁盘', 'ok', '', '磁盘用了 80%', 'sync', 1200);
+    ins.run(day('2026-10-01'), '让贾维斯删掉旧备份', 'rejected', 'risky_word', '', 'sync', 5);
+    ins.run(day('2026-10-02'), '让贾维斯查一下天气', 'error', '', '连不上 agent', 'sync', 8000);
+    ins.run(day('2026-10-03'), '让贾维斯整理照片', 'ok', '', '整理完了，共 132 张', 'async', 9500);
+    ins.run(day('2026-10-03'), '记一下我要买牛奶', 'ok', '', '好的，已记下', 'sync', 900);
+    // 转义用样本：不转义的话搜「100%」会命中下面那条「进度 100 天」
+    ins.run(day('2026-10-03'), '这批任务 100% 完成了吗', 'ok', '', '是的', 'sync', 700);
+    ins.run(day('2026-10-03'), '进度 100 天还有多久', 'ok', '', '还有 3 天', 'sync', 650);
+
+    const all = svc.listAgentLog({});
+    ok(all.total === 7 && all.page === 1 && all.pages === 1, `默认一页装下全部（total=${all.total} pages=${all.pages}）`);
+    ok(all.pageSize === 20, `默认每页 20 行（${all.pageSize}）`);
+    ok(all.entries[0].request.includes('进度 100 天'), '按 id 倒序：最新那条排在最前');
+
+    ok(svc.listAgentLog({ pageSize: 5 }).pages === 2 && svc.listAgentLog({ pageSize: 5 }).entries.length === 5, '每页 5 行 → 7 条分 2 页');
+    ok(svc.listAgentLog({ pageSize: 5, page: 2 }).entries.length === 2, '第 2 页只剩 2 条');
+    ok(svc.listAgentLog({ pageSize: 7 }).pageSize === 20, '非法页量（7）回落 20（只认 5/10/20/30/50/100）');
+    ok(svc.listAgentLog({ page: 99, pageSize: 5 }).page === 2, '页码越界钳到最后一页（不返空页）');
+    ok(svc.listAgentLog({ page: -3 }).page === 1, '页码 <1 钳到第 1 页');
+
+    ok(svc.listAgentLog({ status: 'rejected' }).total === 1, '按状态筛：已拦 1 条');
+    ok(svc.listAgentLog({ status: 'ok' }).total === 5, '按状态筛：已办 5 条');
+    ok(svc.listAgentLog({ status: 'bogus' }).total === 7, '非法状态忽略（当没筛）');
+
+    ok(svc.listAgentLog({ request: '贾维斯' }).total === 4, '语音内容模糊搜「贾维斯」命中 4 条');
+    ok(svc.listAgentLog({ request: '天气' }).total === 1, '语音内容模糊搜「天气」只中 1 条');
+    ok(svc.listAgentLog({ request: '100%' }).total === 1, '搜「100%」只中字面那条（% 已转义，不当通配符）');
+    ok(svc.listAgentLog({ request: '100' }).total === 2, '搜「100」两条都中（子串照旧）');
+
+    ok(svc.listAgentLog({ feedback: '磁盘' }).total === 1, '反馈内容能搜到 agent 的回话（result）');
+    ok(svc.listAgentLog({ feedback: 'risky' }).total === 1, '反馈内容也能搜到拒绝原因（reason）');
+    ok(svc.listAgentLog({ feedback: '不存在的词' }).total === 0, '搜不中就是 0 条');
+
+    const ranged = svc.listAgentLog({ from: '2026-10-02', to: '2026-10-03' });
+    ok(ranged.total === 5, `日期范围 10-02 ~ 10-03 命中 5 条（${ranged.total}）`);
+    ok(ranged.entries.every((e) => e.ts >= day('2026-10-02') && e.ts < day('2026-10-03') + 86400000), '范围外的一条都没混进来');
+    ok(svc.listAgentLog({ from: '2026-10-03' }).total === 4, '只填起始日期＝从那天起至今');
+    ok(svc.listAgentLog({ to: '2026-09-30' }).total === 1, '只填结束日期＝截止那天（含当天整天）');
+    ok(svc.listAgentLog({ from: '2026-10-02', to: '2026-10-02', status: 'error' }).total === 1, '日期 + 状态组合筛');
+    ok(svc.listAgentLog({ from: '乱七八糟' }).total === 7, '日期格式不对就当没筛（不 500）');
+
+    // 旧游标式调用（before_id/limit）仍在，别把老路径改没了
+    const cur = svc.listAgentLog({ limit: 3 });
+    ok(cur.entries.length === 3 && cur.has_more === true, '旧的 limit 游标式调用仍可用');
+  }
+
   console.log('— 接入点 MCP 帧响应');
   const init = await bridge._respond({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   ok(init.result && init.result.protocolVersion === '2024-11-05' && init.result.capabilities.tools, 'initialize 回协议版本与 tools 能力');
