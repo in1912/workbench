@@ -16,7 +16,8 @@ const hermesService = require('./hermesService');
 const xiaozhiTools = require('./xiaozhiTools');
 // v1.9.36：【测试】按钮要把三段自检内容从 IM 发出去——推送两条通道 + agent 不通时的天气兜底
 const dingtalkService = require('./dingtalkService');
-const feishuService = require('./feishuService');
+// 这里**故意不再引 feishuService**：自检的飞书那条走 agent（见 runSelfTest），
+// 工作台自带的那个飞书应用是另一个机器人，发到那边用户在自己的飞书里看不到。
 const weatherService = require('./weatherService');
 const { encrypt, decrypt } = require('./businessSkillService');
 
@@ -51,9 +52,9 @@ const DEFAULT_CFG = {
   // 官方 MCP 接入点（v1.9.31）：默认关闭；token 单独存 MCP_TOKEN_KEY（url 不含 token，可以明文存）
   mcp: { enabled: false, url: '' },
   // 屏幕【测试】按钮（v1.9.36）：自检消息走哪条 IM——只发一条，不双发（用户指定）。
-  // v1.9.37 默认改为 **feishu**：飞书才是这台机器真正在用的默认 IM（钉钉那条是历史遗留，用户明确
-  // 说过「我没需要过钉钉的对接」）。原先默认 'dingtalk' 的后果很直观——面板下拉没动过时，板子按
-  // 【测试】永远只发钉钉，飞书一个字都收不到，看着就是「按钮没反应」。
+  // v1.9.37 默认改为 **feishu**：这台机器真正在用的 IM 就是飞书（钉钉是备选）。
+  // 注意飞书那条不是走工作台自己的飞书应用，而是**交给 agent 去发**（见 runSelfTest）——
+  // 用户要的是贾维斯自己的飞书机器人，也就是「Agent 名」那个档案（如 fnnas-feishu）。
   test: { channel: 'feishu' }, // 'feishu'（默认） | 'dingtalk'
 };
 
@@ -1045,7 +1046,8 @@ async function runSelfTest() {
     try {
       const r = await hermesService.ask({
         baseUrl: ag.base_url, apiKey: getAgentKey(), model: ag.model,
-        text: '查询一下我所在地的实时天气，用一句话说清楚', timeoutMs: 20000,
+        // 「只回答我，不要往外发消息」：这个档案连着飞书，不写清楚它可能把这次查询也发出去
+        text: '查询一下我所在地的实时天气，用一句话说清楚。只回答我，不要往任何地方发消息。', timeoutMs: 20000,
       });
       weatherLine = `本地天气（${ag.name} 查）：${clampSpeech(r.content)}`;
     } catch (e) { weatherLine = `本地天气（${ag.name} 查）：没查到（${e.message}）`; }
@@ -1065,37 +1067,39 @@ async function runSelfTest() {
 
   const body = `【小智接入自检】${who ? `\n收件人：${who.username}` : ''}\n${mcpLine}\n${agentLine}\n${weatherLine}`;
 
-  // 发送。两种 IM 的失败行为不一致，一律包起来：
-  // 钉钉 pushIfBound 未绑定回 false、API 错**抛异常**；飞书 sendMarkdown 无会话直接**抛异常**。
+  // 发送。两条通道各自独立，**严格照面板里选的走，不自动改走另一条**：
+  // 选了哪条就发哪条，那条没配好就在板子上如实报错——测试按钮就是拿来验链路的，
+  // 悄悄换一条发出去，用户会以为「我选的那条通了」，其实消息跑到了另一个机器人上。
   //
-  // 通道选择（v1.9.37 修）：v1.9.36 只看 test.channel，而它的默认值是 'dingtalk' —— 面板下拉没动过时，
-  // 屏幕【测试】按钮**永远只发钉钉**，飞书一个字都收不到；反过来若选了飞书、而「查谁的资料」那位成员
-  // **名下没配飞书会话**（飞书/钉钉配置都是按人按租户存的），按钮同样白按。测试按钮就是拿来验链路的，
-  // 不该因为一个下拉没改或配置挂在别人名下而静默失效。
-  // 现在：用户选的通道**确实配好了**就用它（仍然只发一条，不双发）；没配好而另一条配好了就自动改走那条，
-  // 并在回执里点明（板子上直接念出「你选的是钉钉，那位成员名下没配，已改走飞书」）；两条都没配好则照旧如实报错。
-  const want = cfg.test && cfg.test.channel === 'feishu' ? 'feishu' : 'dingtalk';
-  const other = want === 'feishu' ? 'dingtalk' : 'feishu';
-  const avail = { feishu: false, dingtalk: false };
-  if (tdb) {
-    try { const fc = feishuService.getConfig(tdb); avail.feishu = !!(fc.app_id && fc.app_secret && (fc.targets || []).length); } catch { avail.feishu = false; }
-    try { const dc = dingtalkService.getConfig(tdb); avail.dingtalk = !!(dc.enabled && dc.app_key && dc.app_secret && dc.userid); } catch { avail.dingtalk = false; }
-  }
-  const ch = avail[want] ? want : (avail[other] ? other : want);
-  const switched = ch !== want;
+  // **飞书这条必须经由 agent 发**（v1.9.37 修）：用户真正在用的飞书机器人是贾维斯自己的
+  // ——就是面板里「Agent 名」那个档案（如 fnnas-feishu），消息由 agent 自己发进飞书会话。
+  // 工作台自带的 `feishuService`（面板「设置 → 飞书推送」那个应用）是**另一个机器人**，
+  // 往那儿发，用户在自己的飞书里根本看不到（v1.9.37 前的实现正是如此，被用户当场抓到）。
+  // 钉钉那条没有这层中转，照旧走工作台的钉钉绑定。
+  const ch = cfg.test && cfg.test.channel === 'feishu' ? 'feishu' : 'dingtalk';
   const chName = ch === 'feishu' ? '飞书' : '钉钉';
-  const wantName = want === 'feishu' ? '飞书' : '钉钉';
-
-  let sent = false; let err = '';
-  if (!tdb) err = '没在智能板配置里指定「查谁的资料」成员，不知道发给谁';
+  let sent = false; let err = ''; let agentEcho = '';
+  if (ch === 'feishu') {
+    if (!agentReady) {
+      err = `飞书这条要靠${ag.name}发，但${ag.name}${ag.enabled ? '没配全（地址 / Agent 名 / 密钥）' : '还没启用'}`;
+    } else {
+      try {
+        // 收件人交给 agent 自己决定（它绑的是你的飞书会话）；这里只要求「原样转发 + 回一句结果」。
+        const r = await hermesService.ask({
+          baseUrl: ag.base_url, apiKey: getAgentKey(), model: ag.model,
+          text: `帮我把下面这段原样发到飞书，别改写、别解释，发完只回一句结果：\n${body}`,
+          timeoutMs: 30000,
+        });
+        sent = true;
+        agentEcho = clampSpeech(String(r.content || '').trim());
+      } catch (e) { err = `让${ag.name}发飞书没成：${e.message}`; }
+    }
+  } else if (!tdb) err = '没在智能板配置里指定「查谁的资料」成员，不知道发给谁';
   else {
     try {
-      if (ch === 'feishu') { await feishuService.sendMarkdown(tdb, '小智接入自检', body.replace(/\n/g, '\n\n')); sent = true; }
-      else {
-        sent = await dingtalkService.pushIfBound(tdb, body);
-        if (!sent) err = `${who.username} 还没绑定钉钉（去设置页绑一下）`;
-      }
-    } catch (e) { err = `${chName}（${who.username} 名下）：${e.message}`; }
+      sent = await dingtalkService.pushIfBound(tdb, body);
+      if (!sent) err = `${who.username} 还没绑定钉钉（去设置页绑一下）`;
+    } catch (e) { err = e.message; }
   }
 
   logAgent({
@@ -1104,12 +1108,11 @@ async function runSelfTest() {
   });
 
   // 屏幕上一句话能显示完的短回执（≤950 字节，fitSpeech 兜底）。
-  // 兜底改动要放在**最前面**：err 可能很长，clampSpeech 从尾部截断，改动理由不能被截掉。
-  const note = switched ? `你选的是${wantName}，但${who.username}名下没配，已自动改走${chName}。` : '';
+  // 状态在前、agent 的原话在后：clampSpeech 从尾部截，先保状态别被截掉。
   const short = err
-    ? `测试消息没发出去：${note}${err}`
-    : `测试消息已发到${chName}。${note}${mcp.connected ? '接入点已连接' : '接入点未连接'}；${agentReady ? `${ag.name}连通` : `${ag.name}不可用`}`;
-  return fitSpeech({ ok: !err, sent, channel: ch, switched, message: clampSpeech(short) });
+    ? `测试消息没发出去：${err}`
+    : `测试消息已发到${chName}。${mcp.connected ? '接入点已连接' : '接入点未连接'}；${agentReady ? `${ag.name}连通` : `${ag.name}不可用`}${agentEcho ? `。${ag.name}回：${agentEcho}` : ''}`;
+  return fitSpeech({ ok: !err, sent, channel: ch, message: clampSpeech(short) });
 }
 
 // 通道 A（官方 MCP 接入点）的连接状态：由 xiaozhiMcpBridge 回写，面板读它显示状态灯。

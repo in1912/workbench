@@ -473,8 +473,8 @@
         </div>
         <div class="xz-field">
           <label>Agent 名</label>
-          <input v-model="form.agent.model" :disabled="!isAdmin" placeholder="my-agent" />
-          <span class="xz-hint">填 agent 的 <b>profile 档案名</b>（Hermes 里就是那个档案 / 模型 ID，如 <code>my-agent</code>）——不是给它起的说话名，那个填在下面</span>
+          <input v-model="form.agent.model" :disabled="!isAdmin" placeholder="fnnas-feishu" />
+          <span class="xz-hint">填 agent 的 <b>profile 档案名</b>（Hermes 里就是那个档案 / 模型 ID，如 <code>fnnas-feishu</code>）——不是给它起的说话名，那个填在下面。填哪个档案就决定了消息从哪个机器人出去：<b>「屏幕【测试】按钮走哪条」选飞书时，那条自检消息就是让这个档案自己去发的</b></span>
         </div>
         <div class="xz-field">
           <label>API 密钥</label>
@@ -515,7 +515,7 @@
           <label>屏幕【测试】按钮走哪条</label>
           <div class="xz-inline">
             <select v-model="form.test.channel" class="xz-mini" :disabled="!isAdmin">
-              <option value="feishu">飞书</option>
+              <option value="feishu">飞书（走上面的 agent）</option>
               <option value="dingtalk">钉钉</option>
             </select>
           </div>
@@ -523,8 +523,11 @@
       </div>
       <p class="xz-muted" style="margin:8px 0 0">
         「屏幕【测试】按钮走哪条」= 板上第四个按钮按下后，那条自检消息（接入点状态 / agent 连通性 / agent 查的本地天气）
-        从哪个 IM 发出来。<b>默认飞书</b>（v1.9.37 起）；<b>只发一条，不双发</b>——若你选的那条压根没配好、而另一条配好了，
-        会自动改走能用的那条并在板子上说明。收件人是上面「查谁的资料」那位成员绑定的账号（飞书会话、钉钉绑定都是按人按租户存的）。
+        从哪个 IM 发出来。<b>默认飞书</b>（v1.9.37 起）；<b>选了哪条就发哪条，不发第二条</b>——那条没配好就在板子上
+        如实报错，不会悄悄改走另一条。<br />
+        <b>飞书那条是让上面的 agent 自己发的</b>（把这段话交给「Agent 名」那个档案，由它发进你的飞书）——所以收到消息的
+        就是<b>贾维斯自己的飞书机器人</b>，不是「设置 → 飞书推送」里那个工作台自带的应用（那是另一个机器人，发到那边你在飞书里看不到）。
+        收件人由 agent 决定（它绑的就是你的会话）。钉钉那条没有这层中转，照旧发给「查谁的资料」那位成员绑定的钉钉。
       </p>
       <div class="xz-cap xz-cap-warn" style="margin:10px 0 0">
         ⚠️ <b>超过「同步等待上限」的长任务，答案会从智能屏播出来，不是板子</b>——板子会先说「还在算，算好了我用智能屏告诉您」，

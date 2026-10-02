@@ -125,7 +125,7 @@ async function runSkill(d, skill, opts = {}) {
   }
 
   // 浏览器表格提取：把结构化数据存入 skill_pushes（供「AI推送」页 HTML 表格展示）
-  // cols/rows 提升到外层：本地整理模式与飞书表格卡片都直接复用，避免二次解析
+  // cols/rows 提升到外层：本地整理模式直接复用，避免二次解析
   let tableCols = null, tableRows = null;
   if (skill.browser_recipe) {
     try {
@@ -138,6 +138,20 @@ async function runSkill(d, skill, opts = {}) {
         tableRows = rows;
         d.prepare('INSERT INTO skill_pushes(system_id, skill_name, columns, rows) VALUES(?,?,?,?)')
           .run(skill.system_id, skill.name, JSON.stringify(rc.extract.colNames), JSON.stringify(rows));
+        // 飞书推送：群触发只回触发群(opts.onlyTarget)；定时/AI助手推全部会话
+        try {
+          const feishu = require('./feishuService');
+          const title = `[${sys.name}] ${skill.name}`;
+          // 飞书卡片限制：最多推 18 行数据（表头由 header_style 渲染不计行）
+          const pushRows = rows.slice(0, 18);
+          if (opts && opts.onlyTarget) {
+            await feishu.sendTableToTarget(d, opts.onlyTarget, title, rc.extract.colNames, pushRows);
+            console.log('[skill] 已推送到飞书（触发会话·原生表格）');
+          } else if ((feishu.getConfig(d).targets || []).length) {
+            await feishu.sendTableAll(d, title, rc.extract.colNames, pushRows);
+            console.log('[skill] 已推送到飞书（全部会话·原生表格）');
+          }
+        } catch (e) { console.warn('[skill] 飞书推送失败:', e.message); }
       }
     } catch (e) { console.warn('[skill] 保存推送失败:', e.message); }
   }
@@ -169,44 +183,8 @@ async function runSkill(d, skill, opts = {}) {
   }
   d.prepare(`UPDATE business_skills SET last_result=?, last_run_at=datetime('now','localtime'), last_ai_model=?, last_ai_tokens=? WHERE id=?`)
     .run(result, aiModel, aiTokens, skill.id);
-
-  // 推飞书（v1.9.37 修）：这块原先整段嵌在 `if (skill.browser_recipe)` 里，且异常只 console.warn ——
-  // 于是「引导词类 Skill」（没有浏览器配方）点「立即执行」时**一条都没发出去**，界面却照闪
-  // 「执行完成，去飞书查看」；配方类 Skill 发失败时同样被吞、界面照样说成功。
-  // 现在：所有 Skill 都推，且把真实结果回给调用方（sent / error），由界面如实显示。
-  const feishu = await pushFeishu(d, sys, skill, { tableCols, tableRows, result, target: opts && opts.onlyTarget });
-  // 结果写入 skill_pushes（AI 推送页展示）与 business_skills.last_result，不再写入每日待办
-  return { result, feishu };
-}
-
-// 推送到飞书并**如实回报**：{ sent, error }。
-// 有结构化表格 → 原生表格卡片（schema 2.0）；纯文字 Skill → 旧版 markdown 卡片（sendToTarget）。
-// 群触发/独立推送配置传了 target 就只发那一个会话；Skill 自带定时与「立即执行」发全部已配置会话。
-async function pushFeishu(d, sys, skill, { tableCols, tableRows, result, target }) {
-  let feishu;
-  try { feishu = require('./feishuService'); } catch (e) { return { sent: 0, error: '飞书模块不可用：' + e.message }; }
-  const title = `[${sys.name}] ${skill.name}`;
-  const hasTable = !!(tableCols && tableRows && tableRows.length);
-  if (!target && !(feishu.getConfig(d).targets || []).length) {
-    return { sent: 0, error: '没配置飞书推送会话（去「设置 → 飞书推送」加一个群或个人）' };
-  }
-  try {
-    if (hasTable) {
-      // 飞书卡片限制：最多推 18 行数据（表头由 header_style 渲染，不计行）
-      const rows = tableRows.slice(0, 18);
-      if (target) await feishu.sendTableToTarget(d, target, title, tableCols, rows);
-      else await feishu.sendTableAll(d, title, tableCols, rows);
-    } else if (target) {
-      await feishu.sendToTarget(d, target, title, result);
-    } else {
-      await feishu.sendMarkdown(d, title, result);
-    }
-    console.log(`[skill] 已推送到飞书（${hasTable ? '表格卡片' : 'markdown 卡片'}${target ? '·触发会话' : '·全部会话'}）`);
-    return { sent: target ? 1 : (feishu.getConfig(d).targets || []).length };
-  } catch (e) {
-    console.warn('[skill] 飞书推送失败:', e.message);
-    return { sent: 0, error: e.message };
-  }
+  // 结果只写入 skill_pushes（AI 推送页展示），不再写入每日待办
+  return result;
 }
 
 // ---------- 本地整理（不调用 AI） ----------
@@ -416,6 +394,6 @@ function runScheduleNow(d, id) {
 
 module.exports = {
   encrypt, decrypt, sanitizeSystem, listSkills, saveSkill, deleteSkill,
-  matchSkill, runSkillById, runSkill, pushFeishu, registerSkillJobs, registerAllTenantSkillJobs,
+  matchSkill, runSkillById, runSkill, registerSkillJobs, registerAllTenantSkillJobs,
   listSchedules, saveSchedule, deleteSchedule, runScheduleNow, holidayGate, cnToday,
 };

@@ -365,12 +365,6 @@ const tab = ref(firstTab('tools', 'sys'));
 const msg = ref('');
 const msgType = ref('ok');
 function flash(text, type = 'ok') { msg.value = text; msgType.value = type; setTimeout(() => (msg.value = ''), 4000); }
-// 飞书推送结果的如实描述（后端 pushFeishu 回 {sent,error}）——别再无条件说「已发送」
-function feishuLine(f) {
-  if (!f) return '';
-  if (f.sent) return `✅ 已推送到飞书（${f.sent} 个会话）`;
-  return `⚠️ 飞书没发出去：${f.error || '未知原因'}`;
-}
 
 // ---------- 业务系统 / Skill 任务 ----------
 const systems = ref([]);
@@ -461,7 +455,7 @@ async function runSkill(k) {
   runningId.value = k.id;
   try {
     const r = await api.post(`/business/skills/${k.id}/run`);
-    alert(`「${k.name}」执行完成：\n\n` + String(r.result || '').slice(0, 300) + '\n\n' + feishuLine(r.feishu));
+    alert(`「${k.name}」执行完成：\n\n` + r.result.slice(0, 300));
     await load();
   } catch (e) {
     alert('执行失败：' + e.message);
@@ -644,11 +638,8 @@ async function toggleSched(sc) {
 async function runSchedNow(sc) {
   schedRunning.value = sc.id;
   try {
-    const r = await api.post(`/schedules/${sc.id}/run`);
-    const f = r && r.feishu;
-    // 以前不论飞书发没发出去都闪「执行完成，去飞书查看」——发失败被后端吞掉，界面照样说成功
-    if (f && f.sent) flash(`已推送到飞书（${f.sent} 个会话）`);
-    else flash('飞书没发出去：' + ((f && f.error) || '未知原因'), 'err');
+    await api.post(`/schedules/${sc.id}/run`);
+    flash('执行完成，去飞书查看');
     await loadSchedules();
   } catch (e) { flash('执行失败: ' + e.message, 'err'); }
   finally { schedRunning.value = 0; }
@@ -675,10 +666,8 @@ async function toggleCronSkill(sk) {
 async function runSkillNow(sk) {
   skillRunning.value = sk.id;
   try {
-    const r = await api.post(`/business/skills/${sk.id}/run`);
-    const f = r && r.feishu;
-    if (f && f.sent) flash(`已推送到飞书（${f.sent} 个会话）`);
-    else flash('飞书没发出去：' + ((f && f.error) || '未知原因'), 'err');
+    await api.post(`/business/skills/${sk.id}/run`);
+    flash('执行完成，去飞书查看');
     await loadSchedules();
   } catch (e) { flash('执行失败: ' + e.message, 'err'); }
   finally { skillRunning.value = 0; }

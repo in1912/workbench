@@ -27,7 +27,7 @@ const ok = (cond, name, extra) => {
 };
 
 // ---------- 假的 AI / 假的 Hermes（同一个 server 按路径分流） ----------
-const fake = { ai: { delay: 0, text: 'AI 归纳结果' }, hermes: { delay: 0, text: '好的，已经办好了' }, hits: { ai: 0, hermes: 0 } };
+const fake = { ai: { delay: 0, text: 'AI 归纳结果' }, hermes: { delay: 0, text: '好的，已经办好了' }, hits: { ai: 0, hermes: 0 }, lastTask: '' };
 const fakeSrv = http.createServer((req, res) => {
   const chunks = [];
   req.on('data', (d) => chunks.push(d));
@@ -38,6 +38,10 @@ const fakeSrv = http.createServer((req, res) => {
       return res.end(JSON.stringify({ error: 'not found' }));
     }
     fake.hits[which]++;
+    try {
+      const j = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      fake.lastTask = ((j.messages || []).filter((m) => m.role === 'user').pop() || {}).content || '';
+    } catch { fake.lastTask = ''; }
     const cfg = fake[which];
     await new Promise((r) => setTimeout(r, cfg.delay));
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -395,16 +399,25 @@ try {
   ok(setCh.status === 200 && setCh.j.config.test.channel === 'feishu', 'test.channel 合法值保存成功');
   ok((await api('GET', '/api/xiaozhi/config', { token: T })).j.config.test.channel === 'feishu', '重新读取仍是 feishu（真落库，不是内存假象）');
 
-  useHermes(0, '今天晴，22 度。');
+  useHermes(0, '已经发出去了。');
   const st1 = await bridge({ op: 'selftest' });
-  ok(st1.j.ok === false && st1.j.sent === false && st1.j.channel === 'feishu',
-    '没配飞书会话 → 明确回「没发出去」+ channel=feishu，而不是 500', JSON.stringify(st1.j));
-  ok(/测试消息没发出去/.test(st1.j.message), '回执是一句能念的中文', st1.j.message);
-  ok(fake.hits.hermes >= 2, `自检真的探了 agent（ping + 让它查天气，${fake.hits.hermes} 次调用）`);
+  ok(st1.j.ok === true && st1.j.sent === true && st1.j.channel === 'feishu',
+    '飞书那条**交给 agent 自己发**（不再往工作台自带的飞书应用发）', JSON.stringify(st1.j));
+  ok(/帮我把下面这段原样发到飞书/.test(fake.lastTask),
+    '确实把「原样发到飞书」的指令连同自检正文一起给了 agent', fake.lastTask);
+  ok(/接入点：/.test(fake.lastTask) && /天气/.test(fake.lastTask), '自检三段（接入点 / agent / 天气）都在正文里', fake.lastTask.slice(0, 120));
+  ok(/飞书/.test(st1.j.message) && /已经发出去了/.test(st1.j.message), '回执照念 agent 的原话', st1.j.message);
+  ok(fake.hits.hermes >= 3, `自检真的探了 agent（ping + 查天气 + 发飞书，${fake.hits.hermes} 次调用）`);
+
+  // agent 没配全时，飞书这条必须当场说清，而不是静默失败
+  await putCfg({ agent: { base_url: '' } }, T);
+  const st1b = await bridge({ op: 'selftest' });
+  ok(st1b.j.ok === false && /飞书这条要靠/.test(st1b.j.message), 'agent 没配全 → 明说飞书这条发不了', st1b.j.message);
+  await putCfg({ agent: { base_url: HERMES_BASE } }, T);
 
   await putCfg({ test: { channel: 'dingtalk' } }, T);
   const st2 = await bridge({ op: 'selftest' });
-  ok(st2.j.channel === 'dingtalk' && /钉钉/.test(st2.j.message), '切到钉钉后走钉钉通道', st2.j.message);
+  ok(st2.j.channel === 'dingtalk' && /钉钉/.test(st2.j.message), '切到钉钉后走钉钉通道（不经过 agent）', st2.j.message);
 
   // 没指定「查谁的资料」= 不知道该发给谁（钉钉/飞书绑定都是按人按租户存的）
   await putCfg({ query: { uid: null } }, T);
@@ -412,19 +425,19 @@ try {
   ok(st3.j.ok === false && /不知道发给谁/.test(st3.j.message), '没指定收件人时给出原因而不是静默失败', st3.j.message);
   await putCfg({ query: { uid } }, T);
 
-  // v1.9.37 通道自动兜底：选了钉钉、但那位成员名下没绑钉钉，而飞书会话是配好的 → 自动改走飞书。
-  // v1.9.36 只会硬发钉钉（默认值就是 dingtalk）→ 静默白按，用户看到的就是「按了测试按钮，飞书没反应」。
+  // 选了钉钉、那位成员没绑钉钉，而飞书会话是配好的 → **不自动改走飞书**，就近如实报错。
+  // （v1.9.37 曾加过自动兜底，被撤：测试按钮就是拿来验链路的，悄悄换机器人会让用户以为
+  //  「我选的那条通了」，实际消息跑到了另一个机器人上。）
   const fc = await api('POST', '/api/feishu/config', {
     token: T,
     body: { app_id: 'cli_x', app_secret: 's', targets: [{ receive_id: 'oc_test', receive_id_type: 'chat_id', name: '测试群' }] },
   });
-  ok(fc.status === 200, '给该租户配上一个飞书会话（兜底用例的前置）', JSON.stringify(fc.j));
+  ok(fc.status === 200, '给该租户配上一个飞书会话（不兜底用例的前置）', JSON.stringify(fc.j));
   await putCfg({ test: { channel: 'dingtalk' } }, T);
   const st4 = await bridge({ op: 'selftest' });
-  ok(st4.j.channel === 'feishu' && st4.j.switched === true,
-    '选了钉钉但没绑 → 自动改走飞书（测试按钮不再对着一辆空车按）', JSON.stringify(st4.j));
-  ok(/自动改走飞书/.test(st4.j.message || ''), '回执说清「已自动改走飞书」，板子能念出来', st4.j.message);
-  ok(st4.j.sent === false || /飞书/.test(st4.j.message), '走的是飞书那条通道（假凭证下失败也要如实说）', JSON.stringify(st4.j));
+  ok(st4.j.channel === 'dingtalk' && /钉钉/.test(st4.j.message || ''),
+    '选了钉钉就只发钉钉，不会因为飞书配着就偷偷改道', JSON.stringify(st4.j));
+  ok(st4.j.switched === undefined, '回执里不再有 switched 字段（自动兜底已撤）', JSON.stringify(st4.j));
   // 收尾：清掉飞书会话，别影响后面的用例
   await api('POST', '/api/feishu/config', { token: T, body: { app_id: '', app_secret: '', targets: [] } });
 
