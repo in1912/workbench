@@ -395,7 +395,9 @@ function clampSpeech(s, max = 200) {
 
 // 整句 → 关键词：云端 LLM 很可能把「我的笔记里关于张三的内容」整句塞进来，
 // 而检索是 LIKE %q% 子串匹配，整句必然 0 结果。零结果时剥掉疑问词再搜一次兜底。
-const QUESTION_WORDS = ['请问', '帮我', '给我', '我想', '我要', '有没有', '有木有', '是什么', '有什么', '查一下', '查查', '找一下', '找找', '看看', '告诉我', '搜索', '搜一下', '一下', '笔记里', '记录里', '关于', '我的', '家里', '的吗', '是不是', '怎么样', '呢', '吗', '的', '说下', '讲下', '列出', '列一下', '显示', '一共', '总共', '数量', '？', '?', '。'];
+// 「收到/接收」是同类问法动词：「最近收到的邮件是什么」剥完只剩「最近 邮件」= 纯类别问法，
+// 不走字面候选（否则被「哪个表里恰好写了『邮件』二字」劫持，v1.9.35 用户报障的第二层原因）。
+const QUESTION_WORDS = ['请问', '帮我', '给我', '我想', '我要', '有没有', '有木有', '是什么', '有什么', '查一下', '查查', '找一下', '找找', '看看', '收到', '接收', '告诉我', '搜索', '搜一下', '一下', '笔记里', '记录里', '关于', '我的', '家里', '的吗', '是不是', '怎么样', '呢', '吗', '的', '说下', '讲下', '列出', '列一下', '显示', '一共', '总共', '数量', '？', '?', '。'];
 function stripQuestion(q) {
   let t = String(q || '');
   for (const w of QUESTION_WORDS) t = t.split(w).join(' ');
@@ -530,8 +532,10 @@ const CATEGORY_FALLBACK = [
   }],
   ['邮件', ['邮件', '邮箱', '收件箱'], (d, range) => {
     const rc = rangeClause(range, 'COALESCE(date, fetched_at)');
+    // ⚠️ 同 searchService：邮件表的 id 是**日期降序**写入的，`ORDER BY id DESC` = 最旧在前，
+    // 会把最新那封挤出 LIMIT 10（v1.9.35 用户报障的根因之一）。必须按 date 排。
     return d.prepare(`SELECT id, subject AS title, COALESCE(body, snippet, '') AS c, COALESCE(date, fetched_at, '') AS t
-      FROM emails ${rc.sql ? `WHERE ${rc.sql}` : ''} ORDER BY id DESC LIMIT 10`).all(...rc.params);
+      FROM emails ${rc.sql ? `WHERE ${rc.sql}` : ''} ORDER BY date DESC, id DESC LIMIT 10`).all(...rc.params);
   }],
   ['文件', ['文件', '存档'], (d, range) => {
     const rc = rangeClause(range, 'created_at');

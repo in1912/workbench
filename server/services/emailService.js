@@ -435,6 +435,10 @@ async function listEmails(d, limit = 30, opts = {}) {
           isNew: !known.has(uid),
         });
       }
+      // ⚠️ 这里降序排完**紧接着按此顺序 INSERT**，所以本批邮件 id 越小日期越新——
+      // 任何「取最近」的查询都要 `ORDER BY date DESC`，写成 `ORDER BY id DESC` 会取到最旧的
+      // （v1.9.35 用户报障：语音问「最近的邮件」只听到一个月前那封）。别改成升序了事：
+      // 已有库里的 id 早已是反序的，改这里救不了存量数据。
       mails.sort((a, b) => (b.date || '').localeCompare(a.date || '')); // 最新在前
 
       // 入库元信息（INSERT OR IGNORE，依赖 (account_id, uid) 组合唯一索引去重）

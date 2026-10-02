@@ -28,8 +28,11 @@ function search(tdb, q, { limit } = {}) {
   // 新闻：标题/摘要（news 表无 content 列；按共享开关选库）
   collect(routedDb(tdb, 'news').prepare('SELECT id, title AS t, summary AS _c, source AS _t FROM news WHERE title LIKE ? OR summary LIKE ? LIMIT 10')
     .all(like, like), '新闻', (r) => r.t);
-  // 邮件：主题 + 正文全文
-  collect(tdb.prepare('SELECT id, subject AS t, COALESCE(body, snippet, \'\') AS _c, COALESCE(date, fetched_at, \'\') AS _t FROM emails WHERE subject LIKE ? OR body LIKE ? OR from_addr LIKE ? ORDER BY id DESC LIMIT 10')
+  // 邮件：主题 + 正文全文。
+  // ⚠️ 排序必须用 date，**不能**用 id：emailService.listEmails 把 mails 按日期降序排完再顺序 INSERT，
+  // 所以 id 越小日期越新，`ORDER BY id DESC` 等于「最旧的在最前」——最新的邮件永远进不了 LIMIT 10
+  // （v1.9.35 用户报障：问「最近的邮件」只听到一个月前的）。与邮箱列表（emailService:696）口径一致。
+  collect(tdb.prepare('SELECT id, subject AS t, COALESCE(body, snippet, \'\') AS _c, COALESCE(date, fetched_at, \'\') AS _t FROM emails WHERE subject LIKE ? OR body LIKE ? OR from_addr LIKE ? ORDER BY date DESC, id DESC LIMIT 10')
     .all(like, like, like), '邮件', (r) => r.t);
   // AI 对话：消息内容（带会话标题，点击跳转 AI 助手对应会话）
   collect(tdb.prepare(`SELECT m.id AS id, s.title AS t, m.content AS _c, m.created_at AS _t, s.id AS _sid
