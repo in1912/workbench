@@ -63,7 +63,7 @@ async function ensureServer() {
     child.kill(); child = null; h = null;
   }
   if (h) return h;
-  if (!installed()) throw new Error('TTS 引擎未安装：请到「学习 → 语音配音」页一键安装（或先完成环境安装）');
+  if (!installed()) throw new Error('TTS 引擎未安装：请到「效率工具 → 语音配音」页一键安装（或先完成环境安装）');
   if (!bootPromise) {
     bootPromise = (async () => {
       fs.mkdirSync(path.join(TTS_ROOT, 'tmp'), { recursive: true });
@@ -114,7 +114,7 @@ async function waitReady(timeoutMs = 15 * 60 * 1000) {
     if (h.phase === 'error') throw new Error('TTS 引擎初始化失败：' + (h.error || '未知错误'));
     if (Date.now() > deadline) {
       throw new Error(h.phase === 'downloading'
-        ? `TTS 模型仍在下载（约 670MB，仅首次）：请到「学习 → 语音配音」点「启动引擎」观察进度，下载完成后重试`
+        ? `TTS 模型仍在下载（约 670MB，仅首次）：请到「效率工具 → 语音配音」或「家庭管理 → 儿童故事」点「启动引擎」观察进度，下载完成后重试`
         : 'TTS 引擎就绪超时（' + h.phase + '）');
     }
     await sleep(2000);

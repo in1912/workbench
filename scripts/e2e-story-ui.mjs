@@ -161,6 +161,45 @@ try {
   await p.locator('.sp-tb thead input[type=checkbox]').uncheck();
   // 引擎在隔离环境里必然未安装 → 面板要给出可执行的提示，而不是让用户对着报错猜
   ok(/音频引擎未安装/.test(await p.locator('.sp-warn').first().innerText()), '引擎未就绪时提前给出安装指引');
+  ok((await p.locator('button', { hasText: '启动引擎' }).count()) === 0, '引擎没装时不给「启动引擎」按钮（装了才有意义）');
+
+  console.log('— 引擎启动按钮（v1.9.38，stub 引擎状态，不真拉 python）');
+  // 拦 /story/meta 只改 engine 字段（音色等照真回包走），拦截 /tts/engine/warmup 不发真进程
+  let stubPhase = 'stopped', warmupHits = 0, metaHits = 0;
+  await p.route('**/api/story/meta*', async (route) => {
+    metaHits++;
+    const res = await route.fetch();
+    const j = await res.json();
+    j.engine = { installed: true, running: stubPhase !== 'stopped', phase: stubPhase };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(j) });
+  });
+  await p.route('**/api/tts/engine/warmup*', async (route) => {
+    warmupHits++;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  await p.reload();
+  await p.waitForSelector('.sp-tb', { timeout: 15000 });
+  const startBtn = p.locator('.card').first().locator('button', { hasText: '启动引擎' });
+  await startBtn.waitFor({ timeout: 10000 }).catch(() => { /* 没出现就由下面的断言报出来 */ });
+  ok(metaHits >= 1, `/story/meta 走的是被拦截的那条（拦下 ${metaHits} 次）`);
+  ok(await startBtn.count() === 1, '引擎已装但没启动 → 音色选择旁边出现「▶ 启动引擎」');
+  const rowTxt = await p.locator('.card').first().innerText();
+  ok(!/效率工具 → 语音配音/.test(rowTxt), '已安装时不再显示「去效率工具 → 语音配音 点启动引擎」那段指路文字');
+  ok(!/音频引擎尚未就绪/.test(rowTxt), '也不再显示「音频引擎尚未就绪（stopped）」');
+  ok((await p.locator('.card').first().locator('.sp-warn').count()) === 0, '工具条下没有任何警告条');
+  stubPhase = 'downloading';   // 点下去之后进程就该进下载态（先摆好，免得轮询第一跳拿到 stopped 就停了）
+  await startBtn.click();
+  ok(warmupHits === 1, '点击真的 POST 了 /tts/engine/warmup');
+  await p.waitForFunction(() => /模型下载中/.test(document.body.innerText), null, { timeout: 15000 });
+  ok(true, '下载中：旁边写出「模型下载中（约 670MB，仅首次）…」');
+  ok((await p.locator('button', { hasText: '启动引擎' }).count()) === 0, '下载中不再重复给启动按钮');
+  ok(!/效率工具 → 语音配音/.test(await p.locator('.card').first().innerText()), '下载中那段指路文字也不显示');
+  stubPhase = 'ready';
+  await p.waitForFunction(() => /音频引擎已就绪/.test(document.body.innerText), null, { timeout: 15000 });
+  ok(true, '轮询到 ready 后提示「音频引擎已就绪」');
+  ok((await p.locator('button', { hasText: '启动引擎' }).count()) === 0, '就绪后按钮消失');
+  await p.unroute('**/api/story/meta*');
+  await p.unroute('**/api/tts/engine/warmup*');
 
   console.log('— 删除');
   const before = await p.locator('.sp-tb tbody tr').count();

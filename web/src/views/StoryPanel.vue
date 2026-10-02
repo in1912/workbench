@@ -25,6 +25,11 @@
         <select v-model.number="voiceId" style="width:auto;max-width:230px" @change="saveVoice">
           <option v-for="v in meta.voices" :key="v.id" :value="v.id">{{ v.name }}</option>
         </select>
+        <!-- 引擎没起来时就在音色旁边直接把引擎拉起来（v1.9.38），不用再跑去「效率工具 → 语音配音」 -->
+        <button v-if="canStartEngine" class="small" :disabled="warming" :title="engineHint" @click="warmup">
+          {{ warming ? '启动中…' : (enginePhase === 'error' ? '↻ 重试启动引擎' : '▶ 启动引擎') }}
+        </button>
+        <span v-if="engineRunning && !engineReady" class="muted">{{ enginePhaseText }}</span>
         <span class="grow"></span>
         <input v-model="q" placeholder="搜故事名 / 概要" style="width:170px" @keyup.enter="load(1)" />
         <button class="small" @click="load(1)">🔍 搜索</button>
@@ -154,7 +159,7 @@
 // 服务端：server/routes/storyRoutes.js（/api/story/*）+ server/services/storyService.js。
 // 列表走服务端分页（默认 15 行，可选 5/15/30/50/100），故事名/概要模糊搜；
 // 音频是 WAV（服务端合成的成品拷在 data/story-audio/，不随合成缓存淘汰）。
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { api } from '../api';
 
 const PAGE_SIZES = [5, 15, 30, 50, 100];
@@ -180,12 +185,31 @@ const gen = ref({ show: false, style: '', topic: '', busy: false });
 
 const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 const allChecked = computed(() => rows.value.length > 0 && checkedIds.value.length === rows.value.length);
-// 引擎没就绪时提前说清楚（否则用户点「转音频」只会拿到一句引擎报错）
+
+// 引擎状态（v1.9.38：不再把用户赶去「效率工具 → 语音配音」，音色旁边直接就能启动）
+const engine = computed(() => meta.value.engine || {});
+const enginePhase = computed(() => String(engine.value.phase || ''));
+const engineReady = computed(() => enginePhase.value === 'ready');
+const warming = ref(false);
+let engineTimer = null; let engineTicks = 0;
+// 未启动 / 启动失败（=可重试）时才给按钮；下载中、加载中只显示进度文字，不重复给按钮
+const canStartEngine = computed(() => !!engine.value.installed && !engineReady.value
+  && ['', 'stopped', 'error'].includes(enginePhase.value));
+// 引擎没就绪时提前说清楚（否则用户点「转音频」只会拿到一句引擎报错）。
+// 已安装的情况下不再说这句——旁边就是「▶ 启动引擎」，指路文字纯属噪音，
+// 而且引擎一旦启动（下载中/加载中）这段必须消失（用户明确要求）。
 const engineWarn = computed(() => {
-  const e = meta.value.engine || {};
-  if (e.phase === 'ready') return '';
-  if (!e.installed) return '音频引擎未安装：去「效率工具 → 语音配音」点一键安装后，这里才能把文字转成音频。';
-  return `音频引擎尚未就绪（${e.phase || '未启动'}）：去「效率工具 → 语音配音」点「启动引擎」，首次需下载约 670MB 模型。`;
+  if (engineReady.value) return '';
+  if (!engine.value.installed) return '音频引擎未安装：去「效率工具 → 语音配音」点一键安装后，这里才能把文字转成音频。';
+  return '';
+});
+const PHASE_TEXT = { downloading: '模型下载中（约 670MB，仅首次）…', loading: '模型加载中…', starting: '启动中…', warming: '预热中…' };
+const enginePhaseText = computed(() => PHASE_TEXT[enginePhase.value] || `引擎状态：${enginePhase.value}`);
+const engineRunning = computed(() => !!engine.value.installed && !!enginePhase.value
+  && !engineReady.value && !canStartEngine.value);
+const engineHint = computed(() => {
+  if (enginePhase.value === 'error') return '上次启动失败，点这里重试' + (engine.value.error ? '：' + engine.value.error : '');
+  return '启动音频引擎（首次需下载约 670MB 语音模型）';
 });
 
 const fmtDur = (s) => {
@@ -206,6 +230,39 @@ async function loadMeta() {
   } catch (e) { flash('音色/风格读取失败：' + e.message, 'err'); }
 }
 function saveVoice() { try { localStorage.setItem('story_voice', String(voiceId.value)); } catch { /* 隐私模式 */ } }
+
+// 启动音频引擎：首次要下 ~670MB 模型，POST 只负责把进程拉起来，进度靠轮询 /story/meta 的 engine.phase。
+// 轮询只覆盖 engine 字段——绝不调 loadMeta()（那会重算 voiceId，把用户刚选的音色改掉）。
+async function warmup() {
+  if (warming.value) return;
+  warming.value = true;
+  try {
+    await api.post('/tts/engine/warmup', {});
+    flash('音频引擎正在启动，首次需下载约 670MB 模型，期间可以离开本页。');
+    pollEngine();
+  } catch (e) {
+    flash('引擎启动失败：' + e.message, 'err');
+  } finally { warming.value = false; }
+}
+function pollEngine() {
+  if (engineTimer) clearTimeout(engineTimer);
+  engineTicks = 0;
+  const tick = async () => {
+    engineTicks++;
+    try {
+      const m = await api.get('/story/meta');
+      if (m && m.engine) meta.value = { ...meta.value, engine: m.engine };
+    } catch { /* 轮询失败不打扰用户，下一轮再试 */ }
+    const p = enginePhase.value;
+    if (p === 'ready') { engineTimer = null; flash('音频引擎已就绪，现在可以把文字转成音频了。'); return; }
+    if (p === 'error') { engineTimer = null; flash('音频引擎启动失败：' + (engine.value.error || '未知错误'), 'err'); return; }
+    if (p === 'stopped') { engineTimer = null; return; }   // 进程没起来：按钮会自己回来，等用户重试
+    if (engineTicks > 400) { engineTimer = null; return; }  // 20 分钟上限，别无限轮询
+    engineTimer = setTimeout(tick, 3000);
+  };
+  engineTimer = setTimeout(tick, 1500);
+}
+onUnmounted(() => { if (engineTimer) clearTimeout(engineTimer); });
 
 async function load(p = page.value) {
   try {
