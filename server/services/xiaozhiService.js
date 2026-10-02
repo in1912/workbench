@@ -40,18 +40,21 @@ const DEFAULT_CFG = {
   paths: {}, // 能力探测路径覆盖（admin 在面板改：srcDir/esptool/idfExportBat/idfGitDir/serialPort）
   // 语音查询工作台数据（v1.9.31）：uid=查谁的租户库（null=未配置，ask 直接回「没配」）
   query: { uid: null, max_results: 10, max_chars: 120, ai_timeout_ms: 6000 },
-  // 对接 NAS Hermes agent（v1.9.31）：默认关闭；密钥单独存 AGENT_KEY_KEY，不放这里（getConfig 会整包回前端）。
-  // base_url / model 给的是当前这台 NAS 的实测值（v1.9.31 轮次），面板里可改——
-  // 产品化给别的用户用时，这两项就是「填自己家 agent 地址」的位置。密钥**不给默认值**，必须自己填。
+  // 对接自家 agent（v1.9.31）：默认关闭；密钥单独存 AGENT_KEY_KEY，不放这里（getConfig 会整包回前端）。
+  // base_url / model **不给默认值**（2026-10-03 脱敏：原先写的是开发机上那台的实测地址与档案名，
+  // 分发包里不该带任何真实内网地址）——面板里就是「填自己家 agent 地址和档案名」的位置。密钥同理必填。
   agent: {
     enabled: false, name: '贾维斯', aliases: [],
-    base_url: 'http://192.168.110.105:8642', model: 'fnnas-feishu',
+    base_url: '', model: '',
     require_name: true, rate_per_hour: 20, block_risky: true, sync_budget_ms: 8000,
   },
   // 官方 MCP 接入点（v1.9.31）：默认关闭；token 单独存 MCP_TOKEN_KEY（url 不含 token，可以明文存）
   mcp: { enabled: false, url: '' },
-  // 屏幕【测试】按钮（v1.9.36）：自检消息走哪条 IM——只发一条，不双发（用户指定）
-  test: { channel: 'dingtalk' }, // 'dingtalk' | 'feishu'
+  // 屏幕【测试】按钮（v1.9.36）：自检消息走哪条 IM——只发一条，不双发（用户指定）。
+  // v1.9.37 默认改为 **feishu**：飞书才是这台机器真正在用的默认 IM（钉钉那条是历史遗留，用户明确
+  // 说过「我没需要过钉钉的对接」）。原先默认 'dingtalk' 的后果很直观——面板下拉没动过时，板子按
+  // 【测试】永远只发钉钉，飞书一个字都收不到，看着就是「按钮没反应」。
+  test: { channel: 'feishu' }, // 'feishu'（默认） | 'dingtalk'
 };
 
 function getConfig() {
@@ -566,7 +569,7 @@ function matchedCategory(q) {
   return null;
 }
 // 「纯类别问法」：整句就是在问这一类东西（「我的日程」「帮我查一下笔记有几条」），
-// 而不是在问某件具体的事（「关于泛微会议的笔记」）。
+// 而不是在问某件具体的事（「关于宏远会议的笔记」）。
 // 判据 = 剥掉疑问词 + 全部类别词 + 量词/语气词后，剩不下什么。
 // 为什么必须区分（v1.9.34，生产实测）：检索是「按候选串逐个试、第一个有结果就返回」，
 // 而「日程」二字在生产数据里有 6 条笔记/剪贴板命中（如「家庭驾驶舱…日程管理…」），
@@ -578,7 +581,7 @@ function pureCategoryQuery(q) {
   // 时间词同样剥掉：「本月日程」「这个月有什么安排」问的还是那一类东西，只是加了范围
   for (const w of TIME_WORDS) rest = rest.split(w).join('');
   // 剩下的若全是「问」的字（查/看/找/说…）与语气词，就当纯类别问法；
-  // 「查出我的日程」「帮我看看待办」都是这一类，而「关于泛微会议的笔记」会剩下「泛微」→ 不算
+  // 「查出我的日程」「帮我看看待办」都是这一类，而「关于宏远会议的笔记」会剩下「宏远」→ 不算
   rest = rest.replace(/[几多有个条项件篇笔封次量数了的一共总呢吗啊吧么？?，,。.、!！~～\s查看见找搜询闻听说讲列显示告诉知道介绍帮给出处来去把让请我你他她它们和与及等]/g, '');
   return rest.length < 2;
 }
@@ -660,7 +663,7 @@ function countAll(tdb, range) {
 }
 
 // ---------- 练琴时长（v1.9.34，用户报障） ----------
-// 用户对小智说「查徐诗媛的练琴时长」，回的是「查不到，只能看到这个菜单」，实际有 45 分钟有效时长。
+// 用户对小智说「查小雨的练琴时长」，回的是「查不到，只能看到这个菜单」，实际有 45 分钟有效时长。
 // 两层原因：① `piano_records` **只存主库**（db.js 注明），而语音检索走的是配置用户的**租户库**；
 // ② 它也不在 searchService 的 10 张表里——字面「练琴」只能撞到菜单/说明类文本，所以听到的是「菜单」。
 // 时长是 SUM 而不是一条条记录，所以单开一条统计通道（同 countAll 的思路）。
@@ -678,7 +681,7 @@ function pianoStats(uid, range) {
       COUNT(*) AS n
     FROM piano_records WHERE user_id = ?${rc.sql ? ` AND ${rc.sql}` : ''}`).get(uid, ...rc.params);
 }
-// 问句里点名了谁？——「徐诗媛的练琴时长」里的名字优先于面板里配的默认查询用户
+// 问句里点名了谁？——「小雨的练琴时长」里的名字优先于面板里配的默认查询用户
 // （练琴是全家共享的数据，问的是谁就该答谁；名字 ≥2 字才参与匹配，防单字名乱撞）
 const userName = (u) => (u && (u.display_name || u.nickname || u.username)) || `用户#${u && u.id}`;
 function personInQuery(q) {
@@ -1064,7 +1067,25 @@ async function runSelfTest() {
 
   // 发送。两种 IM 的失败行为不一致，一律包起来：
   // 钉钉 pushIfBound 未绑定回 false、API 错**抛异常**；飞书 sendMarkdown 无会话直接**抛异常**。
-  const ch = cfg.test && cfg.test.channel === 'feishu' ? 'feishu' : 'dingtalk';
+  //
+  // 通道选择（v1.9.37 修）：v1.9.36 只看 test.channel，而它的默认值是 'dingtalk' —— 面板下拉没动过时，
+  // 屏幕【测试】按钮**永远只发钉钉**，飞书一个字都收不到；反过来若选了飞书、而「查谁的资料」那位成员
+  // **名下没配飞书会话**（飞书/钉钉配置都是按人按租户存的），按钮同样白按。测试按钮就是拿来验链路的，
+  // 不该因为一个下拉没改或配置挂在别人名下而静默失效。
+  // 现在：用户选的通道**确实配好了**就用它（仍然只发一条，不双发）；没配好而另一条配好了就自动改走那条，
+  // 并在回执里点明（板子上直接念出「你选的是钉钉，那位成员名下没配，已改走飞书」）；两条都没配好则照旧如实报错。
+  const want = cfg.test && cfg.test.channel === 'feishu' ? 'feishu' : 'dingtalk';
+  const other = want === 'feishu' ? 'dingtalk' : 'feishu';
+  const avail = { feishu: false, dingtalk: false };
+  if (tdb) {
+    try { const fc = feishuService.getConfig(tdb); avail.feishu = !!(fc.app_id && fc.app_secret && (fc.targets || []).length); } catch { avail.feishu = false; }
+    try { const dc = dingtalkService.getConfig(tdb); avail.dingtalk = !!(dc.enabled && dc.app_key && dc.app_secret && dc.userid); } catch { avail.dingtalk = false; }
+  }
+  const ch = avail[want] ? want : (avail[other] ? other : want);
+  const switched = ch !== want;
+  const chName = ch === 'feishu' ? '飞书' : '钉钉';
+  const wantName = want === 'feishu' ? '飞书' : '钉钉';
+
   let sent = false; let err = '';
   if (!tdb) err = '没在智能板配置里指定「查谁的资料」成员，不知道发给谁';
   else {
@@ -1074,7 +1095,7 @@ async function runSelfTest() {
         sent = await dingtalkService.pushIfBound(tdb, body);
         if (!sent) err = `${who.username} 还没绑定钉钉（去设置页绑一下）`;
       }
-    } catch (e) { err = e.message; }
+    } catch (e) { err = `${chName}（${who.username} 名下）：${e.message}`; }
   }
 
   logAgent({
@@ -1082,11 +1103,13 @@ async function runSelfTest() {
     result: body.replace(/\n/g, ' / ').slice(0, 300), mode: 'button', ms: Date.now() - t0,
   });
 
-  // 屏幕上一句话能显示完的短回执（≤950 字节，fitSpeech 兜底）
+  // 屏幕上一句话能显示完的短回执（≤950 字节，fitSpeech 兜底）。
+  // 兜底改动要放在**最前面**：err 可能很长，clampSpeech 从尾部截断，改动理由不能被截掉。
+  const note = switched ? `你选的是${wantName}，但${who.username}名下没配，已自动改走${chName}。` : '';
   const short = err
-    ? `测试消息没发出去：${err}`
-    : `测试消息已发到${ch === 'feishu' ? '飞书' : '钉钉'}。${mcp.connected ? '接入点已连接' : '接入点未连接'}；${agentReady ? `${ag.name}连通` : `${ag.name}不可用`}`;
-  return fitSpeech({ ok: !err, sent, channel: ch, message: clampSpeech(short) });
+    ? `测试消息没发出去：${note}${err}`
+    : `测试消息已发到${chName}。${note}${mcp.connected ? '接入点已连接' : '接入点未连接'}；${agentReady ? `${ag.name}连通` : `${ag.name}不可用`}`;
+  return fitSpeech({ ok: !err, sent, channel: ch, switched, message: clampSpeech(short) });
 }
 
 // 通道 A（官方 MCP 接入点）的连接状态：由 xiaozhiMcpBridge 回写，面板读它显示状态灯。

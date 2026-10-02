@@ -1,7 +1,9 @@
 // build-dist-packages.mjs —— 生成三端分发压缩包（Windows / macOS / Docker），全部不含个人数据。
 // 产物落在仓库根目录（用户指定）：全能工作台-<版本>-windows.zip / -macos.zip / -docker.zip
 // 原则：只带「能跑起来的最小运行集」——data/ 一律空壳、Logs/ 不带、TTS 模型权重与合成语音缓存不带、
-//       fpk 安装包不带、web/dist 只带最新一份；img/ 要带（README 的模块截图，2026-10-02 用户要求图片必须可用）。
+//       fpk 安装包不带、web/dist 只带最新一份。
+//       **img/ 不带（2026-10-03 用户定的脱敏口径）**：那 15 张界面截图是实拍，含账号名、真实地址与家庭照片；
+//       仓库里照旧保留（在线 README 配图正常），但分发包里另存一份摘掉配图行的 README——见 stripReadmeImages()。
 // 用法：node scripts/build-dist-packages.mjs [--out <目录>]
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -106,23 +108,38 @@ function deployNote(variant) {
       '· 本包不含 node_modules，依赖在 docker build 时安装（走 npmmirror 国内镜像）。',
     ],
   };
-  return [...common, ...byVariant[variant], '', '完整功能说明与截图见 README.md。'].join('\n');
+  return [...common, ...byVariant[variant], '', '完整功能说明见 README.md（界面截图见项目主页，本包不含）。'].join('\n');
+}
+
+// 分发包里的 README：摘掉所有配图行——img/ 不进包，留着就是一堆裂图。
+// 只改暂存副本，仓库里的 README.md 一字不动（在线 README 的配图照旧正常）。
+function stripReadmeImages(STAGE) {
+  const p = A(STAGE, 'README.md');
+  if (!fs.existsSync(p)) return;
+  const kept = fs.readFileSync(p, 'utf8').split(/\r?\n/).filter((l) => !/^\s*!\[[^\]]*\]\(img\//.test(l));
+  const out = kept.join('\n').replace(/\n{3,}/g, '\n\n');
+  const note = [
+    '> **本分发包不含界面截图**——截图是实拍的运行界面（含个人数据），故不随包分发；',
+    '> 带截图的完整文档见项目主页的 README。',
+    '',
+  ].join('\n');
+  fs.writeFileSync(p, out.replace(/^(#\s[^\n]*\n)/, `$1\n${note}`), 'utf8');
 }
 
 const VARIANTS = [
   {
     key: 'windows', label: 'Windows',
-    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['img'], ['node_modules']],
+    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['node_modules']],
     files: ['package.json', 'package-lock.json', 'README.md', 'start.bat', '.gitignore', '.gitattributes'],
   },
   {
     key: 'macos', label: 'macOS',
-    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['scripts'], ['img'], ['node_modules']],
+    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['scripts'], ['node_modules']],
     files: ['package.json', 'package-lock.json', 'README.md', 'start.command', '.gitignore', '.gitattributes'],
   },
   {
     key: 'docker', label: 'Docker',
-    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['img']],
+    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts']],
     files: ['package.json', 'package-lock.json', 'README.md', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'pack-deploy.sh', '.gitignore', '.gitattributes'],
   },
 ];
@@ -143,6 +160,7 @@ for (const v of VARIANTS) {
   const xf = XF_COMMON.map((p) => ['/XF', p]).flat();
   for (const seg of v.dirs) rc(A(...seg), STAGE, [...xd, ...xf]);
   for (const f of v.files) cpFile(f, STAGE);
+  stripReadmeImages(STAGE);
 
   // 空 data/（让「数据在 data/」一目了然；首启自动建库）
   fs.mkdirSync(A(STAGE, 'data'), { recursive: true });

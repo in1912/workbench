@@ -88,17 +88,17 @@ try {
 
   console.log('— v1.9.34：类别词被别的表「劫持」（生产实测：「日程」二字在 6 条笔记/剪贴板里命中，「我的日程」因此永远拿不到真日程）');
   tdb.prepare("INSERT INTO notes(title,content,category) VALUES(?,?,?)").run('工作台说明', '侧栏有 新闻 邮箱 笔记 日程管理 听写 等入口', 'general');
-  tdb.prepare("INSERT INTO notes(title,content,category) VALUES(?,?,?)").run('泛微沟通会议', '泛微会议要点：OA 与金蝶协作', 'general');
+  tdb.prepare("INSERT INTO notes(title,content,category) VALUES(?,?,?)").run('宏远沟通会议', '宏远会议要点：OA 与金蝶协作', 'general');
   ok(searchService.search(tdb, '日程').results.some((r) => r.type === '笔记'), '字面「日程」确实先命中了笔记（复现生产前提）');
   const sh = svc.searchWithFallback(tdb, '我的日程');
   ok(sh.results.length > 0 && sh.results.every((r) => r.type === '日程'),
     `「我的日程」不再被笔记劫持（落到「${sh.used}」，首条「${sh.results[0]?.title}」）`);
   const sh2 = svc.searchWithFallback(tdb, '查出我的日程');
   ok(sh2.results.length > 0 && sh2.results.every((r) => r.type === '日程'), '「查出我的日程」这类带问句动词的同样认成纯类别问法');
-  ok(svc.pureCategoryQuery('我的日程') && svc.pureCategoryQuery('帮我查一下我的笔记有几篇') && !svc.pureCategoryQuery('关于泛微会议的笔记'),
-    '纯类别问法判定：我的日程 ✓ / 笔记有几篇 ✓ / 关于泛微会议的笔记 ✗');
-  const sh3 = svc.searchWithFallback(tdb, '关于泛微会议的笔记');
-  ok(sh3.results.some((r) => r.title === '泛微沟通会议'), `问具体内容时仍按内容检索，不被类别兜底抢走（落到「${sh3.used}」）`);
+  ok(svc.pureCategoryQuery('我的日程') && svc.pureCategoryQuery('帮我查一下我的笔记有几篇') && !svc.pureCategoryQuery('关于宏远会议的笔记'),
+    '纯类别问法判定：我的日程 ✓ / 笔记有几篇 ✓ / 关于宏远会议的笔记 ✗');
+  const sh3 = svc.searchWithFallback(tdb, '关于宏远会议的笔记');
+  ok(sh3.results.some((r) => r.title === '宏远沟通会议'), `问具体内容时仍按内容检索，不被类别兜底抢走（落到「${sh3.used}」）`);
   const a4 = await svc.askWorkbench('查出我的日程');
   ok(a4.ok && a4.message.includes('牙科复诊'), `askWorkbench「查出我的日程」也拿得到真日程（${String(a4.message).slice(0, 40)}）`);
 
@@ -127,17 +127,17 @@ try {
   const ac = await svc.askWorkbench('本月有几条日程');
   ok(ac.ok && /本月：.*日程 \d+ 条/.test(ac.message), `计数也按月份过滤（${String(ac.message).slice(0, 40)}）`);
 
-  console.log('— v1.9.34：练琴时长（用户报障「查徐诗媛的练琴时长」回「查不到，只能看到这个菜单」）');
+  console.log('— v1.9.34：练琴时长（用户报障「查小雨的练琴时长」回「查不到，只能看到这个菜单」）');
   const pianoUid = Number(db.prepare("INSERT INTO users(username,password_hash,role,display_name) VALUES(?,?,?,?)")
-    .run('xushiyuan', 'x', 'user', '徐诗媛').lastInsertRowid);
+    .run('xiaoyu', 'x', 'user', '小雨').lastInsertRowid);
   const insP = db.prepare("INSERT INTO piano_records(user_id,user_name,duration_sec,valid_sec,confirmed,started_at) VALUES(?,?,?,?,?,?)");
-  insP.run(pianoUid, '徐诗媛', 2700, 2700, 1, `${today} 19:00`);   // 45 分钟，已确认
-  insP.run(pianoUid, '徐诗媛', 600, 600, 0, `${oldDay} 19:00`);    // 未确认，不该混进「有效」
+  insP.run(pianoUid, '小雨', 2700, 2700, 1, `${today} 19:00`);   // 45 分钟，已确认
+  insP.run(pianoUid, '小雨', 600, 600, 0, `${oldDay} 19:00`);    // 未确认，不该混进「有效」
   ok(svc.searchWithFallback(tdb, '练琴').results.length === 0, '检索里根本没有练琴数据（复现生产：字面只能撞到菜单/说明类文本）');
-  const pa = await svc.askWorkbench('徐诗媛的练琴时长');
-  ok(pa.ok && pa.message.includes('45 分钟'), `「徐诗媛的练琴时长」答出 45 分钟（实际「${String(pa.message).slice(0, 40)}」）`);
+  const pa = await svc.askWorkbench('小雨的练琴时长');
+  ok(pa.ok && pa.message.includes('45 分钟'), `「小雨的练琴时长」答出 45 分钟（实际「${String(pa.message).slice(0, 40)}」）`);
   ok(!pa.message.includes('50 分钟'), '未确认的 10 分钟没混进有效时长（口径与面板 /piano/stats 一致）');
-  const pm = await svc.askWorkbench('徐诗媛本月练琴时长');
+  const pm = await svc.askWorkbench('小雨本月练琴时长');
   ok(pm.ok && pm.message.includes('本月') && pm.message.includes('45 分钟'), `带月份范围也对（实际「${String(pm.message).slice(0, 40)}」）`);
   const pd = await svc.askWorkbench('练琴');
   ok(pd.ok && pd.message.includes('没有找到'), '没点名时回配置的查询用户，没记录就如实说没有');
@@ -166,8 +166,8 @@ try {
     const hermes = await import('../server/services/hermesService.js');
     const ce = hermes.chatEndpoint;
     // 面板里让大家填的就是「IP:端口」，这一段必须由我们补——实测 POST /chat/completions → 404
-    ok(ce('http://192.168.110.105:8642') === 'http://192.168.110.105:8642/v1/chat/completions', '只填 IP:端口 → 自动补 /v1/chat/completions', ce('http://192.168.110.105:8642'));
-    ok(ce('http://192.168.110.105:8642/') === 'http://192.168.110.105:8642/v1/chat/completions', '尾斜杠容忍', ce('http://192.168.110.105:8642/'));
+    ok(ce('http://192.168.1.100:8642') === 'http://192.168.1.100:8642/v1/chat/completions', '只填 IP:端口 → 自动补 /v1/chat/completions', ce('http://192.168.1.100:8642'));
+    ok(ce('http://192.168.1.100:8642/') === 'http://192.168.1.100:8642/v1/chat/completions', '尾斜杠容忍', ce('http://192.168.1.100:8642/'));
     ok(ce('http://h:8642/v1') === 'http://h:8642/v1/chat/completions', '已带 /v1 不重复补', ce('http://h:8642/v1'));
     ok(ce('http://h:8642/v1/chat/completions') === 'http://h:8642/v1/chat/completions', '整条接口地址粘进来也不双重后缀', ce('http://h:8642/v1/chat/completions'));
     ok(ce('https://api.deepseek.com') === 'https://api.deepseek.com/v1/chat/completions', 'https 无路径同理', ce('https://api.deepseek.com'));
@@ -263,7 +263,11 @@ try {
   ok(svc.getPublicConfig().agent.has_key === false, '清除后 has_key 转假');
   const d = svc.getConfig().agent;
   ok(!d.enabled, 'agent 默认关闭（不做任何事就等于不存在）');
-  ok(d.base_url && d.model, `agent 地址/模型有默认值可直接用（${d.base_url} / ${d.model}）`);
+  // 2026-10-03 脱敏：base_url / model 的默认值已置空——原先写的是开发机上那台 agent 的真实内网地址
+  // 与档案名，公开仓库/分发包里不该带。原先这条断言「有默认值可直接用」随之作废，改成断言结构键齐全。
+  ok('base_url' in d && 'model' in d && typeof d.base_url === 'string' && typeof d.model === 'string',
+    `agent 配置键齐全（base_url/model 都在，值由用户在面板里填：${JSON.stringify(d.base_url)} / ${JSON.stringify(d.model)}）`);
+  ok(d.base_url === '' && d.model === '', '默认不再内置任何真实内网地址/档案名（= 公开仓库脱敏后的预期）');
   ok(svc.getConfig().mcp.enabled === false, '官方接入点默认关闭');
 
   console.log('— uid 必须真实存在（getTenantDb 对任意数字都会建空库，光看数字会漏）');

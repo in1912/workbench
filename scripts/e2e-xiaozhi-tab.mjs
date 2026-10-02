@@ -60,7 +60,7 @@ try {
   console.log('— 配置读写与校验');
   ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { wake: { pinyin: 'Xiao Yang-Yang', display: '小阳阳', threshold: 20 } } })).status === 400, '非法拼音（大写/连字符）被拒 400');
   ok((await api('PUT', '/api/xiaozhi/config', { token: T, body: { wake: { pinyin: 'xiao yang yang', display: '小阳阳', threshold: 0 } } })).status === 400, '阈值越界（0）被拒 400');
-  const put = await api('PUT', '/api/xiaozhi/config', { token: T, body: { wake: { pinyin: 'xiao yang yang', display: '小阳阳', threshold: 18 }, channel: 'speaker', bridge: { url: 'http://192.168.110.105:3000/api/xiaozhi/bridge' } } });
+  const put = await api('PUT', '/api/xiaozhi/config', { token: T, body: { wake: { pinyin: 'xiao yang yang', display: '小阳阳', threshold: 18 }, channel: 'speaker', bridge: { url: 'http://192.168.1.100:3000/api/xiaozhi/bridge' } } });
   ok(put.status === 200 && put.j.config.wake.threshold === 18 && put.j.config.channel === 'speaker', '合法配置保存成功（阈值/通道回读一致）');
   const spPut = await api('PUT', '/api/xiaozhi/config', { token: T, body: { speaker: { did: '1149549826', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 } } });
   ok(spPut.status === 200 && spPut.j.config.speaker.did === '1149549826', '智能屏配置保存成功（did 是数字字符串，不误报「需为整数」——v1.9.12 生产回归）');
@@ -129,9 +129,9 @@ try {
   ok(poll2.status === 200 && poll2.j.photo_requested === false, '再次 poll 无指令（pending 已清）');
 
   console.log('— poll 自报 IP（v1.9.20：生产端口转发改写 remoteAddress 恒 127.0.0.1 的根治）');
-  const pollIp = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll', ip: '192.168.110.99' } });
+  const pollIp = await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll', ip: '192.168.1.99' } });
   ok(pollIp.status === 200 && pollIp.j.ok === true, 'poll 带自报 ip 字段被接受');
-  ok((await api('GET', '/api/xiaozhi/board', { token: T })).j.ip === '192.168.110.99', '自报 ip 优先于 remoteAddress 登记');
+  ok((await api('GET', '/api/xiaozhi/board', { token: T })).j.ip === '192.168.1.99', '自报 ip 优先于 remoteAddress 登记');
   await api('POST', `/api/xiaozhi/bridge?k=${cfg.j.bridge_key}`, { body: { op: 'poll', ip: 'not-an-ip' } });
   ok((await api('GET', '/api/xiaozhi/board', { token: T })).j.ip === '127.0.0.1', '非法自报 ip 回退 remoteAddress（旧固件兼容）');
 
@@ -625,8 +625,8 @@ try {
     const sel = p.locator('.xz-field', { hasText: '屏幕【测试】按钮走哪条' }).locator('select');
     ok((await sel.count()) === 1, '「屏幕【测试】按钮走哪条」下拉渲染出来了');
     const opts = (await sel.locator('option').allInnerTexts()).map((s) => s.trim());
-    ok(JSON.stringify(opts) === JSON.stringify(['钉钉', '飞书']), '只有钉钉/飞书两项（与后端白名单一致）', opts.join(','));
-    ok((await sel.inputValue()) === 'dingtalk', '默认钉钉');
+    ok(JSON.stringify(opts) === JSON.stringify(['飞书', '钉钉']), '只有飞书/钉钉两项（与后端白名单一致，飞书在前）', opts.join(','));
+    ok((await sel.inputValue()) === 'feishu', '默认飞书（v1.9.37：飞书是默认 IM，钉钉只是备选）');
     ok((await p.locator('text=只发一条，不双发').count()) === 1, '旁边写清了「只发一条、不双发」和收件人是谁');
 
     await sel.selectOption('feishu');
@@ -640,12 +640,18 @@ try {
     await p.waitForSelector('text=🤖 转交家里 agent', { timeout: 10000 });
     const sel2 = p.locator('.xz-field', { hasText: '屏幕【测试】按钮走哪条' }).locator('select');
     ok((await sel2.inputValue()) === 'feishu', '刷新后回显 feishu（界面上看得见 = 库里存的对）');
-    // 复位成钉钉，别把这个状态留给手工继续跑的场景
+    // 改回钉钉也能存（不是单向阀）
     await sel2.selectOption('dingtalk');
     await p.locator('button', { hasText: '保存语音助手配置' }).click();
     await p.waitForSelector('.msg.ok', { timeout: 8000 });
     await p.waitForTimeout(600);
     ok((await api('GET', '/api/xiaozhi/config', { token: T })).j.config.test.channel === 'dingtalk', '改回钉钉也能存（不是单向阀）');
+    // 复位成飞书（新默认），别把这个状态留给手工继续跑的场景
+    await sel2.selectOption('feishu');
+    await p.locator('button', { hasText: '保存语音助手配置' }).click();
+    await p.waitForSelector('.msg.ok', { timeout: 8000 });
+    await p.waitForTimeout(600);
+    ok((await api('GET', '/api/xiaozhi/config', { token: T })).j.config.test.channel === 'feishu', '再改回飞书也存得下');
     ok(perr.length === 0, '页面无 JS 错误' + (perr.length ? '：' + perr[0] : ''));
     await br.close();
   } catch (e) {

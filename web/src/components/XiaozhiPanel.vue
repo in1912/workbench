@@ -153,7 +153,7 @@
           <div class="xz-form">
             <div class="xz-field">
               <label>构建机地址（装了 ESP-IDF 的工作台，留空则本机无固件可取）</label>
-              <input v-model="form.helper.url" placeholder="http://192.168.110.100:3000" />
+              <input v-model="form.helper.url" placeholder="http://192.168.1.100:3000" />
             </div>
           </div>
           <div class="xz-actions">
@@ -206,7 +206,7 @@
         <div class="xz-form">
           <div class="xz-field">
             <label>桥接地址（烧进固件；填 NAS 内网地址最快最稳）</label>
-            <input v-model="form.bridge.url" placeholder="http://192.168.110.105:3000/api/xiaozhi/bridge" />
+            <input v-model="form.bridge.url" placeholder="http://192.168.1.100:3000/api/xiaozhi/bridge" />
           </div>
         </div>
         <div class="xz-kv">
@@ -473,8 +473,8 @@
         </div>
         <div class="xz-field">
           <label>Agent 名</label>
-          <input v-model="form.agent.model" :disabled="!isAdmin" placeholder="fnnas-feishu" />
-          <span class="xz-hint">填 agent 的 <b>profile 档案名</b>（Hermes 里就是那个档案 / 模型 ID，如 <code>fnnas-feishu</code>）——不是给它起的说话名，那个填在下面</span>
+          <input v-model="form.agent.model" :disabled="!isAdmin" placeholder="my-agent" />
+          <span class="xz-hint">填 agent 的 <b>profile 档案名</b>（Hermes 里就是那个档案 / 模型 ID，如 <code>my-agent</code>）——不是给它起的说话名，那个填在下面</span>
         </div>
         <div class="xz-field">
           <label>API 密钥</label>
@@ -515,15 +515,16 @@
           <label>屏幕【测试】按钮走哪条</label>
           <div class="xz-inline">
             <select v-model="form.test.channel" class="xz-mini" :disabled="!isAdmin">
-              <option value="dingtalk">钉钉</option>
               <option value="feishu">飞书</option>
+              <option value="dingtalk">钉钉</option>
             </select>
           </div>
         </div>
       </div>
       <p class="xz-muted" style="margin:8px 0 0">
         「屏幕【测试】按钮走哪条」= 板上第四个按钮按下后，那条自检消息（接入点状态 / agent 连通性 / agent 查的本地天气）
-        从哪个 IM 发出来。<b>只发一条，不双发</b>；收件人是上面「查谁的资料」那位成员绑定的账号（钉钉绑定、飞书会话都是按人按租户存的）。
+        从哪个 IM 发出来。<b>默认飞书</b>（v1.9.37 起）；<b>只发一条，不双发</b>——若你选的那条压根没配好、而另一条配好了，
+        会自动改走能用的那条并在板子上说明。收件人是上面「查谁的资料」那位成员绑定的账号（飞书会话、钉钉绑定都是按人按租户存的）。
       </p>
       <div class="xz-cap xz-cap-warn" style="margin:10px 0 0">
         ⚠️ <b>超过「同步等待上限」的长任务，答案会从智能屏播出来，不是板子</b>——板子会先说「还在算，算好了我用智能屏告诉您」，
@@ -683,8 +684,8 @@ const form = reactive({
   agentKey: '',   // 只写不读：留空 = 保持原值，服务端也只回 has_key 布尔
   mcp: { enabled: false, url: '' },
   mcpToken: '',
-  // v1.9.36 屏幕【测试】按钮走哪条 IM
-  test: { channel: 'dingtalk' },
+  // v1.9.36 屏幕【测试】按钮走哪条 IM —— v1.9.37 起默认飞书（用户指定：飞书是默认 IM，钉钉不是）
+  test: { channel: 'feishu' },
 });
 const ports = ref([]);
 const busy = reactive({ ports: false, probe: false, spProbe: false, devs: false, photo: false, photos: false, chat: false, agentTest: false, agentLog: false, assistantSave: false, mcpState: false });
@@ -974,7 +975,7 @@ function syncForm(c) {
   form.mcp = { enabled: !!m.enabled, url: m.url || '' };
   form.mcpToken = '';
   const tst = c.test || {};
-  form.test = { channel: tst.channel === 'feishu' ? 'feishu' : 'dingtalk' };
+  form.test = { channel: tst.channel === 'dingtalk' ? 'dingtalk' : 'feishu' }; // 没存过 = 跟随新默认飞书
 }
 
 async function loadAll() {
@@ -1109,7 +1110,7 @@ async function saveConfig(extra = {}) {
       sync_budget_ms: Number(form.agent.sync_budget_ms) || 8000,
     },
     mcp: { enabled: !!form.mcp.enabled, url: form.mcp.url },
-    test: { channel: form.test.channel === 'feishu' ? 'feishu' : 'dingtalk' },
+    test: { channel: form.test.channel === 'dingtalk' ? 'dingtalk' : 'feishu' },
     ...(form.agentKey.trim() ? { agent_key: form.agentKey.trim() } : {}),
     ...(form.mcpToken.trim() ? { mcp_token: form.mcpToken.trim() } : {}),
     ...extra,

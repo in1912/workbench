@@ -556,8 +556,9 @@ router.delete('/business/skills/:id', (req, res) => {
 // 立即执行一个 Skill
 router.post('/business/skills/:id/run', async (req, res) => {
   try {
-    const result = await skillService.runSkillById(req.tdb, Number(req.params.id));
-    res.json({ ok: true, result });
+    // runSkill 回 { result, feishu }；feishu = { sent, error } —— 界面要如实显示飞书到底发出去没有
+    const r = await skillService.runSkillById(req.tdb, Number(req.params.id));
+    res.json({ ok: true, result: r.result, feishu: r.feishu });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -704,7 +705,7 @@ router.post('/ai/chat', async (req, res) => {
       const hit = skillService.matchSkill(tdb, lastText);
       if (hit) {
         const sys = tdb.prepare('SELECT name FROM business_systems WHERE id=?').get(hit.system_id);
-        const result = await skillService.runSkill(tdb, hit);
+        const { result } = await skillService.runSkill(tdb, hit); // 回 { result, feishu }，这里只取正文
         const content = `已执行业务任务「${hit.name}」（${sys?.name || '业务系统'}）\n\n${result}`;
         tdb.prepare('INSERT INTO ai_messages(session_id, role, content) VALUES(?,?,?)').run(sessionId, 'assistant', content);
         tdb.prepare("UPDATE ai_sessions SET updated_at=datetime('now','localtime') WHERE id=?").run(sessionId);
@@ -1105,8 +1106,10 @@ router.delete('/schedules/:id', (req, res) => {
   res.json({ ok: true });
 });
 router.post('/schedules/:id/run', async (req, res) => {
-  try { await skillService.runScheduleNow(req.tdb, Number(req.params.id)); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const r = await skillService.runScheduleNow(req.tdb, Number(req.params.id));
+    res.json({ ok: true, feishu: r && r.feishu });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ---------- 节假日服务（数据源可共享：开=主库统一配置（adminOnly 写），关=租户自配） ----------

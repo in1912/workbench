@@ -259,14 +259,14 @@ try {
   const noTime = await bridge({ op: 'ask', keywords: '我的日程' });
   ok(noTime.j.ok === true && noTime.j.message.includes('牙科复诊'), '不带时间词时行为不变（仍是未来优先）', noTime.j.message);
 
-  console.log('— v1.9.34：练琴时长（用户报障「查徐诗媛的练琴时长」回「查不到，只能看到这个菜单」——钢琴数据在主库、且不在检索的 10 张表里）');
-  const pu = await api('POST', '/api/users', { token: T, body: { username: 'xushiyuan', password: 'piano123456', role: 'admin', display_name: '徐诗媛' } });
-  ok(Number.isInteger(pu.j.id), '建一个「徐诗媛」账号（练琴记录挂在人名下）', JSON.stringify(pu.j).slice(0, 80));
+  console.log('— v1.9.34：练琴时长（用户报障「查小雨的练琴时长」回「查不到，只能看到这个菜单」——钢琴数据在主库、且不在检索的 10 张表里）');
+  const pu = await api('POST', '/api/users', { token: T, body: { username: 'xiaoyu', password: 'piano123456', role: 'admin', display_name: '小雨' } });
+  ok(Number.isInteger(pu.j.id), '建一个「小雨」账号（练琴记录挂在人名下）', JSON.stringify(pu.j).slice(0, 80));
   ok((await bridge({ op: 'ask', keywords: '练琴' })).j.message.includes('没有找到'),
     '检索里没有练琴数据（复现生产：字面「练琴」只能撞到菜单/说明类文本）');
-  const pl = await api('POST', '/api/auth/login', { body: { username: 'xushiyuan', password: 'piano123456' } });
+  const pl = await api('POST', '/api/auth/login', { body: { username: 'xiaoyu', password: 'piano123456' } });
   const PT = pl.j.b?.token || pl.j.token;
-  ok(!!PT, '徐诗媛登录拿到 token');
+  ok(!!PT, '小雨登录拿到 token');
   const fd = new FormData();
   fd.append('duration_sec', '2700');
   fd.append('started_at', `${today} 19:00`);
@@ -276,9 +276,9 @@ try {
   ok(up.ok && Number.isInteger(upj.id), `上传一条 45 分钟练琴录音（id=${upj.id}）`, JSON.stringify(upj).slice(0, 120));
   ok((await api('PATCH', `/api/piano/confirm/${upj.id}`, { token: PT, body: { valid_sec: 2700 } })).status === 200,
     '确认为有效时长 45 分钟');
-  const pc = await bridge({ op: 'ask', keywords: '徐诗媛的练琴时长' });
-  ok(pc.j.ok === true && pc.j.message.includes('45 分钟'), `「徐诗媛的练琴时长」答出 45 分钟（实际「${String(pc.j.message).slice(0, 40)}」）`);
-  const pcm = await bridge({ op: 'ask', keywords: '徐诗媛本月练琴时长' });
+  const pc = await bridge({ op: 'ask', keywords: '小雨的练琴时长' });
+  ok(pc.j.ok === true && pc.j.message.includes('45 分钟'), `「小雨的练琴时长」答出 45 分钟（实际「${String(pc.j.message).slice(0, 40)}」）`);
+  const pcm = await bridge({ op: 'ask', keywords: '小雨本月练琴时长' });
   ok(pcm.j.ok === true && pcm.j.message.includes('本月') && pcm.j.message.includes('45 分钟'),
     `带月份范围也对（实际「${String(pcm.j.message).slice(0, 40)}」）`);
 
@@ -317,7 +317,7 @@ try {
   console.log('— delegate：三道闸');
   ok((await bridge({ op: 'delegate', request: '让贾维斯看看磁盘' })).j.ok === false, '未启用 agent 时 delegate 被拒');
   const en = await putCfg({
-    agent: { enabled: true, name: '贾维斯', aliases: ['老贾'], base_url: HERMES_BASE, model: 'fnnas-feishu', sync_budget_ms: 8000 },
+    agent: { enabled: true, name: '贾维斯', aliases: ['老贾'], base_url: HERMES_BASE, model: 'my-agent', sync_budget_ms: 8000 },
     agent_key: 'sk-hermes-fake',
   }, T);
   ok(en.status === 200 && en.j.config.agent.has_key === true, '启用 agent 且密钥已保存（只回 has_key 布尔）');
@@ -411,6 +411,22 @@ try {
   const st3 = await bridge({ op: 'selftest' });
   ok(st3.j.ok === false && /不知道发给谁/.test(st3.j.message), '没指定收件人时给出原因而不是静默失败', st3.j.message);
   await putCfg({ query: { uid } }, T);
+
+  // v1.9.37 通道自动兜底：选了钉钉、但那位成员名下没绑钉钉，而飞书会话是配好的 → 自动改走飞书。
+  // v1.9.36 只会硬发钉钉（默认值就是 dingtalk）→ 静默白按，用户看到的就是「按了测试按钮，飞书没反应」。
+  const fc = await api('POST', '/api/feishu/config', {
+    token: T,
+    body: { app_id: 'cli_x', app_secret: 's', targets: [{ receive_id: 'oc_test', receive_id_type: 'chat_id', name: '测试群' }] },
+  });
+  ok(fc.status === 200, '给该租户配上一个飞书会话（兜底用例的前置）', JSON.stringify(fc.j));
+  await putCfg({ test: { channel: 'dingtalk' } }, T);
+  const st4 = await bridge({ op: 'selftest' });
+  ok(st4.j.channel === 'feishu' && st4.j.switched === true,
+    '选了钉钉但没绑 → 自动改走飞书（测试按钮不再对着一辆空车按）', JSON.stringify(st4.j));
+  ok(/自动改走飞书/.test(st4.j.message || ''), '回执说清「已自动改走飞书」，板子能念出来', st4.j.message);
+  ok(st4.j.sent === false || /飞书/.test(st4.j.message), '走的是飞书那条通道（假凭证下失败也要如实说）', JSON.stringify(st4.j));
+  // 收尾：清掉飞书会话，别影响后面的用例
+  await api('POST', '/api/feishu/config', { token: T, body: { app_id: '', app_secret: '', targets: [] } });
 
   const btnLog = (await api('GET', '/api/xiaozhi/agent-log?limit=50', { token: T })).j.entries || [];
   ok(btnLog.some((e) => e.mode === 'button' && e.status === 'ok' && /灯已经关了/.test(e.result || '')),
