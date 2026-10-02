@@ -435,27 +435,117 @@ function searchCandidates(q) {
   }
   return [...new Set(out.filter(Boolean))].slice(0, 16);
 }
+// ---------- 时间范围理解（v1.9.34） ----------
+// 「本月日程」这种问法的根子有两层：① 字面「本月」不在任何一条日程里（子串匹配必 0 结果）；
+// ② 就算落到类别兜底，取的是「最近的 10 条」，把 9 月的两件事也念了出来（生产实测：
+// 用户问本月日程，听到的三件里两件是上个月的）。这里只解析相对时间词，给出 [from, to]
+// 两个 YYYY-MM-DD，由各表的日期列去过滤；绝对日期（「10 月 5 号」）不在此列，先不做。
+const pad2 = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const dayShift = (base, n) => new Date(base.getFullYear(), base.getMonth(), base.getDate() + n);
+// 周一为一周之首（中文习惯）：getDay() 周日=0，先映射成 1..7 再回退
+const weekStartOf = (d) => dayShift(d, -((d.getDay() + 6) % 7));
+const monthFirst = (y, m) => new Date(y, m, 1);
+const monthLast = (y, m) => new Date(y, m + 1, 0);
+const TIME_RANGE_RULES = [
+  [['今天', '今日'], '今天', (n) => ({ from: ymd(n), to: ymd(n) })],
+  [['明天', '明日'], '明天', (n) => ({ from: ymd(dayShift(n, 1)), to: ymd(dayShift(n, 1)) })],
+  [['后天'], '后天', (n) => ({ from: ymd(dayShift(n, 2)), to: ymd(dayShift(n, 2)) })],
+  [['昨天', '昨日'], '昨天', (n) => ({ from: ymd(dayShift(n, -1)), to: ymd(dayShift(n, -1)) })],
+  [['前天'], '前天', (n) => ({ from: ymd(dayShift(n, -2)), to: ymd(dayShift(n, -2)) })],
+  [['本周', '这周', '本星期', '这个星期', '这星期'], '本周', (n) => {
+    const s = weekStartOf(n);
+    return { from: ymd(s), to: ymd(dayShift(s, 6)) };
+  }],
+  [['上周', '上星期', '上个星期'], '上周', (n) => {
+    const s = dayShift(weekStartOf(n), -7);
+    return { from: ymd(s), to: ymd(dayShift(s, 6)) };
+  }],
+  [['下周', '下星期', '下个星期'], '下周', (n) => {
+    const s = dayShift(weekStartOf(n), 7);
+    return { from: ymd(s), to: ymd(dayShift(s, 6)) };
+  }],
+  [['本月', '这个月', '这月', '当月', '本月份', '本月度'], '本月', (n) => ({
+    from: ymd(monthFirst(n.getFullYear(), n.getMonth())),
+    to: ymd(monthLast(n.getFullYear(), n.getMonth())),
+  })],
+  [['上月', '上个月'], '上月', (n) => ({
+    from: ymd(monthFirst(n.getFullYear(), n.getMonth() - 1)),
+    to: ymd(monthLast(n.getFullYear(), n.getMonth() - 1)),
+  })],
+  [['下月', '下个月'], '下月', (n) => ({
+    from: ymd(monthFirst(n.getFullYear(), n.getMonth() + 1)),
+    to: ymd(monthLast(n.getFullYear(), n.getMonth() + 1)),
+  })],
+  [['今年', '本年'], '今年', (n) => ({ from: `${n.getFullYear()}-01-01`, to: `${n.getFullYear()}-12-31` })],
+  [['去年', '上年'], '去年', (n) => ({ from: `${n.getFullYear() - 1}-01-01`, to: `${n.getFullYear() - 1}-12-31` })],
+  [['明年', '下年'], '明年', (n) => ({ from: `${n.getFullYear() + 1}-01-01`, to: `${n.getFullYear() + 1}-12-31` })],
+  // 「最近」= 前后各 30 天：用户说「最近的笔记」多半既想看刚记的也想看快到的
+  [['最近', '近期', '近来', '这几天', '这段时间', '最近几天'], '最近', (n) => ({
+    from: ymd(dayShift(n, -30)), to: ymd(dayShift(n, 30)),
+  })],
+];
+const TIME_WORDS = TIME_RANGE_RULES.flatMap(([ws]) => ws);
+function parseTimeRange(q) {
+  const t = String(q || '').trim();
+  if (!t) return null;
+  const now = new Date();
+  for (const [words, label, fn] of TIME_RANGE_RULES) {
+    if (words.some((w) => t.includes(w))) return { label, ...fn(now) };
+  }
+  return null;
+}
+// 时间范围落到 SQL：日期列统一按前 10 个字符（YYYY-MM-DD）比，'YYYY-MM-DD HH:MM' 也吃得下
+function rangeClause(range, col) {
+  if (!range) return { sql: '', params: [] };
+  return { sql: `substr(COALESCE(${col}, ''), 1, 10) BETWEEN ? AND ?`, params: [range.from, range.to] };
+}
+
 // 类别词兜底：说「我的日程」时，字面「日程」不在**任何一条**日程里（标题是「牙科复诊」），
 // 子串匹配必然 0 结果——用户问的是「那张表里有什么」，不是「哪条里写了日程两个字」。
 // 只在候选串全部落空后才走，正常命中的查询一点不受影响。
+// 第二个参数是 parseTimeRange 的产物；给了就按该表的日期列过滤（v1.9.34）。
 const CATEGORY_FALLBACK = [
-  ['日程', ['日程', '安排', '行程', '会议'], (d) => {
+  ['日程', ['日程', '安排', '行程', '会议'], (d, range) => {
     const q = (where, order) => `SELECT id, title AS title, COALESCE(desc,'') AS c, COALESCE(start_time,'') AS t
       FROM events ${where} ORDER BY ${order} LIMIT 10`;
+    if (range) {
+      const rc = rangeClause(range, 'start_time');
+      return d.prepare(q(`WHERE ${rc.sql}`, 'start_time ASC')).all(...rc.params);
+    }
     const up = d.prepare(q("WHERE COALESCE(start_time,'') >= datetime('now','localtime')", 'start_time ASC')).all();
     // 未来的一件都没有时才回看最近的过去几条（用户问「我的日程」多半也想知道刚过去的那几件）
     return up.length ? up : d.prepare(q('', 'start_time DESC')).all();
   }],
-  ['笔记', ['笔记'], (d) => d.prepare('SELECT id, title AS title, content AS c, updated_at AS t FROM notes ORDER BY updated_at DESC LIMIT 10').all()],
-  ['待办', ['待办', '任务', 'todo'], (d) => d.prepare(`SELECT id, title AS title, COALESCE(desc,'') AS c, COALESCE(due_date,'') AS t
-    FROM todos WHERE COALESCE(done,0)=0 ORDER BY (COALESCE(due_date,'')='') ASC, due_date ASC LIMIT 10`).all()],
-  ['邮件', ['邮件', '邮箱', '收件箱'], (d) => d.prepare(`SELECT id, subject AS title, COALESCE(body, snippet, '') AS c, COALESCE(date, fetched_at, '') AS t
-    FROM emails ORDER BY id DESC LIMIT 10`).all()],
-  ['文件', ['文件', '存档'], (d) => d.prepare("SELECT id, filename AS title, COALESCE(text_content,'') AS c, created_at AS t FROM files ORDER BY id DESC LIMIT 10").all()],
-  ['账务', ['账务', '账单', '花销', '支出', '消费'], (d) => d.prepare(`SELECT id,
-    COALESCE(NULLIF(counterparty,''), NULLIF(goods,''), '(无对方)') AS title,
-    COALESCE(NULLIF(goods,''), NULLIF(remark,''), '') AS c,
-    COALESCE(NULLIF(pay_time,''), create_time, '') AS t FROM pay_bills ORDER BY id DESC LIMIT 10`).all()],
+  ['笔记', ['笔记'], (d, range) => {
+    const rc = rangeClause(range, 'updated_at');
+    return d.prepare(`SELECT id, title AS title, content AS c, updated_at AS t FROM notes
+      ${rc.sql ? `WHERE ${rc.sql}` : ''} ORDER BY updated_at DESC LIMIT 10`).all(...rc.params);
+  }],
+  ['待办', ['待办', '任务', 'todo'], (d, range) => {
+    const rc = rangeClause(range, 'due_date');
+    return d.prepare(`SELECT id, title AS title, COALESCE(desc,'') AS c, COALESCE(due_date,'') AS t
+      FROM todos WHERE COALESCE(done,0)=0${rc.sql ? ` AND ${rc.sql}` : ''}
+      ORDER BY (COALESCE(due_date,'')='') ASC, due_date ASC LIMIT 10`).all(...rc.params);
+  }],
+  ['邮件', ['邮件', '邮箱', '收件箱'], (d, range) => {
+    const rc = rangeClause(range, 'COALESCE(date, fetched_at)');
+    return d.prepare(`SELECT id, subject AS title, COALESCE(body, snippet, '') AS c, COALESCE(date, fetched_at, '') AS t
+      FROM emails ${rc.sql ? `WHERE ${rc.sql}` : ''} ORDER BY id DESC LIMIT 10`).all(...rc.params);
+  }],
+  ['文件', ['文件', '存档'], (d, range) => {
+    const rc = rangeClause(range, 'created_at');
+    return d.prepare(`SELECT id, filename AS title, COALESCE(text_content,'') AS c, created_at AS t FROM files
+      ${rc.sql ? `WHERE ${rc.sql}` : ''} ORDER BY id DESC LIMIT 10`).all(...rc.params);
+  }],
+  ['账务', ['账务', '账单', '花销', '支出', '消费'], (d, range) => {
+    const rc = rangeClause(range, "COALESCE(NULLIF(pay_time,''), create_time)");
+    return d.prepare(`SELECT id,
+      COALESCE(NULLIF(counterparty,''), NULLIF(goods,''), '(无对方)') AS title,
+      COALESCE(NULLIF(goods,''), NULLIF(remark,''), '') AS c,
+      COALESCE(NULLIF(pay_time,''), create_time, '') AS t FROM pay_bills
+      ${rc.sql ? `WHERE ${rc.sql}` : ''} ORDER BY id DESC LIMIT 10`).all(...rc.params);
+  }],
 ];
 // 问句里出现的第一个类别词（「我的日程」→ 日程）
 function matchedCategory(q) {
@@ -473,33 +563,40 @@ function matchedCategory(q) {
 function pureCategoryQuery(q) {
   let rest = stripQuestion(q);
   for (const [, words] of CATEGORY_FALLBACK) for (const w of words) rest = rest.split(w).join('');
+  // 时间词同样剥掉：「本月日程」「这个月有什么安排」问的还是那一类东西，只是加了范围
+  for (const w of TIME_WORDS) rest = rest.split(w).join('');
   // 剩下的若全是「问」的字（查/看/找/说…）与语气词，就当纯类别问法；
   // 「查出我的日程」「帮我看看待办」都是这一类，而「关于泛微会议的笔记」会剩下「泛微」→ 不算
   rest = rest.replace(/[几多有个条项件篇笔封次量数了的一共总呢吗啊吧么？?，,。.、!！~～\s查看见找搜询闻听说讲列显示告诉知道介绍帮给出处来去把让请我你他她它们和与及等]/g, '');
   return rest.length < 2;
 }
-function categoryResults(tdb, q) {
+function categoryResults(tdb, q, range) {
   const t = String(q || '');
   const out = [];
   for (const [label, words, run] of CATEGORY_FALLBACK) {
     if (!words.some((w) => t.includes(w))) continue;
     try {
-      for (const r of run(tdb)) out.push({ type: label, id: r.id, title: r.title, content: r.c || '', time: r.t || '' });
+      for (const r of run(tdb, range)) out.push({ type: label, id: r.id, title: r.title, content: r.c || '', time: r.t || '' });
     } catch (e) { console.error(`[xiaozhi] 类别兜底失败 ${label}`, e.message); }
   }
   return out;
 }
 // 依次试候选串，第一个有结果的就用；全落空再按「类别词」兜底
-function searchWithFallback(tdb, q) {
+function searchWithFallback(tdb, q, range) {
   const cat = matchedCategory(q);
+  const rng = range === undefined ? parseTimeRange(q) : range;
   const cands = searchCandidates(q);
   if (cat && pureCategoryQuery(q)) {
-    // 纯类别问法：只认该类别的真行（别的表恰好含这两个字不算数，见 pureCategoryQuery）
-    for (const c of cands) {
-      const results = searchService.search(tdb, c).results.filter((r) => r.type === cat);
-      if (results.length) return { results, used: c };
+    // 纯类别问法：只认该类别的真行（别的表恰好含这两个字不算数，见 pureCategoryQuery）。
+    // 带时间范围时跳过字面候选——字面命中不看日期，会把范围外的条目念出来（「本月日程」
+    // 若命中一条 9 月的，用户听到的就还是 9 月的）。
+    if (!rng) {
+      for (const c of cands) {
+        const results = searchService.search(tdb, c).results.filter((r) => r.type === cat);
+        if (results.length) return { results, used: c };
+      }
     }
-    const mine = categoryResults(tdb, q).filter((r) => r.type === cat);
+    const mine = categoryResults(tdb, q, rng).filter((r) => r.type === cat);
     if (mine.length) return { results: mine, used: `类别「${cat}」` };
     return { results: [], used: String(q || '').trim() };   // 这一类确实没数据 → 老实回空，别拿别的表凑
   }
@@ -507,7 +604,7 @@ function searchWithFallback(tdb, q) {
     const results = searchService.search(tdb, c).results;
     if (results.length) return { results, used: c };
   }
-  const byType = categoryResults(tdb, q);
+  const byType = categoryResults(tdb, q, rng);
   if (byType.length) return { results: byType, used: `类别「${byType[0].type}」` };
   return { results: [], used: String(q || '').trim() };
 }
@@ -520,22 +617,67 @@ function countIntent(q) {
   return COUNT_WORDS.some((w) => t.includes(w));
 }
 // 全库计数（只数得动的几张主表）。表不存在就跳过——老库不一定每张都有，统计不是刚需。
-function countAll(tdb) {
+// 第四列是该表的日期列；带时间范围时只数有日期列的表（没有日期列的表数不出「本月有几条」，
+// 跳过比瞎数好——「本月：剪贴板 300 条」这种回答对用户毫无意义）。
+const COUNT_TABLES = [
+  ['笔记', 'notes', 'updated_at'], ['待办', 'todos', 'due_date'], ['日程', 'events', 'start_time'],
+  ['家庭事项', 'family_items', null], ['子女任务', 'kid_tasks', null],
+  ['学习记录', 'learning_records', null], ['剪贴板', 'clipboard_items', null],
+  ['邮件', 'emails', "COALESCE(date, fetched_at)"], ['文件', 'files', 'created_at'],
+  ['账务', 'pay_bills', "COALESCE(NULLIF(pay_time,''), create_time)"],
+];
+function countAll(tdb, range) {
   const fdb = routedDb(tdb, 'family');
-  const jobs = [
-    ['笔记', tdb, 'notes'], ['待办', tdb, 'todos'], ['日程', tdb, 'events'],
-    ['家庭事项', fdb, 'family_items'], ['子女任务', fdb, 'kid_tasks'],
-    ['学习记录', tdb, 'learning_records'], ['剪贴板', tdb, 'clipboard_items'],
-    ['邮件', tdb, 'emails'], ['文件', tdb, 'files'],
-  ];
   const out = [];
-  for (const [label, d, tbl] of jobs) {
+  for (const [label, tbl, col] of COUNT_TABLES) {
+    const d = (tbl === 'family_items' || tbl === 'kid_tasks') ? fdb : tdb;
     try {
-      const r = d.prepare(`SELECT COUNT(*) AS n FROM ${tbl}`).get();
+      let sql = `SELECT COUNT(*) AS n FROM ${tbl}`;
+      let params = [];
+      if (range) {
+        if (!col) continue;
+        const rc = rangeClause(range, col);
+        sql += ` WHERE ${rc.sql}`;
+        params = rc.params;
+      }
+      const r = d.prepare(sql).get(...params);
       if (r && Number(r.n) > 0) out.push(`${label} ${Number(r.n)} 条`);
     } catch { /* 表可能不存在 */ }
   }
   return out;
+}
+
+// ---------- 练琴时长（v1.9.34，用户报障） ----------
+// 用户对小智说「查徐诗媛的练琴时长」，回的是「查不到，只能看到这个菜单」，实际有 45 分钟有效时长。
+// 两层原因：① `piano_records` **只存主库**（db.js 注明），而语音检索走的是配置用户的**租户库**；
+// ② 它也不在 searchService 的 10 张表里——字面「练琴」只能撞到菜单/说明类文本，所以听到的是「菜单」。
+// 时长是 SUM 而不是一条条记录，所以单开一条统计通道（同 countAll 的思路）。
+const PIANO_WORDS = ['练琴', '弹琴', '钢琴'];
+const pianoIntent = (q) => PIANO_WORDS.some((w) => String(q || '').includes(w));
+const fmtMinutes = (sec) => `${Math.round((Number(sec) || 0) / 60)} 分钟`;
+// 「有效时长」口径与面板 /piano/stats 完全一致：只算已确认的（confirmed=1 的 valid_sec）。
+// 未确认的录音单列出来，别混进「有效」里——否则家长一确认数值变小，就成了新 bug。
+function pianoStats(uid, range) {
+  const rc = rangeClause(range, "COALESCE(NULLIF(started_at,''), created_at)");
+  return db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN confirmed=1 THEN valid_sec ELSE 0 END), 0) AS valid_sec,
+      COALESCE(SUM(duration_sec), 0) AS total_sec,
+      COALESCE(SUM(confirmed), 0) AS confirmed_n,
+      COUNT(*) AS n
+    FROM piano_records WHERE user_id = ?${rc.sql ? ` AND ${rc.sql}` : ''}`).get(uid, ...rc.params);
+}
+// 问句里点名了谁？——「徐诗媛的练琴时长」里的名字优先于面板里配的默认查询用户
+// （练琴是全家共享的数据，问的是谁就该答谁；名字 ≥2 字才参与匹配，防单字名乱撞）
+const userName = (u) => (u && (u.display_name || u.nickname || u.username)) || `用户#${u && u.id}`;
+function personInQuery(q) {
+  const t = String(q || '');
+  const rows = db.prepare('SELECT id, username, display_name, nickname FROM users WHERE is_bot=0').all();
+  for (const u of rows) {
+    for (const name of [u.display_name, u.nickname, u.username]) {
+      if (name && String(name).length >= 2 && t.includes(String(name))) return u;
+    }
+  }
+  return null;
 }
 
 // uid 只从配置读（调用方——板子或云端——根本不知道 uid，不给自己开攻击面）。
@@ -552,8 +694,9 @@ function aiReady(tdb) {
 }
 
 // 确定性降级：不依赖 AI 也能念出一句有信息量的话
+// 念 5 条而不是 3 条——用户问清单时，只念开头三条会被当成「你是不是漏了」（v1.9.34 生产实测）
 function digestResults(results) {
-  const items = results.slice(0, 3).map((r) => `${r.type}《${String(r.title || '').trim().slice(0, 20)}》`);
+  const items = results.slice(0, 5).map((r) => `${r.type}《${String(r.title || '').trim().slice(0, 20)}》`);
   return `找到 ${results.length} 条：${items.join('、')}`;
 }
 
@@ -565,8 +708,12 @@ function buildDigest(results, { maxResults = 10, maxChars = 120 } = {}) {
 }
 
 const ASK_SYSTEM = '你是语音助手，下面是从用户个人数据库里检索到的条目。' +
-  '用不超过 60 字的中文口语回答用户的问题，直接给结论。' +
+  '用不超过 80 字的中文口语回答用户的问题，直接给结论。' +
   '不要 markdown、不要列表、不要引号、不要表情符号；不要复述问题、不要解释你是怎么查的。' +
+  // 用户报障（v1.9.34）：「本月日程」答成「记着三件事呢，去罗蒙环球乐园、部门周例会，还有公众号选题」——
+  // 库里更多，AI 自作主张只挑三条。清单类问句宁可念全（受字数限制念不完就说清共几条）。
+  '用户问「有什么/有哪些/看看某段时间的某某」这类清单时，把检索到的条目标题挨个念出来（最多念 6 条），' +
+  '不要只挑两三条概括；条数太多念不完就先说一共几条、再念前几条。' +
   '问到数量时必须用给出的「全库计数」，不要自己数检索结果。检索结果里没有的就说没找到，不要编。';
 
 async function askWorkbench(rawQ) {
@@ -580,6 +727,33 @@ async function askWorkbench(rawQ) {
   const user = configuredQueryUser();
   if (!user) return { ok: false, message: '还没在智能板配置里指定要查谁的资料' };
 
+  // 时间范围（v1.9.34）：「本月日程」要的是「这一天到这一天之间的日程」，
+  // 不是「哪条里写了本月两个字」——解析出的范围一路带下去，检索与计数都按它过滤。
+  const rng = parseTimeRange(q);
+
+  // 练琴时长走主库的专用统计（见 pianoStats 注释）：检索里根本没有这张表，问也白问
+  if (pianoIntent(q)) {
+    const who = personInQuery(q) || user;
+    try {
+      const s = pianoStats(who.id, rng);
+      const name = userName(who);
+      const scope = rng ? rng.label : '';
+      if (!s || !Number(s.n)) {
+        return fitSpeech({ ok: true, message: `${scope}没有找到${name}的练琴记录` });
+      }
+      if (Number(s.valid_sec) > 0) {
+        return fitSpeech({ ok: true, count: s.n, message: clampSpeech(
+          `${name}${scope}练琴有效时长 ${fmtMinutes(s.valid_sec)}，共 ${s.n} 次录音`) });
+      }
+      // 有效时长为 0 ≠ 没练过：录音在、只是家长还没点确认（面板的「有效时长」就是这个口径）
+      return fitSpeech({ ok: true, count: s.n, message: clampSpeech(
+        `${name}${scope}还没有确认过的有效时长，录音总时长 ${fmtMinutes(s.total_sec)}（${s.n} 次）`) });
+    } catch (e) {
+      console.error('[xiaozhi] 练琴统计失败', e.message);
+      return fitSpeech({ ok: true, message: '练琴数据读取失败，稍后再试' });
+    }
+  }
+
   let tdb;
   try { tdb = getTenantDb(user.id); } catch (e) {
     return { ok: false, message: `打不开资料库：${e.message}` };
@@ -587,18 +761,19 @@ async function askWorkbench(rawQ) {
 
   let results;
   try {
-    ({ results } = searchWithFallback(tdb, q));
+    ({ results } = searchWithFallback(tdb, q, rng));
   } catch (e) {
     console.error('[xiaozhi] ask 检索失败', e.message);
     return { ok: false, message: '查资料出错了，稍后再试' };
   }
   // 「有几篇笔记」这类问句：条数只能来自 COUNT(*)，检索每类上限 10 条，让 AI 数会数错
-  const counts = countIntent(q) ? countAll(tdb) : [];
-  const countLine = counts.length ? `统计：${counts.join('、')}` : '';
+  const counts = countIntent(q) ? countAll(tdb, rng) : [];
+  const countLine = counts.length ? `${rng ? rng.label : '统计'}：${counts.join('、')}` : '';
   if (!results.length) {
     // 纯数量问句（「我记了几篇笔记」）本来就不该有检索命中，别回「没找到」
     if (countLine) return fitSpeech({ ok: true, message: countLine });
-    return fitSpeech({ ok: true, message: `没找到和「${q.slice(0, 20)}」相关的记录` });
+    // 带时间范围时空范围是正常答案（「本月没有日程安排」比「没找到和本月日程相关的记录」像人话）
+    return fitSpeech({ ok: true, message: rng ? `${rng.label}没有找到相关记录` : `没找到和「${q.slice(0, 20)}」相关的记录` });
   }
 
   const qc = cfg.query;
@@ -801,7 +976,7 @@ module.exports = {
   noteBoardIp, getBoardInfo, appendChatLog, listChatLog,
   // v1.9.31 新增：语音查询 / 转交 agent / 凭证 / 审计 / 接入点状态
   askWorkbench, delegateAgent, listAgentLog, stripQuestion, searchCandidates, searchWithFallback, configuredQueryUser,
-  countIntent, countAll, cjkGrams, matchedCategory, pureCategoryQuery,
+  countIntent, countAll, cjkGrams, matchedCategory, pureCategoryQuery, parseTimeRange,
   getAgentKey, setAgentKey, clearAgentKey, hasAgentKey,
   getMcpToken, setMcpToken, hasMcpToken,
   setMcpState, getMcpState,

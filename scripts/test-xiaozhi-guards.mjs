@@ -101,6 +101,46 @@ try {
   ok(sh3.results.some((r) => r.title === '泛微沟通会议'), `问具体内容时仍按内容检索，不被类别兜底抢走（落到「${sh3.used}」）`);
   const a4 = await svc.askWorkbench('查出我的日程');
   ok(a4.ok && a4.message.includes('牙科复诊'), `askWorkbench「查出我的日程」也拿得到真日程（${String(a4.message).slice(0, 40)}）`);
+
+  console.log('— v1.9.34：时间范围（用户问「本月日程」，听到的三件里两件是上个月的——字面匹配没有日期维度）');
+  const d0 = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const dstr = (dt) => `${dt.getFullYear()}-${p2(dt.getMonth() + 1)}-${p2(dt.getDate())}`;
+  const today = dstr(d0);
+  const oldDay = dstr(new Date(d0.getFullYear(), d0.getMonth() - 2, 15)); // 两个月前，必不在本月/本周
+  tdb.prepare("INSERT INTO events(title,desc,start_time,location) VALUES(?,?,?,?)").run('本月内的排练', '', `${today} 10:00`, '');
+  tdb.prepare("INSERT INTO events(title,desc,start_time,location) VALUES(?,?,?,?)").run('两个月前的排练', '', `${oldDay} 10:00`, '');
+  const pr = svc.parseTimeRange('本月日程');
+  ok(pr && pr.label === '本月' && pr.from.endsWith('-01') && pr.to >= pr.from, `「本月」解析成整月区间（${pr && pr.from} ~ ${pr && pr.to}）`);
+  ok(svc.parseTimeRange('今天有什么安排')?.from === today, '「今天」= 今天当天');
+  ok(svc.parseTimeRange('下个月的计划')?.label === '下月', '「下个月」认得出');
+  ok(svc.parseTimeRange('上周的会议')?.to < today, '「上周」整段落在今天之前');
+  ok(svc.parseTimeRange('随便说点什么') === null, '没有时间词时不产生范围（老行为不变）');
+  ok(svc.pureCategoryQuery('本月日程') && svc.pureCategoryQuery('这个月有什么安排'),
+    '带时间词的类别问法仍算纯类别问法（否则会去字面撞「本月」）');
+  const mr = svc.searchWithFallback(tdb, '本月日程');
+  ok(mr.results.length > 0 && mr.results.every((r) => r.type === '日程'), '「本月日程」只回日程条目');
+  ok(mr.results.some((r) => r.title === '本月内的排练') && !mr.results.some((r) => r.title === '两个月前的排练'),
+    '「本月日程」拿得到本月的、拿不到两个月前的（这正是用户听到 9 月事件的根因）');
+  const lr = svc.searchWithFallback(tdb, '我的日程');
+  ok(lr.results.some((r) => r.title === '牙科复诊'), '不带时间词时仍是「未来优先」（范围没污染普通问法）');
+  const ac = await svc.askWorkbench('本月有几条日程');
+  ok(ac.ok && /本月：.*日程 \d+ 条/.test(ac.message), `计数也按月份过滤（${String(ac.message).slice(0, 40)}）`);
+
+  console.log('— v1.9.34：练琴时长（用户报障「查徐诗媛的练琴时长」回「查不到，只能看到这个菜单」）');
+  const pianoUid = Number(db.prepare("INSERT INTO users(username,password_hash,role,display_name) VALUES(?,?,?,?)")
+    .run('xushiyuan', 'x', 'user', '徐诗媛').lastInsertRowid);
+  const insP = db.prepare("INSERT INTO piano_records(user_id,user_name,duration_sec,valid_sec,confirmed,started_at) VALUES(?,?,?,?,?,?)");
+  insP.run(pianoUid, '徐诗媛', 2700, 2700, 1, `${today} 19:00`);   // 45 分钟，已确认
+  insP.run(pianoUid, '徐诗媛', 600, 600, 0, `${oldDay} 19:00`);    // 未确认，不该混进「有效」
+  ok(svc.searchWithFallback(tdb, '练琴').results.length === 0, '检索里根本没有练琴数据（复现生产：字面只能撞到菜单/说明类文本）');
+  const pa = await svc.askWorkbench('徐诗媛的练琴时长');
+  ok(pa.ok && pa.message.includes('45 分钟'), `「徐诗媛的练琴时长」答出 45 分钟（实际「${String(pa.message).slice(0, 40)}」）`);
+  ok(!pa.message.includes('50 分钟'), '未确认的 10 分钟没混进有效时长（口径与面板 /piano/stats 一致）');
+  const pm = await svc.askWorkbench('徐诗媛本月练琴时长');
+  ok(pm.ok && pm.message.includes('本月') && pm.message.includes('45 分钟'), `带月份范围也对（实际「${String(pm.message).slice(0, 40)}」）`);
+  const pd = await svc.askWorkbench('练琴');
+  ok(pd.ok && pd.message.includes('没有找到'), '没点名时回配置的查询用户，没记录就如实说没有');
   svc.saveConfig({ query: { uid: null } });
 
   console.log('— 点名判定');

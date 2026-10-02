@@ -246,6 +246,42 @@ try {
   const cat3 = await bridge({ op: 'ask', keywords: '侧栏一览' });
   ok(cat3.j.ok === true && cat3.j.count >= 1, '问具体内容时仍按内容检索（不被类别兜底抢走）', cat3.j.message);
 
+  console.log('— v1.9.34：时间范围（用户问「本月日程」，字面匹配没有日期维度，把上个月的事件也念了出来）');
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const now = new Date();
+  const today = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  await api('POST', '/api/events', { token: T, body: { title: '本月的家长会', start_time: `${today} 20:00` } });
+  const mo = await bridge({ op: 'ask', keywords: '本月日程' });
+  ok(mo.j.ok === true && mo.j.message.includes('本月的家长会') && !mo.j.message.includes('牙科复诊'),
+    '「本月日程」只回本月的（2099 年那条牙科复诊不在本月，必须被排除）', mo.j.message);
+  const moCnt = await bridge({ op: 'ask', keywords: '本月有几条日程' });
+  ok(moCnt.j.ok === true && /本月：.*日程 1 条/.test(moCnt.j.message), '「本月有几条日程」的计数也按月份过滤', moCnt.j.message);
+  const noTime = await bridge({ op: 'ask', keywords: '我的日程' });
+  ok(noTime.j.ok === true && noTime.j.message.includes('牙科复诊'), '不带时间词时行为不变（仍是未来优先）', noTime.j.message);
+
+  console.log('— v1.9.34：练琴时长（用户报障「查徐诗媛的练琴时长」回「查不到，只能看到这个菜单」——钢琴数据在主库、且不在检索的 10 张表里）');
+  const pu = await api('POST', '/api/users', { token: T, body: { username: 'xushiyuan', password: 'piano123456', role: 'admin', display_name: '徐诗媛' } });
+  ok(Number.isInteger(pu.j.id), '建一个「徐诗媛」账号（练琴记录挂在人名下）', JSON.stringify(pu.j).slice(0, 80));
+  ok((await bridge({ op: 'ask', keywords: '练琴' })).j.message.includes('没有找到'),
+    '检索里没有练琴数据（复现生产：字面「练琴」只能撞到菜单/说明类文本）');
+  const pl = await api('POST', '/api/auth/login', { body: { username: 'xushiyuan', password: 'piano123456' } });
+  const PT = pl.j.b?.token || pl.j.token;
+  ok(!!PT, '徐诗媛登录拿到 token');
+  const fd = new FormData();
+  fd.append('duration_sec', '2700');
+  fd.append('started_at', `${today} 19:00`);
+  fd.append('audio', new Blob([Buffer.from('fake-webm-audio')], { type: 'audio/webm' }), 'piano.webm');
+  const up = await fetch(`${B}/api/piano/upload`, { method: 'POST', headers: { Authorization: 'Bearer ' + PT }, body: fd });
+  const upj = await up.json().catch(() => ({}));
+  ok(up.ok && Number.isInteger(upj.id), `上传一条 45 分钟练琴录音（id=${upj.id}）`, JSON.stringify(upj).slice(0, 120));
+  ok((await api('PATCH', `/api/piano/confirm/${upj.id}`, { token: PT, body: { valid_sec: 2700 } })).status === 200,
+    '确认为有效时长 45 分钟');
+  const pc = await bridge({ op: 'ask', keywords: '徐诗媛的练琴时长' });
+  ok(pc.j.ok === true && pc.j.message.includes('45 分钟'), `「徐诗媛的练琴时长」答出 45 分钟（实际「${String(pc.j.message).slice(0, 40)}」）`);
+  const pcm = await bridge({ op: 'ask', keywords: '徐诗媛本月练琴时长' });
+  ok(pcm.j.ok === true && pcm.j.message.includes('本月') && pcm.j.message.includes('45 分钟'),
+    `带月份范围也对（实际「${String(pcm.j.message).slice(0, 40)}」）`);
+
   console.log('— ask：AI 归纳与超时降级');
   await useAI(0, '装修预算一共三万五，地板两万，橱柜一万五。');
   const a4 = await bridge({ op: 'ask', keywords: '装修' });
