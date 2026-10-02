@@ -1,7 +1,7 @@
 // build-dist-packages.mjs —— 生成三端分发压缩包（Windows / macOS / Docker），全部不含个人数据。
 // 产物落在仓库根目录（用户指定）：全能工作台-<版本>-windows.zip / -macos.zip / -docker.zip
-// 原则：只带「能跑起来的最小运行集」——data/ 一律空壳、Logs/ 与 img/ 不带、TTS 模型权重与合成语音缓存不带、
-//       fpk 安装包不带、web/dist 只带最新一份。
+// 原则：只带「能跑起来的最小运行集」——data/ 一律空壳、Logs/ 不带、TTS 模型权重与合成语音缓存不带、
+//       fpk 安装包不带、web/dist 只带最新一份；img/ 要带（README 的模块截图，2026-10-02 用户要求图片必须可用）。
 // 用法：node scripts/build-dist-packages.mjs [--out <目录>]
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -112,17 +112,17 @@ function deployNote(variant) {
 const VARIANTS = [
   {
     key: 'windows', label: 'Windows',
-    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['node_modules']],
+    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['img'], ['node_modules']],
     files: ['package.json', 'package-lock.json', 'README.md', 'start.bat', '.gitignore', '.gitattributes'],
   },
   {
     key: 'macos', label: 'macOS',
-    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['scripts'], ['node_modules']],
+    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['scripts'], ['img'], ['node_modules']],
     files: ['package.json', 'package-lock.json', 'README.md', 'start.command', '.gitignore', '.gitattributes'],
   },
   {
     key: 'docker', label: 'Docker',
-    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts']],
+    dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['img']],
     files: ['package.json', 'package-lock.json', 'README.md', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'pack-deploy.sh', '.gitignore', '.gitattributes'],
   },
 ];
