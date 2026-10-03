@@ -1,13 +1,13 @@
 {
   ".url": {
-    "qgsmarthome.main": {
-      "title": "智能家居",
+    "jarvis.main": {
+      "title": "JARVIS",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "",
-      "gatewayPrefix": "/app/qgsmarthome",
+      "gatewayPrefix": "/app/jarvis",
       "gatewaySocket": "app.sock",
-      "url": "/app/qgsmarthome",
+      "url": "/app/jarvis",
       "allUsers": true
     }
   }

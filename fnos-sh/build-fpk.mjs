@@ -22,8 +22,8 @@ const FNOS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(FNOS_DIR, '..');
 const argv = process.argv.slice(2);
 const argOf = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
-const OUT = path.resolve(argOf('--out', path.join(ROOT, '..', 'smarthome-fnos-build')));
-const PROJ = path.join(OUT, 'qgsmarthome');
+const OUT = path.resolve(argOf('--out', path.join(ROOT, '..', 'jarvis-fnos-build')));
+const PROJ = path.join(OUT, 'jarvis');
 const APP = path.join(PROJ, 'app');
 
 // 从工作区拷 server/ 时要排掉的目录（相对 server/）

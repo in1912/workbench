@@ -1,29 +1,27 @@
-# 智能家居 · 飞牛 fnOS 应用
+# JARVIS · 飞牛 fnOS 应用
 
-把「全能工作台 → 智能家居」整个模块独立出来的一个飞牛应用：**没有登录页，点开就用**。
-数据独立一份，和「全能工作台」互不影响。
+装在飞牛 NAS 上的家庭智能家居中枢：**没有登录页，点开就用**。
 
 ---
 
 ## 1. 安装
 
-在飞牛应用中心里安装 `智能家居-飞牛应用-1.0.0.fpk`（或应用中心右上角「手动安装」选这个文件）。
+在飞牛应用中心里安装 `JARVIS-飞牛应用-1.0.0.fpk`（或应用中心右上角「手动安装」选这个文件）。
 安装时**没有任何必填项**——本应用免登录，不需要设置管理员账号。
 
 装好后有两个入口，**都是直接进主界面**：
 
 | 入口 | 地址 | 说明 |
 |---|---|---|
-| 飞牛桌面 | 桌面上的「智能家居」图标 → 走统一网关 `/app/qgsmarthome` | 推荐，NAS 账号自动带上 |
+| 飞牛桌面 | 桌面上的「JARVIS」图标 → 走统一网关 `/app/jarvis` | 推荐，NAS 账号自动带上 |
 | 局域网直连 | `http://<NAS地址>:7778` | 同一内网任意设备可开 |
 
 > ⚠️ **本应用没有登录页，局域网直连也不校验身份**。请只在自家内网暴露它，不要把 7778 端口映射到公网。
 
-左侧边栏就是原来的六个页签：**米家 / 智能板 / Agent红绿灯 / 米家设置 / 米家参数翻译 / 视频中心**。
+左侧边栏就是六个模块：**米家 / 智能板 / Agent红绿灯 / 米家设置 / 米家参数翻译 / 视频中心**。
 每个模块内部的子页签（智能板的装机向导、语音控米家、摄像头、贾维斯、Agent对话记录……）原样保留。
 
-**装完先做这件事**：进「米家」模块扫码绑定小米账号 —— 本应用有自己的数据库，
-米家绑定、设备别名、智能板配置都要在本应用里重新配置一次。
+**装完先做这件事**：进「米家」模块扫码绑定小米账号。绑定完成后设备列表即刻可用。
 
 ---
 
@@ -31,11 +29,11 @@
 
 | 内容 | 位置 |
 |---|---|
-| 数据库 / 配置 / 图片 | `@appdata/qgsmarthome/data`（卸载不删） |
-| 日志 | `@appdata/qgsmarthome/var/logs/server.log` |
-| 应用代码 | `@appdata/qgsmarthome/target`（升级时整体替换） |
+| 数据库 / 配置 / 图片 | `@appdata/jarvis/data`（卸载不删） |
+| 日志 | `@appdata/jarvis/var/logs/server.log` |
+| 应用代码 | `@appdata/jarvis/target`（升级时整体替换） |
 
-与「全能工作台」（`@appdata/qgworkbench`）完全隔离。卸载本应用不会动工作台的数据，反之亦然。
+数据全部在本应用自己的目录里，卸载本应用不会影响 NAS 上其它应用的数据。
 
 ---
 
@@ -44,7 +42,7 @@
 智能板和 Agent红绿灯的烧录页上都有一个「**⬇ 下载本地烧录工具包**」按钮。下载下来的是一个 zip：
 
 ```
-智能家居烧录工具包/
+JARVIS烧录工具包/
   启动烧录.cmd          ← 双击这个
   serve.ps1
   index.html / app.js   ← 烧录页面（网页直接读本机串口）
@@ -84,9 +82,9 @@
 
 改了唤醒词之类的配置才需要走「构建机编译」那条高级路线（智能板面板里有）。
 
-### 一个坑：从飞牛桌面下载的包，地址会被自动改写
+### 从飞牛桌面下载的包，地址会被自动改写
 
-从飞牛桌面（统一网关 `/app/qgsmarthome`）点下载时，页面的 Host 是 NAS 的网页入口 —— 那个入口要求带
+从飞牛桌面（统一网关 `/app/jarvis`）点下载时，页面的 Host 是 NAS 的网页入口 —— 那个入口要求带
 NAS 登录态，而板子的裸 HTTP 请求过不去（网关会把无会话请求一律回 `invalid token`）。所以服务端会
 **把网关地址换成「同一台 NAS + 本应用端口 7778」的直连地址**再写进固件；直连端口下载时本来就是对的，原样使用。
 （`server/services/flashToolService.js` 的 `defaultBridgeBase`，守卫见 `scripts/test-flashtool-guards.mjs` 第 ④ 组。）
@@ -105,7 +103,7 @@ NAS 登录态，而板子的裸 HTTP 请求过不去（网关会把无会话请�
 | 智能板烧完要重新配网 | 说明用错了烧录方式（比如手工 `write-flash 0x0 merged-binary.bin`）。本工具包按分区偏移写，不会清 NVS |
 | 红绿灯烧完没反应 | 烧完后板子会重启并广播 `Agent light`；电脑那侧还要装钩子（见「Agent红绿灯 → 安装步骤」） |
 | 网关里打开是白屏 | 从飞牛桌面重进；或直连 `http://<NAS>:7778` 对照一下 |
-| 应用起不来 | 看 `@appdata/qgsmarthome/var/logs/server.log`；确认应用中心已装 `nodejs_v22` |
+| 应用起不来 | 看 `@appdata/jarvis/var/logs/server.log`；确认应用中心已装 `nodejs_v22` |
 
 ---
 
@@ -113,10 +111,9 @@ NAS 登录态，而板子的裸 HTTP 请求过不去（网关会把无会话请�
 
 - **没有登录页**：网关内免登，局域网直连 7778 也免登。任何能连到这个端口的人都能控制你绑定的米家设备。
   请确保 NAS 只在内网可达。
-- **接口白名单**：正因为免登，服务端在 `WB_MODE=smarthome` 时只挂智能家居要用的那些接口
+- **接口白名单**：正因为免登，服务端在 `WB_MODE=smarthome` 时只挂本应用要用的那些接口
   （`/system-info`、`/auth/me`、`/messages/contacts`、`/mihome`、`/cclight`、`/xiaozhi`、`/vc`、`/flashtool`），
-  其余一律 404 —— 否则「免登 + 全量挂载」等于同网段任何人都能读走工作台的邮箱和笔记。
-  这套边界由 `scripts/e2e-smarthome-app.mjs` 的 A5 组守着（6 个负面 + 5 个正面断言）。
+  其余一律 404。这套边界由 `scripts/e2e-smarthome-app.mjs` 的 A5 组守着（6 个负面 + 5 个正面断言）。
 - **烧录包里的固件带桥接密钥**：它能让板子回调本应用。下载的包等同于凭证，别随便转发。
   密钥可以在应用内轮换（轮换后旧固件会失联，需重新烧录）。
 - 烧录页面只在本机 `127.0.0.1` 上监听，只读你**主动选择**的那个串口，不会自己去扫端口。
@@ -125,13 +122,13 @@ NAS 登录态，而板子的裸 HTTP 请求过不去（网关会把无会话请�
 
 ## 6. 源码与打包
 
-- 源码：<https://github.com/in1912/workbench>（同一仓库，服务端 `WB_MODE=smarthome` 模式分支）
+- 源码：<https://github.com/in1912/JARVIS>（服务端 `WB_MODE=smarthome` 模式分支）
 - 重新打包：
 
 ```bash
 npm run build:web:sh                       # 前端 → web/dist-sh/<时间戳>
 node fnos-sh/build-fpk.mjs --node-modules ../workbench-fnos-build/qgworkbench/app/node_modules
-python Logs/build-fpk-sh.py                # bsdtar 三步 → server/fnos-sh/智能家居-飞牛应用-1.0.0.fpk
+python Logs/build-fpk-sh.py                # bsdtar 三步 → server/fnos-sh/JARVIS-飞牛应用-1.0.0.fpk
 ```
 
 - 本机没有 `fnpack.exe`，走的是 bsdtar 复刻链（与官方包外层 21 条目逐条同构）。

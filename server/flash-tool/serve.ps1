@@ -1,4 +1,4 @@
-﻿# 智能家居烧录工具包 · 本地静态服务器（PowerShell，零依赖）
+﻿# JARVIS 烧录工具包 · 本地静态服务器（PowerShell，零依赖）
 #
 # 为什么必须起一个本地服务器，而不是直接双击 index.html：
 #   浏览器只在「安全上下文」里开放 Web Serial（navigator.serial）。file:// 不是安全上下文，
@@ -46,7 +46,7 @@ $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
 $url = "http://127.0.0.1:$port/index.html"
 
 Write-Host ''
-Write-Host '  智能家居烧录工具包 —— 本地烧录服务已启动' -ForegroundColor Green
+Write-Host '  JARVIS 烧录工具包 —— 本地烧录服务已启动' -ForegroundColor Green
 Write-Host "  地址: $url" -ForegroundColor Cyan
 Write-Host '  说明: 浏览器里选串口、点烧录即可。用完直接关掉这个窗口。' -ForegroundColor Gray
 Write-Host ''

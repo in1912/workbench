@@ -1,17 +1,17 @@
 #!/bin/bash
-# 安装完成：写一份 etc/smarthome.env（cmd/main 每次启动前 source）。
+# 安装完成：写一份 etc/jarvis.env（cmd/main 每次启动前 source）。
 # 本应用**没有管理员账号、没有开号流程**（免登录：内置账号由 server/db.js 的 ensureLocalUser 自动建），
 # 所以向导里没有任何必填项，这个文件眼下只是占位 + 记录一次安装时间，将来加配置项时不用改 cmd/main。
-PKGETC="${TRIM_PKGETC:-/var/apps/qgsmarthome/etc}"
+PKGETC="${TRIM_PKGETC:-/var/apps/jarvis/etc}"
 mkdir -p "$PKGETC"
 
 umask 077
-cat > "$PKGETC/smarthome.env" <<EOF
-# 智能家居独立应用配置（安装向导生成；可重复执行覆盖）
+cat > "$PKGETC/jarvis.env" <<EOF
+# JARVIS 独立应用配置（安装向导生成；可重复执行覆盖）
 # 当前无配置项——本应用免登录、无初始管理员（内置本地账号 'local' 由服务端自动创建）。
 # 数据目录：\$TRIM_PKGVAR/data（由 cmd/main 通过 DATA_DIR 注入）。
 EOF
-chmod 600 "$PKGETC/smarthome.env" 2>/dev/null
+chmod 600 "$PKGETC/jarvis.env" 2>/dev/null
 
-echo "install_callback: 已写入 $PKGETC/smarthome.env（本应用免登录，无初始管理员）"
+echo "install_callback: 已写入 $PKGETC/jarvis.env（本应用免登录，无初始管理员）"
 exit 0

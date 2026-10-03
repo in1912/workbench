@@ -50,7 +50,7 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
 const pad2 = (n) => String(n).padStart(2, '0');
 
 // 板子要连回的是「**这台 NAS 上本应用的直连地址**」，不是请求 Host 的原样：
-//   ① 从飞牛桌面（统一网关 /app/qgsmarthome）进来时，Host 是 NAS 的网页地址——那个入口要求
+//   ① 从飞牛桌面（统一网关 /app/jarvis）进来时，Host 是 NAS 的网页地址——那个入口要求
 //      带 NAS 登录态，板子的裸 HTTP 请求过不去（§6 闸门 2：无会话一律回 `invalid token`），
 //      把网关地址烧进固件等于烧了个连不上的地址；
 //   ② 直连端口（http://NAS:7778）进来的 Host 本来就是对的，原样用。
@@ -208,7 +208,7 @@ function buildPackage(req) {
   if (!av.launcher.ok) throw new Error('启动脚本编码不对，无法生成烧录包：' + av.launcher.problems.join('；'));
 
   const entries = [];
-  const root = '智能家居烧录工具包/';
+  const root = 'JARVIS烧录工具包/';
   const addFile = (abs, rel) => { if (exists(abs)) entries.push({ name: root + rel, data: fs.readFileSync(abs) }); };
 
   // ① 网页本体 + 启动脚本
@@ -257,7 +257,7 @@ function buildPackage(req) {
 // 包文件名：带日期，避免用户下过好几版分不清
 function packageFileName() {
   const d = new Date();
-  return `智能家居烧录工具包-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}.zip`;
+  return `JARVIS烧录工具包-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}.zip`;
 }
 
 module.exports = {

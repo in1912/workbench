@@ -1,6 +1,6 @@
 <template>
-  <!-- 智能家居独立应用外壳（v2.0.0）
-       左侧 = 模块目录（原「智能家居」页的 6 个页签升格成侧栏条目）；
+  <!-- JARVIS 独立应用外壳（v2.0.0）
+       左侧 = 模块目录（原智能家居页的 6 个页签升格成侧栏条目）；
        右侧 = 该模块的内容，各模块内部的子页签（智能板 7 个 / 红绿灯 3 个）原样保留。
        业务实体全部复用 SmartHome.vue（layout="sidebar" 时它不画自己的 tab 条），所以没有第二份实现。 -->
   <div class="sh-shell">
@@ -25,7 +25,7 @@
           </button>
         </nav>
         <div class="sh-side-foot">
-          <span class="sh-hint">智能家居</span>
+          <span class="sh-hint">JARVIS</span>
         </div>
       </aside>
 
@@ -73,7 +73,7 @@ const MODULES = [
 
 const tab = ref('mijia');
 const ready = ref(false);
-const sysName = ref('智能家居');
+const sysName = ref('JARVIS');
 const version = ref('');
 const netText = ref('');
 const netClass = ref('');
@@ -114,7 +114,7 @@ onMounted(async () => {
   } catch { /* 拿不到也不影响（tabs.js 对空用户按「不限制」处理） */ }
   probe();
   ready.value = true;
-  document.title = '智能家居';
+  document.title = 'JARVIS';
 });
 </script>
 

@@ -1,4 +1,4 @@
-// E2E：「智能家居」独立应用（WB_MODE=smarthome）——飞牛 fpk 里的那个形态
+// E2E：JARVIS 独立应用（WB_MODE=smarthome）——飞牛 fpk 里的那个形态
 //
 // 验的是「抽出来之后还成立」这件事，四组：
 //   A. 免登录：不带给任何 token 也进得去，/api 一律 200，/auth/me 回内置本地账号
@@ -45,7 +45,7 @@ try {
   let r = await fetch(`${B}/api/system-info`);
   let j = await r.json();
   ck('A1 /system-info 免登录可读，且 mode=smarthome', r.status === 200 && j.mode === 'smarthome', `status=${r.status} mode=${j.mode}`);
-  ck('A2 空库首启时版本/名称是「智能家居 1.0.0」而不是工作台的兜底值', j.name === '智能家居' && j.version === '1.0.0', `${j.name} / ${j.version}`);
+  ck('A2 空库首启时版本/名称是「JARVIS 1.0.0」而不是工作台的兜底值', j.name === 'JARVIS' && j.version === '1.0.0', `${j.name} / ${j.version}`);
 
   r = await fetch(`${B}/api/auth/me`);
   j = await r.json();
@@ -63,11 +63,11 @@ try {
     const rr = await fetch(`${B}${p}`);
     ck(`A5 工作台专属端点 ${p}（${label}）在本模式下不存在`, rr.status === 404, `status=${rr.status}`);
   }
-  // 智能家居自己那几个必须在（否则是砍过头）。
+  // JARVIS 自己那几个必须在（否则是砍过头）。
   // 视频中心的 /vc/tree 在没配视频根目录时回 400（根目录不存在），故判据是「不是 404」= 路由在。
   for (const [p, label] of [['/api/mihome/status', '米家'], ['/api/xiaozhi/config', '智能板'], ['/api/cclight/files', '红绿灯'], ['/api/vc/tree?path=/', '视频中心'], ['/api/messages/contacts', '用户选择器']]) {
     const rr = await fetch(`${B}${p}`);
-    ck(`A6 智能家居端点 ${p}（${label}）在`, rr.status !== 404 && rr.status !== 500, `status=${rr.status}`);
+    ck(`A6 JARVIS 端点 ${p}（${label}）在`, rr.status !== 404 && rr.status !== 500, `status=${rr.status}`);
   }
 
   // 烧录工具包
@@ -103,7 +103,7 @@ try {
   const navTexts = (await p.locator('.sh-nav-item .sh-label').allInnerTexts()).map((t) => t.trim());
   ck('B3 左侧 6 个模块（原来那 6 个页签）', navTexts.join('|') === '米家|智能板|Agent红绿灯|米家设置|米家参数翻译|视频中心', navTexts.join('|'));
   ck('B4 原来的页内 tab 条不再出现（已升格为侧栏）', (await p.locator('h2.page-title').count()) === 0 && (await p.locator('.tabs').count()) === 0);
-  ck('B5 顶栏显示应用名与版本', (await p.locator('.sh-title').innerText()).includes('智能家居') && (await p.locator('.sh-ver').count()) === 1, await p.locator('.sh-brand').innerText());
+  ck('B5 顶栏显示应用名与版本', (await p.locator('.sh-title').innerText()).includes('JARVIS') && (await p.locator('.sh-ver').count()) === 1, await p.locator('.sh-brand').innerText());
   await p.waitForFunction(() => { const el = document.querySelector('.sh-net'); return el && /在线|离线/.test(el.textContent); }, null, { timeout: 8000 });
   ck('B6 顶栏在线状态探测到底（免登录下不会因 401 显示离线）', (await p.locator('.sh-net').innerText()).includes('在线'), await p.locator('.sh-net').innerText());
   await p.screenshot({ path: path.join(ROOT, 'Logs', 'e2e-sh-app-shell.png'), fullPage: true });

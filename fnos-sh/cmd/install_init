@@ -1,4 +1,4 @@
 #!/bin/bash
 # 安装前：准备数据/日志目录（$TRIM_PKGVAR 由 fnOS 创建，这里兜底并建子目录）
-mkdir -p "${TRIM_PKGVAR:-/var/apps/qgsmarthome/var}/data" "${TRIM_PKGVAR:-/var/apps/qgsmarthome/var}/logs"
+mkdir -p "${TRIM_PKGVAR:-/var/apps/jarvis/var}/data" "${TRIM_PKGVAR:-/var/apps/jarvis/var}/logs"
 exit 0
