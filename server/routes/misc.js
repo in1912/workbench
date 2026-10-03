@@ -16,6 +16,7 @@ const messageService = require('../services/messageService');
 const storagePaths = require('../services/storagePaths');
 const multer = require('multer');
 const fileTextService = require('../services/fileTextService');
+const shApp = require('../shApp'); // 智能家居独立应用的身份常量（sh 模式下的名称/版本兜底）
 // 上传中间件（文件存档 / AI 附件共用）：内存暂存，限 20MB
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -45,10 +46,16 @@ router.use(express.json());
 
 // ---------- 系统信息（免登录：登录页/标题需要显示系统名称；系统键永在主库） ----------
 router.get('/system-info', (req, res) => {
+  // 运行模式（v2.0.0）：smarthome = 智能家居独立应用（免登录、精简模块），workbench = 全能工作台。
+  // 前端分流用（智能家居入口页据此不回登录页）；也便于运维一眼看出容器跑的是哪一个
+  const SH = process.env.WB_MODE === 'smarthome';
   res.json({
-    name: getSetting('system_name', '全能工作台'),
-    name_en: getSetting('system_name_en', 'Workbench'),
-    version: getSetting('current_version', '') || 'v1.9.8',
+    mode: SH ? 'smarthome' : 'workbench',
+    // 名称/版本兜底按模式分：独立应用空库首启时若回「全能工作台 / v1.9.8」，会让人以为装错了包
+    //（settings 里没有 current_version 键时走兜底值，见 server/shApp.js 的注释）
+    name: getSetting('system_name', SH ? shApp.displayName : '全能工作台'),
+    name_en: getSetting('system_name_en', SH ? shApp.displayNameEn : 'Workbench'),
+    version: getSetting('current_version', '') || (SH ? shApp.version : 'v1.9.8'),
     // 运行时探针：容器里的 Node 版本只有到这里才问得到（无 SSH 环境排障用）。
     // ws=false 意味着 Node < 22.4（内置全局 WebSocket 那时还没默认开启）——智能板
     // 「官方 MCP 接入点」通道依赖它，会是「面板显示未连接但看不出原因」的根因

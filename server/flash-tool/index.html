@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智能家居烧录工具</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e6e9ef;
+    --dim: #8b93a3; --brand: #4f8cff; --ok: #3ecf8e; --warn: #f4b740; --err: #f2607a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--brand); }
+  header {
+    padding: 20px 24px 14px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 19px; margin: 0; }
+  header .sub { color: var(--dim); font-size: 13px; }
+  main { padding: 20px 24px 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .card h2 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  .card .tag { font-size: 12px; font-weight: 400; color: var(--dim); border: 1px solid var(--line); border-radius: 20px; padding: 1px 9px; }
+  .card p.desc { color: var(--dim); margin: 6px 0 14px; font-size: 13px; }
+  .fw { font-size: 12.5px; color: var(--dim); background: #12151b; border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; margin-bottom: 14px; }
+  .fw b { color: var(--text); font-weight: 600; }
+  .fw code { color: #a8c7ff; word-break: break-all; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; border: 0; border-radius: 7px; padding: 9px 16px; cursor: pointer;
+    background: #232833; color: var(--text); transition: filter .15s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.25); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--brand); color: #fff; font-weight: 600; }
+  button.danger { background: #3a2530; color: #ffb3c1; }
+  .status { margin-top: 12px; font-size: 13px; min-height: 22px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); } .status.warn { color: var(--warn); }
+  .bar { height: 7px; background: #12151b; border-radius: 5px; overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4f8cff, #3ecf8e); transition: width .2s; }
+  .hint { font-size: 12.5px; color: var(--dim); margin-top: 12px; }
+  .hint b { color: var(--warn); }
+  #banner { margin: 16px 24px 0; padding: 12px 15px; border-radius: 8px; font-size: 13.5px; display: none; }
+  #banner.show { display: block; }
+  #banner.bad { background: #3a1f27; border: 1px solid #6b2f3f; color: #ffc2ce; }
+  #banner.good { background: #14301f; border: 1px solid #23543a; color: #b9f0d3; }
+  #banner.warn { background: #33290f; border: 1px solid #6a5620; color: #ffe1a3; }
+  #logwrap { padding: 12px 24px 26px; }
+  #logwrap summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+  #log {
+    margin-top: 10px; height: 260px; overflow: auto; background: #0a0c10; border: 1px solid var(--line);
+    border-radius: 8px; padding: 11px 13px; font: 12.5px/1.55 Consolas, "Cascadia Mono", monospace;
+    white-space: pre-wrap; word-break: break-all; color: #c6cddb;
+  }
+  #log .e { color: #ff8fa3; } #log .ok { color: #7ee2b0; } #log .d { color: #6f7788; }
+  .steps { font-size: 13px; color: var(--dim); margin: 0 0 14px; padding-left: 20px; }
+  .steps li { margin: 3px 0; }
+  .drv { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 12px; font-size: 12.5px; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔌 智能家居烧录工具</h1>
+  <span class="sub">在浏览器里直接读本机串口烧录 —— 不装 Python、不敲命令行</span>
+</header>
+
+<div id="banner"></div>
+
+<main>
+  <section class="card" id="card-xiaozhi">
+    <h2>智能板 <span class="tag">小智 Korvo2V3 · ESP32-S3</span></h2>
+    <p class="desc">语音板固件。烧完自动连回你的智能家居应用，配网信息与设备绑定不会被清掉。</p>
+    <div class="fw" id="fw-xiaozhi">正在读取固件清单…</div>
+    <div class="row">
+      <button id="btn-xz-port">① 选择串口</button>
+      <button id="btn-xz-flash" class="primary" disabled>② 开始烧录</button>
+    </div>
+    <div class="bar"><i id="bar-xz"></i></div>
+    <div class="status" id="st-xz"></div>
+  </section>
+
+  <section class="card" id="card-cclight">
+    <h2>Agent 红绿灯 <span class="tag">ESP32-C3 · 三色灯</span></h2>
+    <p class="desc">一步到位：刷 MicroPython 固件 + 把 main.py 写进板子。烧完板子自动跑，直接进电脑端安装步骤即可。</p>
+    <div class="fw" id="fw-cclight">正在读取固件清单…</div>
+    <div class="row">
+      <button id="btn-cc-port">① 选择串口</button>
+      <button id="btn-cc-flash" class="primary" disabled>② 一键烧录</button>
+    </div>
+    <div class="bar"><i id="bar-cc"></i></div>
+    <div class="status" id="st-cc"></div>
+    <div class="hint" id="hint-cc" style="display:none">
+      <b>板子已重启</b>，串口需要重新连一次：点上面「① 选择串口」选中<b>同一个 COM 口</b>，再点
+      <b>「③ 继续写入程序」</b> 把 main.py 写进去。
+    </div>
+  </section>
+</main>
+
+<details id="logwrap" open>
+  <summary>运行日志（出问题把这里的内容截图/复制出来）</summary>
+  <div id="log"></div>
+</details>
+
+<section class="card" style="margin:0 24px 28px">
+  <h2>烧录前请先确认</h2>
+  <ol class="steps">
+    <li>用 <b>Chrome 或 Edge</b> 打开本页（Firefox / Safari 不支持网页读串口）。</li>
+    <li>USB 数据线直接插电脑（不是只能充电的线），板子通电。</li>
+    <li>第一次插板子如果设备管理器里是感叹号，先装下面这个串口驱动。</li>
+    <li>烧录过程中不要拔线、不要关这个页面。</li>
+  </ol>
+  <div class="drv">
+    <b>串口驱动（CH343，智能板用）</b>：
+    <a href="driver/ch343-driver/CH341SER/SETUP.EXE" download>下载安装程序 SETUP.EXE</a>
+    —— 下载后双击、点「安装」、插拔一次 USB 即可。
+    红绿灯（ESP32-C3）不需要额外驱动，Windows 10/11 自带。
+  </div>
+</section>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 <template>
   <div>
-    <h2 class="page-title">智能家居</h2>
-    <div class="tabs">
+    <h2 v-if="layout !== 'sidebar'" class="page-title">智能家居</h2>
+    <div v-if="layout !== 'sidebar'" class="tabs">
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
       <button v-if="canTab('smarthome','xiaozhi')" :class="{active: tab==='xiaozhi'}" @click="switchTab('xiaozhi')">智能板</button>
       <!-- Agent红绿灯（v1.8.1 起为本页子 tab；v1.9.22 曾升格独立页，v1.9.23 放回智能板之后） -->
@@ -338,9 +338,25 @@ import XiaozhiPanel from '../components/XiaozhiPanel.vue';
 import CcLightPanel from '../components/CcLightPanel.vue';
 import VideoCenterPanel from '../components/VideoCenterPanel.vue';
 
+// 布局（v2.0.0）：'tabs' = 主工作台里的页内 tab 条（原样）；
+// 'sidebar' = 智能家居独立应用（ShApp.vue 左侧栏驱动同一个 tab，本页不再画 tab 条）。
+// 这样 6 个 tab 的全部实现（含米家/米家设置/米家参数翻译三段内联模板）零重复。
+const props = defineProps({
+  layout: { type: String, default: 'tabs' },
+  tab: { type: String, default: '' }, // v-model:tab 受控值（仅 layout==='sidebar' 时生效）
+});
+const emit = defineEmits(['update:tab']);
+
 const route = useRoute();
 const router = useRouter();
-const tab = ref(firstTab('smarthome', 'mijia'));
+const innerTab = ref(firstTab('smarthome', 'mijia'));
+const tab = computed({
+  get: () => (props.layout === 'sidebar' && props.tab ? props.tab : innerTab.value),
+  set: (v) => {
+    innerTab.value = v;
+    if (props.layout === 'sidebar') emit('update:tab', v);
+  },
+});
 function switchTab(t) {
   tab.value = t;
   router.replace({ query: { ...route.query, tab: t } });

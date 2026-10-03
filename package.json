@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node --no-warnings server/index.js",
     "dev": "node --no-warnings server/index.js",
-    "build:web": "cd web && npm install && npm run build"
+    "build:web": "cd web && npm install && npm run build",
+    "build:web:sh": "cd web && npm install && npm run build:sh"
   },
   "dependencies": {
     "dingtalk-stream": "^2.1.6-beta.1",

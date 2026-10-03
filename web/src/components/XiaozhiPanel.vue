@@ -37,15 +37,34 @@
         <div class="xz-step-no">②</div>
         <div class="xz-step-body">
           <b>烧录固件</b>
+          <!-- v2.0.0：主推「本地烧录工具包」——下载解压双击 .cmd，浏览器里选串口一键烧，
+               不需要装 Python / esptool / 驱动，也不需要在这台电脑上配环境。
+               手工 esptool 命令保留在折叠区，给习惯命令行的用户。 -->
           <p class="xz-muted">
-            管理员在下方「唤醒词与固件」卡里一键<b>编译并烧录</b>（自动校验芯片防烧错板）；或下载已编译的合并镜像，
-            用 esptool 烧到 <code>0x0</code>：<code>esptool --chip esp32s3 -p COM4 -b 921600 write-flash 0x0 merged-binary.bin</code>
-            <template v-if="cap.firmware.available">（当前产物：{{ fmtSize(cap.firmware.size) }} · {{ fmtTime(cap.firmware.mtime) }}）</template>
+            下载<b>本地烧录工具包</b>：解压后双击 <code>启动烧录.cmd</code> → 浏览器自动打开 →
+            选串口 → 点「开始烧录」。工具包自带固件（已指向本应用）、esptool 引擎和 CH343 驱动，
+            烧的是<b>分段固件</b>，<b>不会清掉板子的配网与设备绑定</b>。
           </p>
           <div class="xz-dl-row">
-            <button class="btn" :disabled="!cap.firmware.available" @click="dlFirmware">⬇ 下载固件 merged-binary.bin</button>
-            <span v-if="isAdmin" class="xz-muted">或直接用下方「唤醒词与固件」卡一键编译烧录 →</span>
+            <button class="btn primary" @click="dlFlashTool">⬇ 下载本地烧录工具包（智能板 + 红绿灯，共用一个包）</button>
+            <span v-if="flashInfo" class="xz-muted">
+              内含智能板固件 {{ flashInfo.xiaozhi.files.length }} 段
+              <template v-if="flashInfo.bridgeUrl">· 将连回 <code>{{ flashInfo.bridgeUrl }}</code></template>
+              <template v-if="flashInfo.missing && flashInfo.missing.length"> · <b style="color:var(--amber)">缺 {{ flashInfo.missing.join('、') }}</b></template>
+            </span>
           </div>
+          <details class="xz-adv">
+            <summary>高级：手工用 esptool 烧录（需要自己装 Python 环境）</summary>
+            <p class="xz-muted" style="margin-top:8px">
+              管理员在下方「唤醒词与固件」卡里一键<b>编译并烧录</b>（自动校验芯片防烧错板）；或下载已编译的合并镜像，
+              用 esptool 烧到 <code>0x0</code>：<code>esptool --chip esp32s3 -p COM4 -b 921600 write-flash 0x0 merged-binary.bin</code>
+              <template v-if="cap.firmware.available">（当前产物：{{ fmtSize(cap.firmware.size) }} · {{ fmtTime(cap.firmware.mtime) }}）</template>
+            </p>
+            <div class="xz-dl-row">
+              <button class="btn" :disabled="!cap.firmware.available" @click="dlFirmware">⬇ 下载固件 merged-binary.bin</button>
+              <span class="xz-muted">⚠ 合并镜像含 0x0 写入，会覆盖 nvs 分区——配网与绑定要重做。能用上面的工具包就用工具包。</span>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -945,6 +964,8 @@ let pollTimer = null;
 const fmtSize = (n) => (!n ? '' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
 const fmtTime = (t) => { try { return new Date(t).toLocaleString('zh-CN', { hour12: false }); } catch { return ''; } };
 const capMiss = ref('');
+// 本地烧录工具包就绪情况（v2.0.0）：装机向导第 2 步显示「内含几段固件 / 将连回哪个地址 / 缺什么」
+const flashInfo = ref(null);
 function flashOk(m) { msg.ok = m; setTimeout(() => (msg.ok = ''), 4000); }
 function flashErr(m) { msg.err = m; setTimeout(() => (msg.err = ''), 8000); }
 
@@ -1192,6 +1213,8 @@ async function speakerTest(kind) {
 // ---------- 下载 ----------
 function dlTool(name) { api.download(`/xiaozhi/tools/${encodeURIComponent(name)}`, name === 'ch343-driver' ? 'ch343-driver.zip' : name).catch((e) => flashErr('下载失败：' + e.message)); }
 function dlFirmware() { api.download('/xiaozhi/firmware', 'xiaozhi-korvo2v3-merged.bin').catch((e) => flashErr('下载失败：' + e.message)); }
+// 本地烧录工具包（v2.0.0）：网页版 Web Serial 烧录，智能板与红绿灯共用一个包
+function dlFlashTool() { api.download('/flashtool/package', 'smarthome-flasher.zip').catch((e) => flashErr('下载失败：' + e.message)); }
 
 // ---------- 无工具链环境：构建机地址保存 + 烧录命令复制 ----------
 function saveHelper() { saveConfig().then(() => flashOk('构建机地址已保存')).catch((e) => flashErr(e.message)); }
@@ -1212,6 +1235,8 @@ watch(() => [form.channel, form.bridge.url, form.helper.url, form.speaker.did], 
 
 onMounted(async () => {
   await loadAll();
+  // 烧录工具包就绪情况（不阻塞首屏；拿不到就不显示那行小字）
+  api.get('/flashtool/info').then((r) => { flashInfo.value = r; }).catch(() => {});
   loadDevices(false); // 设备台数随标题显示，不阻塞页面
   st.value = await api.get('/xiaozhi/build/status').catch(() => st.value);
   if (st.value.running) startPoll();

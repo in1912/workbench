@@ -145,6 +145,15 @@
 
       <div class="card">
         <h3>① 怎么刷版（首次使用 / 更换板子，需 USB 数据线）</h3>
+        <!-- v2.0.0：新增「本地烧录工具包」——网页里选串口一键烧完（固件 + main.py 一步到位），
+             不用装 Python、不用敲命令。下面原「flash-firmware.cmd」流程保留为备选。 -->
+        <div class="cc-note" style="margin:0 0 12px">
+          <b>推荐：本地烧录工具包</b>——和「智能板」用的是同一个包，解压双击 <code>启动烧录.cmd</code>，
+          浏览器里选串口 → 「一键烧录」，<b>固件和 main.py 会一次性写完</b>，不用装 Python、不用敲命令。
+          <div class="row" style="gap:8px; flex-wrap:wrap; margin-top:8px">
+            <button class="primary" @click="ccDlFlashTool">📦 下载本地烧录工具包（智能板 + 红绿灯，共用一个包）</button>
+          </div>
+        </div>
         <ol class="cc-steps">
           <li>USB <b>数据线</b>连电脑（充电线不行）→ 设备管理器出现「USB 串行设备 (COMx)」，记住这个 COM 号</li>
           <li>双击 <code>flash-firmware.cmd</code> 一键刷机：自动装 esptool / mpremote（<b>打包下载已附带离线安装包 wheels，没网也能装</b>）→ 输入 COM 号 → 确认后自动 擦除 → 刷 MicroPython 固件 → 上传 main.py → 重启板子</li>
@@ -246,6 +255,8 @@ function flashErr(m) { err.value = m; setTimeout(() => (err.value = ''), 8000); 
 function ccDl(name) { api.download(`/cclight/file/${encodeURIComponent(name)}`, name).catch((e) => flashErr(`下载失败：${e.message}`)); }
 function ccDlPack() { api.download('/cclight/package', 'cc-light.zip').catch((e) => flashErr(`打包下载失败：${e.message}`)); }
 function ccDlPackMac() { api.download('/cclight/package-mac', 'cc-light-mac.zip').catch((e) => flashErr(`打包下载失败：${e.message}`)); }
+// 本地烧录工具包（v2.0.0）：网页版 Web Serial 烧录，与智能板共用同一个包
+function ccDlFlashTool() { api.download('/flashtool/package', 'smarthome-flasher.zip').catch((e) => flashErr(`下载失败：${e.message}`)); }
 if (sub.value === 'download') loadCcFiles();
 </script>
 

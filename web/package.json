@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "build:sh": "vite build --config vite.sh.config.js"
   },
   "dependencies": {
     "flv.js": "^1.6.2",

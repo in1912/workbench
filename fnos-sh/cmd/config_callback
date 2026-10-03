@@ -1,0 +1,3 @@
+#!/bin/bash
+# 配置变更：重新生成 etc/smarthome.env（见 install_callback）
+exec "$(dirname "$0")/install_callback"

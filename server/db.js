@@ -1967,6 +1967,36 @@ for (const cb of importedCbs) cb();
 // cleanupMainBusinessTables()（会 DELETE 主库里清单内的表），新表列进去等于给自己埋一颗数据丢失的雷。
 const FAMILY_TABLES = ['family_items', 'kids', 'kid_tasks', 'family_profiles', 'family_images', 'kid_stories'];
 function firstAdmin() { return db.prepare("SELECT id, username FROM users WHERE role='admin' ORDER BY id LIMIT 1").get(); }
+
+// ---------- 智能家居独立应用（WB_MODE=smarthome）：内置本地账号 ----------
+// 独立应用没有登录页（用户明确要求「打开就用」），服务端每个 /api 请求都直接注入这个账号，
+// 前端 /auth/me 拿到它即视为已登录。用固定用户名幂等复用：重启/升级不重复建号，
+// 米家绑定、智能板配置等数据都落在它的租户库里（tenant-<id>.sqlite）——与主工作台互不干扰。
+const LOCAL_USERNAME = 'local';
+let localUserCache = null; // 每个请求都要取，进程内缓存（本应用只有这一个写库者）
+function ensureLocalUser() {
+  if (localUserCache) return localUserCache;
+  const row = db.prepare('SELECT id FROM users WHERE username=? AND is_bot=0').get(LOCAL_USERNAME);
+  if (row) {
+    // 幂等纠偏：角色/授权被别处改过也要能进（否则免登应用会整屏 403 且无从恢复）
+    db.prepare("UPDATE users SET role='admin', allowed_pages='[]', allowed_tabs='' WHERE id=?").run(row.id);
+    localUserCache = localUserRow(row.id);
+    return localUserCache;
+  }
+  // password_hash 存不可验证的占位（'*' 不含 ':'，verifyPassword 恒 false）——这个账号不提供密码登录入口
+  const res = db.prepare("INSERT INTO users(username,password_hash,role,allowed_pages,allowed_tabs,display_name) VALUES(?,'*','admin','[]','','本地用户')")
+    .run(LOCAL_USERNAME);
+  console.log(`[db] 智能家居应用：已创建内置本地账号 ${LOCAL_USERNAME}(#${res.lastInsertRowid})`);
+  localUserCache = localUserRow(res.lastInsertRowid);
+  return localUserCache;
+}
+// 与 auth.resolveUser 返回的形状保持一致（allowed_pages/allowed_tabs 已解析成对象）
+function localUserRow(id) {
+  const u = db.prepare('SELECT id, username, role, display_name, nickname, allowed_pages, allowed_tabs FROM users WHERE id=?').get(id);
+  let tabs = {};
+  try { tabs = JSON.parse(u.allowed_tabs || '{}') || {}; } catch { tabs = {}; }
+  return { ...u, allowed_pages: [], allowed_tabs: tabs };
+}
 // 整表镜像复制（replace=先清空目标表再插，保留原 id，消息中心 ref_id 引用不失效）
 function copyFamilyTables(src, dst, replace) {
   let n = 0;
@@ -2013,6 +2043,7 @@ module.exports = {
   getShareFlags, setShareFlags, routedDb, routedSettingDb,
   getAmapKey, saveAmapKey,
   getTenantDb, closeTenantDb, tenantIdOf, listTenantDbs, forEachTenant, tenantDbFile,
+  ensureLocalUser, LOCAL_USERNAME,
   TENANT_TABLES, TENANT_SETTING_KEYS,
   migrateToMultiTenant, cleanupMainBusinessTables,
   rebalanceFamilyShare, ensureDingtalkBot,

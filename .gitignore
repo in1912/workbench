@@ -9,8 +9,15 @@ ssl/
 # ========== 前端：依赖与构建产物 ==========
 node_modules/
 dist/
+# 「智能家居」单模块应用的另一棵构建树（与 dist/ 一样不入库）
+dist-sh/
 build/
 *.apk
+
+# ========== 交付物：fpk / 分发包（不入 git，clean 前先挪走）==========
+# 工作台的 fpk 例外（server/fnos/*.fpk 历来随 git 分发），「智能家居」这个按交付计划不入库：
+# 它 27MB、且能从 fnos-sh/ 一行命令重打；放进来只会喂大仓库（public）与推送 blob
+server/fnos-sh/*.fpk
 
 # ========== Python ==========
 .venv/

@@ -4,7 +4,7 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const express = require('express');
-const { onImported, getTenantDb, dataDir } = require('./db');
+const { onImported, getTenantDb, dataDir, ensureLocalUser } = require('./db');
 const ipBan = require('./services/ipBanService');
 const auth = require('./auth');
 const coreRoutes = require('./routes/core');
@@ -27,8 +27,15 @@ const ccLightRoutes = require('./routes/ccLightRoutes');
 const xiaozhiRoutes = require('./routes/xiaozhiRoutes');
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
+const flashToolRoutes = require('./routes/flashToolRoutes');
 const scheduler = require('./scheduler');
 const dingtalkStream = require('./services/dingtalkStreamService');
+
+// ---------- 运行模式（v2.0.0）：workbench（默认，全能工作台）/ smarthome（智能家居独立应用） ----------
+// 同一个仓库、同一份源码产出两个 fnOS 应用：智能家居应用只挂载它需要的路由、不启定时任务与子进程，
+// 并且注入内置本地账号做到免登录。详见 CLAUDE.md §6。
+const SH_MODE = process.env.WB_MODE === 'smarthome';
+if (SH_MODE) console.log('[mode] 智能家居独立应用模式（WB_MODE=smarthome）：免登录 + 精简路由');
 
 const app = express();
 // IP 黑名单（v1.3.4）：全站第一道闸——被封禁的 IP 连静态页都拿不到 403（含登录接口）。
@@ -44,9 +51,12 @@ app.use((req, res, next) => {
 // 智作平台（文案库，v1.6.2）：子进程随工作台启动，对外仅暴露同源路径 /zhizu（效率工具→智作平台 iframe 嵌入）。
 // 必须挂在 express.json 之前：请求体原样透传给子进程解析（含 multipart），代理不做任何改写；
 // 其登录/角色体系（wk_token）独立于工作台（wb_token），同源 iframe 下互不干扰。
-const zhizu = require('./services/zhizuService');
-app.use('/zhizu', zhizu.proxy);
-zhizu.start();
+// 智能家居独立应用里没有「智作平台」，不启子进程也不挂代理（省内存，也避免它去找不存在的目录）
+if (!SH_MODE) {
+  const zhizu = require('./services/zhizuService');
+  app.use('/zhizu', zhizu.proxy);
+  zhizu.start();
+}
 
 app.use(express.json({ limit: '12mb' })); // 家庭图床图片以 base64 JSON 提交（原图上限 5MB ≈ base64 6.7MB）
 
@@ -80,6 +90,13 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
   '/pets/desktop']; // 桌面宠物（key 即凭证：state/frame/action）
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();
+  // 智能家居独立应用：无登录页，直接注入内置本地账号（管理员），所有 /api 一律放行。
+  // 这是「全免登」的实现点——网关内与局域网直连端口走同一段代码，行为一致。
+  if (SH_MODE) {
+    req.user = ensureLocalUser();
+    req.tdb = getTenantDb(req.user.id);
+    return next();
+  }
   const user = auth.resolveUser(req);
   if (!user) {
     // 网关链路 401 取证（v1.9.2）：只记令牌「形态」不记内容，写 server.log 供真机排障
@@ -101,26 +118,52 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ---------- 智能家居独立应用：接口白名单闸门（v2.0.0）----------
+// 免登录的代价是**后端必须自己守住「哪些端点存在」**。coreRoutes / miscRoutes 是超级杂货铺
+// （笔记、邮箱、账务、文件存档、联系人、设置……全塞在这两个文件里），而智能家居真正要用的只有
+// 其中两个：/system-info（顶栏探活）与 /messages/contacts（智能板「查谁的资料」的用户选择器）。
+// 免登录 + 全量挂载 = 同网段任何人都能读走邮箱和笔记（e2e 的 A5 组就是照这个写的），
+// 所以白名单之外一律 404 —— 前端本来也没有入口，不算功能缩水。
+// 注意：本闸门在 EXEMPT 判断之后，故对免登录端点同样生效（/pets/desktop、/vibe/job 之类
+// 在这个应用里确实不存在，就该 404 而不是让它们去撞未挂载的路由）。
+const SH_API_ALLOW = [
+  '/health',            // 前端跨源可达性探测
+  '/system-info',       // 顶栏在线状态 / 名称版本
+  '/auth/me',           // 拿内置本地账号（登录接口 /auth/login 故意不在名单里：本应用没有登录页）
+  '/messages/contacts', // 用户选择器数据源（misc.js 里的）
+  '/mihome', '/cclight', '/xiaozhi', '/vc', '/flashtool',
+];
+app.use('/api', (req, res, next) => {
+  if (!SH_MODE) return next();
+  const p = req.path;
+  if (SH_API_ALLOW.some((a) => p === a || p.startsWith(a + '/'))) return next();
+  res.status(404).json({ error: '该功能不在「智能家居」应用中' });
+});
+
 // API 路由
 app.use('/api', authRoutes);
 app.use('/api', coreRoutes);
-app.use('/api', miscRoutes);
-app.use('/api', payRoutes);
-app.use('/api', upgradeRoutes);
-app.use('/api', petRoutes);
-app.use('/api', typingRoutes);
-app.use('/api', ttsRoutes);
-app.use('/api', storyRoutes);
-app.use('/api', vstudyRoutes);
-app.use('/api', pianoRoutes);
-app.use('/api', vibeRoutes);
-app.use('/api', wishRoutes);
-app.use('/api', monitorRoutes);
+app.use('/api', miscRoutes); // 含 /system-info、前端错误上报、文件存档/搜索等通用接口
 app.use('/api', mihomeRoutes);
 app.use('/api', ccLightRoutes);
 app.use('/api', xiaozhiRoutes);
+app.use('/api', vstudyRoutes); // 视频中心（智能家居最后一个 tab）用的 /vc 接口
+app.use('/api', flashToolRoutes); // 本地烧录工具包（v2.0.0 新增）
 app.use('/api', fnosRoutes);
-app.use('/api/ssl', sslRoutes);
+if (!SH_MODE) {
+  // 以下模块在智能家居独立应用里不存在：不挂路由 = 请求 404，前端也没有入口
+  app.use('/api', payRoutes);
+  app.use('/api', upgradeRoutes);
+  app.use('/api', petRoutes);
+  app.use('/api', typingRoutes);
+  app.use('/api', ttsRoutes);
+  app.use('/api', storyRoutes);
+  app.use('/api', pianoRoutes);
+  app.use('/api', vibeRoutes);
+  app.use('/api', wishRoutes);
+  app.use('/api', monitorRoutes);
+  app.use('/api/ssl', sslRoutes);
+}
 
 // 小智官方 MCP 接入点（v1.9.31，通道 A）：默认关闭，用户在智能板配置页勾选才连。
 // 出站 wss 连接由 xiaozhiMcpBridge 自己管理（退避重连 + 异常不上抛）；
@@ -135,8 +178,10 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
-// 托管前端构建产物：web/dist 下可能累积多个时间戳子目录，每次请求时解析最新的（重建前端后无需重启服务）
-const webDistRoot = path.join(__dirname, '..', 'web', 'dist');
+// 托管前端构建产物：web/dist（主工作台）/ web/dist-sh（智能家居应用，v2.0.0）下都可能累积多个
+// 时间戳子目录，每次请求时解析最新的（重建前端后无需重启服务）。两个 dist 树严格分开：
+// 根目录由运行模式决定，主应用的 latestDist() 绝不会误选到 sh 的产物（入口 html 名也不同）。
+const webDistRoot = path.join(__dirname, '..', 'web', SH_MODE ? 'dist-sh' : 'dist');
 function latestDist() {
   try {
     const subs = fs.readdirSync(webDistRoot)
@@ -172,7 +217,7 @@ if (webDist) {
   console.log('[web] 未找到前端构建产物，仅 API 模式（请先执行 npm run build:web）');
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || (SH_MODE ? 7778 : 3000);
 
 // ---------- 飞牛 fnOS 统一网关（v1.9.0）：/app/{appname} 前缀 + Unix Socket ----------
 // fnOS 桌面入口 /app/qgworkbench 的请求经 NAS 登录态校验后，转发到应用 target/app.sock，
@@ -257,6 +302,12 @@ const listenLocal = (srv) => new Promise((resolve, reject) => {
 // 初始化流程（初始账号/定时任务）等待历史数据导入完成后执行，
 // 避免空库阶段误建初始账号（导入 users 表后会跳过）
 onImported(() => {
+  if (SH_MODE) {
+    // 独立应用：不建初始管理员（走内置本地账号），不跑定时任务，不连钉钉
+    ensureLocalUser();
+    console.log('[mode] 智能家居应用就绪：免登录，无需账号');
+    return;
+  }
   auth.initAdmin();
   scheduler.init();
   dingtalkStream.start(); // 钉钉机器人长连接（接收群里 @机器人 的消息）

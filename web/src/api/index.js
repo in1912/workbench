@@ -25,6 +25,19 @@ function getToken() {
   return localStorage.getItem('wb_token') || '';
 }
 
+// 智能家居独立应用（v2.0.0）：入口 sh.html 会先设 window.__WB_SH__ = true。
+// 那个应用是**免登录**的（服务端给每个请求注入内置本地账号），「会话过期」这条路根本不存在；
+// 一旦真收到 401 还照老规矩跳 #/login，用户会掉进一个不存在的登录页，整页卡死。
+// 所以这里改成只报错、不跳转，并在提示里说清该查什么。
+export const SH_MODE = typeof window !== 'undefined' && window.__WB_SH__ === true;
+function handle401() {
+  if (SH_MODE) throw new Error('服务端拒绝了这次请求（401）。独立应用本应免登录，请刷新页面重试；若持续出现，检查应用是否正常启动');
+  localStorage.removeItem('wb_token');
+  localStorage.removeItem('wb_user');
+  if (!location.hash.includes('/login')) location.hash = '#/login';
+  throw new Error('登录已过期，请重新登录');
+}
+
 // 令牌冗余通道（v1.9.1）：飞牛 fnOS 统一网关会剥掉/替换转请求的 Authorization 头，
 // 表现为免登成功但所有业务接口 401（页面闪退、保存失败、退出即自动重登循环）。
 // query 参数任何网关都不会动——<img> 直链本来就走这条路，这里推广到全部请求；
@@ -105,12 +118,7 @@ async function request(method, url, body, retried = false, timeoutMs = 180000) {
     }
     throw new Error('网络连接失败，请重试（若反复失败请检查网络或稍后再试）');
   }
-  if (res.status === 401) {
-    localStorage.removeItem('wb_token');
-    localStorage.removeItem('wb_user');
-    if (!location.hash.includes('/login')) location.hash = '#/login';
-    throw new Error('登录已过期，请重新登录');
-  }
+  if (res.status === 401) handle401();
   // v1.9.4：先读文本再解析。此前 res.json().catch(()=>({})) 会把「200 但非 JSON」的响应
   // （fnOS 网关用自己的文本/错误页顶替业务响应，真机已捕获过）静默吞成 {}，当成功返回后
   // 页面拿 undefined 去读 .length 直接崩（首页子女学习卡）。现在：解析失败原样抛错，
@@ -182,12 +190,7 @@ async function upload(url, fields = {}, files = []) {
     body: fd,
     signal: AbortSignal.timeout(300000),
   });
-  if (res.status === 401) {
-    localStorage.removeItem('wb_token');
-    localStorage.removeItem('wb_user');
-    if (!location.hash.includes('/login')) location.hash = '#/login';
-    throw new Error('登录已过期，请重新登录');
-  }
+  if (res.status === 401) handle401();
   await rejectGatewayText(res);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `上传失败 (${res.status})`);
@@ -203,12 +206,7 @@ async function postBlob(url, body) {
     body: JSON.stringify(body ?? {}),
     signal: AbortSignal.timeout(300000),
   });
-  if (res.status === 401) {
-    localStorage.removeItem('wb_token');
-    localStorage.removeItem('wb_user');
-    if (!location.hash.includes('/login')) location.hash = '#/login';
-    throw new Error('登录已过期，请重新登录');
-  }
+  if (res.status === 401) handle401();
   if (!res.ok) {
     const d = await res.json().catch(() => ({}));
     throw new Error(d.error || `请求失败 (${res.status})`);

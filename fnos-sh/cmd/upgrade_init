@@ -1,0 +1,5 @@
+#!/bin/bash
+# 升级前：fnOS 会先停应用再换文件，这里无额外动作。
+# 数据全部在 @appdata（$TRIM_PKGVAR/data），换 target 不触碰。
+echo "upgrade_init: ${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?}（数据在 @appdata，不受影响）"
+exit 0
