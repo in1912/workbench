@@ -268,6 +268,22 @@ function sweepStaleJobs() {
   }
 }
 
+// 转写速度估算（最近 10 次成功转写 elapsed/duration 中位数 RTF），供前端转写进度条估时。
+// 列表与详情两个接口共用：详情接口供「笔记 → 录音笔记」页拿估速（它不拉列表）。
+// 返回 0 = 无历史样本，前端退回默认系数。
+function estimateRtf() {
+  try {
+    const hist = db.prepare(`SELECT elapsed_ms,duration_sec FROM vibe_records
+      WHERE status='done' AND elapsed_ms>0 AND duration_sec>=5 ORDER BY id DESC LIMIT 10`).all();
+    if (hist.length) {
+      const rs = hist.map((h) => h.elapsed_ms / 1000 / h.duration_sec).sort((a, b) => a - b);
+      const mid = rs[Math.floor(rs.length / 2)];
+      if (mid >= 0.05 && mid <= 600) return Math.round(mid * 100) / 100;
+    }
+  } catch { /* 估算失败不挡主流程 */ }
+  return 0;
+}
+
 router.get('/vibe/records', (req, res) => {
   try { sweepStaleJobs(); } catch { /* 清扫失败不挡列表 */ }
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -276,18 +292,7 @@ router.get('/vibe/records', (req, res) => {
   const rows = db.prepare(`SELECT id,user_name,source,fmt,started_at,ended_at,duration_sec,file_mime,file_size,file_path,fmt AS file_fmt,
     status,run_ms,CASE WHEN status='done' AND transcript_md<>'' THEN 1 ELSE 0 END has_text,transcript_chars,model,elapsed_ms,transcribed_at,error,created_at,from_notes
     FROM vibe_records ORDER BY id DESC LIMIT ? OFFSET ?`).all(pageSize, (page - 1) * pageSize);
-  // 转写速度估算（最近 10 次成功转写 elapsed/duration 中位数 RTF），供前端转写进度条估时
-  let rtf_est = 0;
-  try {
-    const hist = db.prepare(`SELECT elapsed_ms,duration_sec FROM vibe_records
-      WHERE status='done' AND elapsed_ms>0 AND duration_sec>=5 ORDER BY id DESC LIMIT 10`).all();
-    if (hist.length) {
-      const rs = hist.map((h) => h.elapsed_ms / 1000 / h.duration_sec).sort((a, b) => a - b);
-      const mid = rs[Math.floor(rs.length / 2)];
-      if (mid >= 0.05 && mid <= 600) rtf_est = Math.round(mid * 100) / 100;
-    }
-  } catch { /* 估算失败不挡列表 */ }
-  res.json({ total, page, pageSize, rows, rtf_est });
+  res.json({ total, page, pageSize, rows, rtf_est: estimateRtf() });
 });
 
 const getRow = (id) => db.prepare('SELECT * FROM vibe_records WHERE id=?').get(Number(id) || 0);
@@ -453,6 +458,8 @@ router.get('/vibe/transcript/:id', (req, res) => {
     transcribed_at: row.transcribed_at, duration_sec: row.duration_sec,
     file_path: row.file_path, file_size: row.file_size, fmt: row.fmt, source: row.source,
     started_at: row.started_at, ended_at: row.ended_at, from_notes: row.from_notes || 0,
+    // v1.9.40：带上估速系数，笔记页（只拉详情、不拉列表）的转写进度条才能给「预计还约 N 秒」
+    rtf_est: estimateRtf(),
   });
 });
 
