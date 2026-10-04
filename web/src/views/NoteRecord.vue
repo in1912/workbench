@@ -11,10 +11,22 @@
         <button :class="recState === 'recording' ? 'danger' : 'primary'" :disabled="busy" @click="recState === 'recording' ? stopRec() : startRec()">
           {{ recState === 'recording' ? `■ 停止录音 ${fmtDur(recSecs)}` : '● 开始录音' }}
         </button>
-        <select v-model="recFmt" :disabled="recState === 'recording' || !!rid" class="small" style="width:auto; padding:4px 8px">
-          <option value="wav">WAV</option>
-          <option value="webm">WebM（原始，体积小）</option>
+        <select v-model="recFmt" :disabled="recState !== 'idle' || !!rid" class="small" style="width:auto; padding:4px 8px">
+          <option value="wav">WAV（无损，体积大）</option>
+          <option value="mp3">MP3（更小）</option>
         </select>
+        <template v-if="recFmt === 'mp3'">
+          <select v-model.number="mp3Rate" :disabled="recState !== 'idle' || !!rid" class="small" style="width:auto; padding:4px 8px">
+            <option :value="16000">16 kHz</option>
+            <option :value="22050">22.05 kHz</option>
+            <option :value="44100">44.1 kHz</option>
+          </select>
+          <select v-model.number="mp3Kbps" :disabled="recState !== 'idle' || !!rid" class="small" style="width:auto; padding:4px 8px">
+            <option :value="32">32 kbps</option>
+            <option :value="64">64 kbps</option>
+            <option :value="128">128 kbps</option>
+          </select>
+        </template>
         <button :disabled="!rid || detail.status === 'running' || busy" @click="transcribe">转写</button>
         <button :disabled="!rid" @click="downloadAudio">下载</button>
         <button :disabled="!rid" @click="playing = !playing">{{ playing ? '收起播放' : '播放' }}</button>
@@ -97,6 +109,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { marked } from 'marked';
 import { api, rawUrl } from '../api';
 import { toWavBlob } from '../learning/audioWav';
+import { ensureLame, webmToMp3 } from '../learning/audioMp3';
 
 const route = useRoute();
 const router = useRouter();
@@ -113,6 +126,8 @@ const busy = ref(false);
 
 // ---- 录音 ----
 const recFmt = ref('wav');
+const mp3Rate = ref(16000);
+const mp3Kbps = ref(64);
 const recState = ref('idle'); // idle | recording | converting | uploading
 const recSecs = ref(0);
 const recError = ref('');
@@ -129,6 +144,10 @@ async function startRec() {
   recError.value = '';
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     recError.value = '当前浏览器不支持录制，请使用 Chrome / Edge'; return;
+  }
+  // MP3 编码器先加载好再开麦：不然录完才发现加载失败，白录一段
+  if (recFmt.value === 'mp3') {
+    try { await ensureLame(); } catch (e) { recError.value = e.message; return; }
   }
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -164,7 +183,15 @@ async function saveRec() {
   try {
     const webm = new Blob(recChunks, { type: (recorder && recorder.mimeType) || 'audio/webm' });
     if (webm.size < 1000 || recSecs.value < 1) throw new Error('录制太短，已丢弃');
-    const blob = recFmt.value === 'wav' ? await toWavBlob(webm) : webm;
+    let blob;
+    if (recFmt.value === 'mp3') {
+      recHint.value = 'MP3 编码中…';
+      blob = await webmToMp3(webm, mp3Rate.value, mp3Kbps.value, (p) => {
+        if (p >= 0.4) recHint.value = `MP3 编码中 ${Math.floor(((p - 0.4) / 0.6) * 100)}%…`;
+      });
+    } else {
+      blob = await toWavBlob(webm);
+    }
     const name = `note-${Date.now()}.${recFmt.value}`;
     recState.value = 'uploading';
     recHint.value = `上传中（${fmtSize(blob.size)}）…`;

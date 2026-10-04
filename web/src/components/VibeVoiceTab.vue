@@ -415,6 +415,7 @@ import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { marked } from 'marked';
 import { api, rawUrl, GATEWAY_ACTIVE } from '../api';
 import { toWavBlob } from '../learning/audioWav';
+import { ensureLame, webmToMp3 } from '../learning/audioMp3';
 
 const fmtDur = (sec) => {
   const s = Math.max(0, Math.round(Number(sec) || 0));
@@ -604,62 +605,7 @@ function releaseMic() {
   releaseWake();
 }
 
-// ---------- lamejs（MP3 编码，动态加载本地 vendor 避开 Vite 打包兼容问题） ----------
-let lameLoading = null;
-function ensureLame() {
-  if (window.lamejs?.Mp3Encoder) return Promise.resolve(window.lamejs);
-  if (lameLoading) return lameLoading;
-  lameLoading = new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = '/vendor/lame.min.js';
-    s.onload = () => (window.lamejs?.Mp3Encoder ? resolve(window.lamejs) : reject(new Error('MP3 编码器加载异常')));
-    s.onerror = () => reject(new Error('MP3 编码器加载失败（/vendor/lame.min.js）'));
-    document.head.appendChild(s);
-  });
-  return lameLoading;
-}
-async function webmToMp3(blob, rate, kbps, onProg) {
-  const rep = (p) => { if (onProg) onProg(p); };
-  const lame = await ensureLame();
-  rep(0.05);
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  let buf;
-  try { buf = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { ctx.close().catch(() => {}); }
-  rep(0.28);
-  // 重采样到目标采样率并混为单声道（语音识别足够，文件最小）
-  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(buf.length * rate / buf.sampleRate)), rate);
-  const srcNode = off.createBufferSource();
-  srcNode.buffer = buf;
-  srcNode.connect(off.destination);
-  srcNode.start();
-  const rendered = await off.startRendering();
-  rep(0.4);
-  const ch = rendered.getChannelData(0);
-  const pcm = new Int16Array(ch.length);
-  for (let i = 0; i < ch.length; i++) {
-    const s = Math.max(-1, Math.min(1, ch[i]));
-    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  rep(0.44);
-  const enc = new lame.Mp3Encoder(1, rate, kbps);
-  const out = [];
-  const total = pcm.length;
-  let lastYield = 0;
-  for (let i = 0; i < total; i += 1152) {
-    const d = enc.encodeBuffer(pcm.subarray(i, i + 1152));
-    if (d.length) out.push(new Uint8Array(d));
-    // 每约 4 秒音频让出一次主线程：进度条能刷新、页面不卡死
-    if (i - lastYield >= 48000 * 4) {
-      lastYield = i;
-      rep(0.44 + 0.56 * (i / total));
-      await new Promise((r) => setTimeout(r));
-    }
-  }
-  const fin = enc.flush();
-  if (fin.length) out.push(new Uint8Array(fin));
-  rep(1);
-  return new Blob(out, { type: 'audio/mpeg' });
-}
+// ---------- lamejs（MP3 编码）：实现在 learning/audioMp3.js（v1.9.39 抽出，笔记页录音共用） ----------
 
 // ---------- 上传 ----------
 const fileInput = ref(null);
