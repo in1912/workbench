@@ -11,6 +11,8 @@ const routes = [
   { path: '/notes/rec/:id?', component: () => import('../views/NoteRecord.vue'), meta: { title: '录音笔记', page: 'notes' } },
   // 笔记分享公开页（v1.9.39）：无需登录，token 在路径、4 位码在 ?c=
   { path: '/s/:token', component: () => import('../views/ShareView.vue'), meta: { title: '分享的笔记', public: true } },
+  // 人生管理系统（v1.10.0）：独立侧栏页；后端所有接口都在 /api/life/* 下
+  { path: '/life', component: () => import('../views/Life.vue'), meta: { title: '人生', page: 'life' } },
   { path: '/tasks', component: () => import('../views/Tasks.vue'), meta: { title: '待办与日程', page: 'tasks' } },
   { path: '/family', component: () => import('../views/Family.vue'), meta: { title: '家庭管理', page: 'family' } },
   { path: '/learning', component: () => import('../views/Learning.vue'), meta: { title: '学习', page: 'learning' } },

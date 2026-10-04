@@ -65,7 +65,7 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'pets', 'smarthome', 'settings'];
+const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'pets', 'smarthome', 'settings', 'life'];
 // v1.9.22 曾把「Agent红绿灯」升格独立页；v1.9.23 放回智能家居页 cclight 子 tab（授权由 db.js 幂等迁移回平）
 // v1.8.0：「私有项目」页（mbti/dep/pro 三大测试中心）已整体移除，迁至独立项目 Private_Mini；
 // 历史 allowed_pages/allowed_tabs 里残留的 'private' 键无害（不再有页面/接口映射到它）
@@ -78,6 +78,9 @@ function pageForPath(p) {
   if (p.startsWith('/emails')) return 'email';
   if (p.startsWith('/contacts')) return 'email'; // 邮箱页「通讯录」tab（email_contacts 表）
   if (p.startsWith('/notes')) return 'notes';
+  // 人生管理系统（v1.10.0）：整套 /api/life/* 归独立侧栏页「人生」。
+  // 与 /links（快捷启动，归 tools）不冲突：/li**f**e 与 /li**n**ks 在第 4 个字符就分开了。
+  if (p.startsWith('/life')) return 'life';
   if (p.startsWith('/todos') || p.startsWith('/events')) return 'tasks';
   // /story = 家庭管理页「儿童故事」tab（v1.9.36）。漏了这条就落 null=仅需登录，权限形同虚设（v1.9.9 fnos 踩过）
   if (p.startsWith('/family') || p.startsWith('/kids') || p.startsWith('/kid-tasks') || p.startsWith('/family-profiles') || p.startsWith('/lunar') || p.startsWith('/story')) return 'family';
@@ -127,6 +130,13 @@ function pageForPath(p) {
 // 前缀以 '=' 开头表示仅全等匹配（如 '=/pets' 只匹配 POST /pets 领养，不影响 /pets/state 等共享端点）
 // 未列出的端点（如 GET /learning 整页数据）属页级共享，不做 tab 校验
 const TAB_PATHS = {
+  // 人生管理系统（v1.10.0）：八个 tab 的接口全在 /life/* 之下，且**不细分**——
+  // 目标是「一个人自己的第二大脑」，把一个目标拆给两个 tab 各自授权没有意义。
+  // 键仍然要列全：缺键时用户的 allowed_tabs 里勾过的 tab 会被 sanitizeTabs 剥掉。
+  life: [
+    ['today', []], ['goals', []], ['actions', []], ['habits', []],
+    ['reviews', []], ['projects', []], ['domains', []], ['graph', []],
+  ],
   family: [
     ['family', ['/family']],
     ['kids', ['/kids', '/kid-tasks']],

@@ -10,6 +10,9 @@ export const NAV_ITEMS = [
   { to: '/news', icon: 'article', label: '新闻', page: 'news' },
   { to: '/email', icon: 'mail', label: '邮箱', page: 'email' },
   { to: '/notes', icon: 'edit', label: '笔记', page: 'notes' },
+  // 人生管理系统（v1.10.0）：独立侧栏页，承载目标/行动/复盘/习惯/项目/领域/关系引擎。
+  // 图标名是本机图标字体实测有字形的（缺失的名字会在侧栏渲染成一串字母，不是空白）。
+  { to: '/life', icon: 'flag', label: '人生', page: 'life' },
   { to: '/learning', icon: 'trending_up', label: '学习', page: 'learning' },
   { to: '/tasks', icon: 'event_note', label: '日程', page: 'tasks' },
   { to: '/family', icon: 'favorite', label: '家庭管理', page: 'family' },

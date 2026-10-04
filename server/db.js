@@ -588,8 +588,155 @@ CREATE TABLE IF NOT EXISTS dictation_history (
   mode TEXT DEFAULT 'auto',    -- 播报方式快照：auto=全自动 / step=逐条暂停
   interval INTEGER DEFAULT 30, -- 间隔秒数快照
   voice_id INTEGER DEFAULT 0,  -- 播报音色快照
-  voice_name TEXT DEFAULT '',  -- 音色名快照（音色删除后仍可显示）
+  voice_name TEXT DEFAULT '',  -- 音色名快照（音色删除后可显示）
   created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- ========== 人生管理系统（v1.10.0）==========
+-- 依据 D:\CC\参考资料\人生管理系统-开发PRD.md。原文「两层六系统」落成 11 个模块，
+-- 这里只放数据层：M1 关系引擎是地基（life_links），M2 目标是最大缺口（life_goals）。
+--
+-- **命名铁律**：本模块所有新表统一 life_ 前缀。工作台是 ~90 张表共用的扁平命名空间，
+-- 且已有两处教训：reviews 表/reviews 路由被「学习复盘」占、/links 被「快捷启动」占。
+-- 统一前缀后，任何新模块都不可能与本模块撞名，接口侧同理统一走 /api/life/*。
+
+-- M5 领域（对应原文「领域系统」）：六条种子。归档用 archived，**永不删除**（历史要留着）。
+CREATE TABLE IF NOT EXISTS life_domains (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  icon TEXT DEFAULT '',
+  color TEXT DEFAULT '',
+  sort_order INTEGER DEFAULT 0,
+  archived INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+-- icon 存 Material 图标名（与 v1.6.2 起「用图标字体替代彩色 emoji」的取向一致）。
+-- 这几个名字已用真实字体实测过确实有字形（见 Logs/ 下的图标探针做法：渲染后量宽度，
+-- 有效连字≈24px，缺失的名字会渲染成一整串字母）。**别用 target**：它是唯一实测缺失的常见名字。
+INSERT OR IGNORE INTO life_domains(name, icon, sort_order) VALUES
+  ('事业', 'work', 0), ('财务', 'savings', 1), ('健康', 'favorite', 2),
+  ('家庭', 'home', 3), ('关系', 'group', 4), ('个人成长', 'trending_up', 5);
+
+-- M2 目标：愿景/年/季/月 四级**共用一张表**，靠 level + parent_id 成树（原文「目标层级树」）。
+-- is_key = 原文「真正决定结果的 20%」——仪表盘只显示这些，避免每天没方向地忙。
+-- **进度不落列**：一律由 life_key_results 现算（lifeService.calcProgress）。存一列就会与 KR 不一致。
+CREATE TABLE IF NOT EXISTS life_goals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  level TEXT NOT NULL DEFAULT 'month',    -- vision|year|quarter|month
+  parent_id INTEGER,
+  domain_id INTEGER,
+  period_key TEXT DEFAULT '',             -- '2026' | '2026Q4' | '2026-10'
+  status TEXT NOT NULL DEFAULT 'active',  -- active|done|archived
+  is_key INTEGER DEFAULT 0,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- M2 关键结果：进度 = 加权平均（weight × clamp(current/target,0,1)）。
+-- target=0 视为未设置，跳过不参与（否则除零产生 NaN 污染整棵树）。
+CREATE TABLE IF NOT EXISTS life_key_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  target REAL DEFAULT 0,
+  current REAL DEFAULT 0,
+  unit TEXT DEFAULT '',
+  weight REAL DEFAULT 1,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- M3 习惯（原文「长期习惯」）：与「主线任务/日常待办」并列的行动三类之一。
+-- 连续天数**不落列**——由 life_habit_logs 现算（补打卡、删打卡才不会算错）。
+CREATE TABLE IF NOT EXISTS life_habits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  goal_id INTEGER,
+  domain_id INTEGER,
+  cadence TEXT DEFAULT 'daily',           -- daily|weekly|monthly
+  target_per_period INTEGER DEFAULT 1,
+  archived INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+-- 打卡日志：UNIQUE(habit_id,date) 保证同一天重复点只算一次（幂等，照笔记每日笔记的做法）
+CREATE TABLE IF NOT EXISTS life_habit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  habit_id INTEGER NOT NULL,
+  date TEXT NOT NULL,                     -- YYYY-MM-DD（本地日期）
+  count INTEGER DEFAULT 1,
+  note TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(habit_id, date)
+);
+
+-- M4 复盘（原文「日/周/月复盘」）：**不复用 reviews 表**——那是学习复盘，语义不同。
+-- 四问即 did_well/did_bad/learned/next_action；alignment=目标一致性 1~5（<3 提示偏差）。
+-- UNIQUE(type,period_key) 让「同一周期重复提交」= 覆盖，天然幂等（不用查了再插）。
+CREATE TABLE IF NOT EXISTS life_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL DEFAULT 'week',      -- day|week|month|quarter|year
+  period_key TEXT NOT NULL,
+  did_well TEXT DEFAULT '',
+  did_bad TEXT DEFAULT '',
+  learned TEXT DEFAULT '',
+  next_action TEXT DEFAULT '',
+  mood INTEGER,
+  alignment INTEGER,
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(type, period_key)
+);
+
+-- M6 项目：补齐原文那条「长期目标 → 月度项目 → 每周任务」的中间层（工作台此前只有孤立待办）。
+CREATE TABLE IF NOT EXISTS life_projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT DEFAULT 'work',           -- work|side_business|content|product|delivery
+  goal_id INTEGER,
+  domain_id INTEGER,
+  status TEXT DEFAULT 'active',           -- active|paused|done|archived
+  period_key TEXT DEFAULT '',
+  due_date TEXT,
+  description TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- M8 SOP（原文「把验证有效的方法沉淀成 SOP」）：主入口是复盘页「下一步动作」一键沉淀。
+-- use_count/last_used_at 让 SOP 从「写下来就忘」变成「真的在复用」。
+CREATE TABLE IF NOT EXISTS life_sops (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scenario TEXT NOT NULL,
+  steps TEXT DEFAULT '',                  -- Markdown
+  source_review_id INTEGER,
+  ai_prompt TEXT DEFAULT '',              -- 可选：绑一条提示词，一键跑（原文 AI+SOP）
+  domain_id INTEGER,
+  use_count INTEGER DEFAULT 0,
+  last_used_at TEXT,
+  archived INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- M1 关系引擎（**地基**）：全工作台通用双向链接。笔记内部的双链仍是 note_links，不并入本表
+-- （那是笔记自己的语义：[[标题]] 解析、未解析链接、别名），本表管**跨模块**的边。
+-- 有向存储、无向查询（服务层 UNION ALL 出边+入边）。
+-- relation 白名单在服务层校验（不在 DDL 加 CHECK——CHECK 改起来要重建表）：
+--   belongs|supports|produces|derives|reviews|relates
+-- UNIQUE 五元组让自动建链可重复执行（INSERT OR IGNORE）。
+CREATE TABLE IF NOT EXISTS life_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  src_type TEXT NOT NULL,
+  src_id INTEGER NOT NULL,
+  dst_type TEXT NOT NULL,
+  dst_id INTEGER NOT NULL,
+  relation TEXT NOT NULL DEFAULT 'relates',
+  weight REAL DEFAULT 1,
+  note TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(src_type, src_id, dst_type, dst_id, relation)
 );
 `;
 
@@ -682,6 +829,21 @@ function applyColumnMigrations(d) {
   addCol(d, 'family_items', 'done_by_name', "TEXT DEFAULT ''");
   addCol(d, 'family_items', 'done_at', 'TEXT');
   addCol(d, 'family_items', 'ext_id', "TEXT DEFAULT ''"); // 钉钉消息 msgId（跨重推去重用）
+
+  // 人生管理系统（v1.10.0）：行动三条主线挂在既有 todos 上，**不新建任务表**
+  // （日程页的待办就在 todos，另起一张会让「今日行动」分成两份数据）。
+  // task_type 区分原文的「主线任务/长期习惯/日常待办」；goal_id/project_id 是关系引擎在行动侧的锚点；
+  // estimate_min/actual_min 支撑原文「分清主次」的量化；main_line_date 指「这条属于哪一天的主线」。
+  addCol(d, 'todos', 'task_type', "TEXT DEFAULT 'daily_todo'");
+  addCol(d, 'todos', 'goal_id', 'INTEGER');
+  addCol(d, 'todos', 'project_id', 'INTEGER');
+  addCol(d, 'todos', 'estimate_min', 'INTEGER');
+  addCol(d, 'todos', 'actual_min', 'INTEGER');
+  addCol(d, 'todos', 'main_line_date', 'TEXT');
+  // 学习复盘也可挂目标（可选）：让既有 reviews 也能进关系引擎，不必为它单开表
+  addCol(d, 'reviews', 'goal_id', 'INTEGER');
+  // 商业系统归领域（可选）：商业技能/系统能按领域聚合
+  addCol(d, 'business_systems', 'domain_id', 'INTEGER');
 }
 
 // 笔记归属回填（v1.9.41）：老笔记的 folder_id 是空的（旧模型用 notes.category 字符串），
@@ -763,6 +925,22 @@ function initBusinessSchema(d) {
     CREATE INDEX IF NOT EXISTS idx_news ON news(category, fetched_at);
     CREATE INDEX IF NOT EXISTS idx_news_hot ON news_hot(board, day, rank);
     CREATE INDEX IF NOT EXISTS idx_clip ON clipboard_items(id DESC);
+    -- 人生管理系统（v1.10.0）
+    -- 关系引擎是全模块热路径（每个详情页都查），两端各一条（有向存储、无向查询）
+    CREATE INDEX IF NOT EXISTS idx_life_links_src ON life_links(src_type, src_id);
+    CREATE INDEX IF NOT EXISTS idx_life_links_dst ON life_links(dst_type, dst_id);
+    CREATE INDEX IF NOT EXISTS idx_life_goals_parent ON life_goals(parent_id, sort_order, id);
+    CREATE INDEX IF NOT EXISTS idx_life_goals_level ON life_goals(level, period_key);
+    CREATE INDEX IF NOT EXISTS idx_life_kr_goal ON life_key_results(goal_id, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_life_habit_logs ON life_habit_logs(habit_id, date);
+    -- 复盘的周期唯一性由表级 UNIQUE(type,period_key) 保证，这里补一条按时间倒序看列表的
+    CREATE INDEX IF NOT EXISTS idx_life_reviews_period ON life_reviews(type, period_key);
+    CREATE INDEX IF NOT EXISTS idx_life_projects_goal ON life_projects(goal_id, status);
+    CREATE INDEX IF NOT EXISTS idx_life_sops_domain ON life_sops(domain_id, archived);
+    CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
+    CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
+    -- 今日主线按天取：部分索引（NULL 不参与，普通待办不占索引）
+    CREATE INDEX IF NOT EXISTS idx_todos_mainline ON todos(main_line_date) WHERE main_line_date IS NOT NULL;
   `);
   // emails 去重唯一索引（v1.7.0 多邮箱）：(account_id, uid) 组合唯一，
   // 不同账号的 uid 互不冲突；发件/草稿 uid 为 NULL（SQLite 唯一索引视 NULL 互不相同，可多行）。
@@ -1641,6 +1819,12 @@ const TENANT_TABLES = [
   'business_systems', 'ai_sessions', 'ai_messages', 'email_config', 'email_contacts',
   'family_profiles', 'pay_bills', 'pay_categories', 'pay_budgets', 'files',
   'business_skills', 'skill_schedules', 'skill_pushes', 'news', 'ai_config',
+  // 人生管理系统（v1.10.0）。**注意本清单的真实作用**：租户库的建表由 getTenantDb →
+  // initBusinessSchema 保证（BUSINESS_DDL 里有的表，每个租户库都会有），跟这份名单无关。
+  // 这份名单只喂两个地方：① migrateToMultiTenant 把老主库的行复制进管理员租户库；
+  // ② cleanupMainBusinessTables 清主库残留。漏了它 = 老数据搬不过去，不是「租户库缺表」。
+  'life_domains', 'life_goals', 'life_key_results', 'life_habits', 'life_habit_logs',
+  'life_reviews', 'life_projects', 'life_sops', 'life_links',
 ];
 // 归租户库的 settings 键（其余留在主库）
 const TENANT_SETTING_KEYS = [

@@ -1,6 +1,18 @@
 // 页内 tab 级授权（与后端 auth.js TAB_PATHS 的 tab key 一一对应）
 // 授权语义：allowed_tabs 里该页的键不存在 = 该页全部 tab 开放；存在数组 = 只开放列出的 tab（空数组=都不开）
 export const TAB_DEFS = {
+  // 人生管理系统（v1.10.0）：与后端 auth.js TAB_PATHS.life 的键一一对应，顺序即 tab 栏顺序。
+  // 今日排第一：原文的「每天从这里出发，又反哺到这里」。
+  life: [
+    { key: 'today', label: '今日' },
+    { key: 'goals', label: '目标' },
+    { key: 'actions', label: '行动' },
+    { key: 'habits', label: '习惯' },
+    { key: 'reviews', label: '复盘与SOP' },
+    { key: 'projects', label: '项目' },
+    { key: 'domains', label: '领域' },
+    { key: 'graph', label: '关系' },
+  ],
   tasks: [
     { key: 'cal', label: '日历' },
     { key: 'todo', label: '待办事项' },
