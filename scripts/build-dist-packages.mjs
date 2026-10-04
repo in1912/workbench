@@ -25,6 +25,7 @@ const A = (...p) => path.join(...p);
 // ---------- 排除清单（个人数据 / 可再生的大货） ----------
 const XD_COMMON = [ // 目录
   A(ROOT, 'server', 'fnos'),                    // 只放 fpk 安装包（22MB），分发包不需要
+  A(ROOT, 'server', 'fnos-sh'),                 // 兄弟应用（JARVIS/智能家居）的成品 fpk，交付物不分发（~52MB）
   A(ROOT, 'zhizu', 'node_modules'),
   A(ROOT, 'zhizu', 'data'),
   A(ROOT, 'web', 'node_modules'),

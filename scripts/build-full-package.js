@@ -57,7 +57,13 @@ function addDirEntries(entries, absDir, prefix) {
 
 // server/ 源码文件清单（与升级页扫描同一套排除规则）
 // 'data'：zhizu/data/ 是本地开发库（子进程数据库在生产走持久卷 /data/zhizu），绝不入包
-const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__', 'data']);
+// 'fnos-sh'：只放兄弟应用（JARVIS / 智能家居）打好的成品 fpk，是交付物不是源码——
+//   .gitignore 第 20 行 `server/fnos-sh/*.fpk` 已按交付物排除，fnos-sh/build-fpk.mjs 里也
+//   有 SERVER_SKIP=['fnos','fnos-sh'] 挡同一件事；后端 fnosRoutes 只读 server/fnos/，前端零引用。
+//   不排掉的话，每个升级包都会白背 ~52MB 别人的安装包（v1.9.39 就因此撞到 apply 端点
+//   multer 的 100MB 上限，上传直接 500 File too large）。注意 server/fnos/ 不同——
+//   那是工作台自己的 fpk，FnosPanel 要下载，必须留在包里。
+const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'Logs', '.claude', 'backups', '__pycache__', 'data', 'fnos-sh']);
 function walkServer(rel, out) {
   const abs = path.join(ROOT, rel);
   for (const ent of fs.readdirSync(abs, { withFileTypes: true })) {
