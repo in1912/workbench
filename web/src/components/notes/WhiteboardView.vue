@@ -410,7 +410,10 @@ defineExpose({ reload: loadBoards });
 </script>
 
 <style scoped>
-.wb { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* position:relative 是必需的：里面的 .center-hint 用 inset:0 定位，根容器不定位时它会以更外层的
+   定位祖先为基准，一路铺到整个中间区（实测 x 从 218 起、宽 1154 —— **连笔记左栏一起盖住**），
+   于是「还没有白板」时整页点不动。GraphView 那边同样的写法靠 pointer-events:none 侥幸躲过，这里是真挡。 */
+.wb { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
 .wtop { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
 .sep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
 .wcanvas { position: relative; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg2); touch-action: none; cursor: grab; }

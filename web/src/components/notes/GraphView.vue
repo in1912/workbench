@@ -14,7 +14,7 @@
       <button class="small" :disabled="!hubCount" @click="focusHubs">居中集散点（{{ hubCount }}）</button>
       <button v-if="focusId" class="small" @click="clearFocus">← 退出聚焦</button>
       <button class="small" @click="releaseAll">释放钉住</button>
-      <button class="small" :disabled="!nodes.length" @click="fit">适配窗口</button>
+      <button class="small" :disabled="!viewNodes.length" @click="fit">适配窗口</button>
       <span class="muted small" style="margin-left:auto">
         {{ viewNodes.length }} 点 / {{ viewEdges.length }} 边{{ truncated ? '（已按上限截断）' : '' }}
       </span>
