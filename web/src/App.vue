@@ -1,6 +1,6 @@
 <template>
-  <!-- 登录页：全屏独立布局，不显示任何侧边栏/目录 -->
-  <template v-if="isLogin">
+  <!-- 公开页（登录页 / 分享页）：全屏独立布局，不显示任何侧边栏/目录 -->
+  <template v-if="isBare">
     <router-view />
   </template>
 
@@ -87,7 +87,8 @@ import { canTab } from './tabs';
 
 const router = useRouter();
 const route = useRoute();
-const isLogin = computed(() => route.path === '/login');
+// 公开页 = 路由 meta.public（登录页 + 笔记分享页 #/s/:token，v1.9.39）。这类页面渲染裸布局。
+const isBare = computed(() => !!route.meta.public);
 const menuOpen = ref(false);
 
 // 标签页标题跟随系统名称/路由即时更新（设置页改名后无需刷新；原 router.afterEach 的标题逻辑收拢到这里）
@@ -253,9 +254,9 @@ function beep() {
     o.stop(t0 + 0.55);
   } catch { /* 无音频环境（如静音策略）则跳过 */ }
 }
-// 登录页 ↔ 主布局切换：App 不会重新挂载，需手动触发（immediate 覆盖带 token 直接打开/刷新页面的情况）
-watch(isLogin, (loginPage) => {
-  if (loginPage) {
+// 公开页 ↔ 主布局切换：App 不会重新挂载，需手动触发（immediate 覆盖带 token 直接打开/刷新页面的情况）
+watch(isBare, (barePage) => {
+  if (barePage) {
     toasts.value = [];      // 退出登录清空弹窗
     shownMsgIds.clear();
   } else {
@@ -277,6 +278,8 @@ function openMessages(t) {
   dismissToast(t.id); // 打开会话即视为已读（服务端自动标记），事件对账兜底
   // 按消息来源模块直达对应页面（v1.7.0：新邮件点弹窗直达邮箱页对应账号 tab）
   if (t.module === 'email') router.push({ path: '/email', query: t.ext_id ? { acc: t.ext_id } : {} });
+  // 录音转写完成（v1.9.39）→ 直达该录音笔记页（ref_id = vibe_records.id）
+  else if (t.module === 'vibe') router.push(`/notes/rec/${t.ref_id}`);
   else if (t.module === 'kids') router.push('/family?tab=kids');
   else if (t.module === 'family') router.push('/family');
   else router.push('/messages');

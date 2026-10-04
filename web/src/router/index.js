@@ -7,6 +7,10 @@ const routes = [
   { path: '/news', component: () => import('../views/News.vue'), meta: { title: '新闻', page: 'news' } },
   { path: '/email', component: () => import('../views/Email.vue'), meta: { title: '邮箱', page: 'email' } },
   { path: '/notes', component: () => import('../views/Notes.vue'), meta: { title: '笔记', page: 'notes' } },
+  // 录音笔记（v1.9.39）：:id = vibe_records.id；不带 id = 新录一条。权限同「笔记」页
+  { path: '/notes/rec/:id?', component: () => import('../views/NoteRecord.vue'), meta: { title: '录音笔记', page: 'notes' } },
+  // 笔记分享公开页（v1.9.39）：无需登录，token 在路径、4 位码在 ?c=
+  { path: '/s/:token', component: () => import('../views/ShareView.vue'), meta: { title: '分享的笔记', public: true } },
   { path: '/tasks', component: () => import('../views/Tasks.vue'), meta: { title: '待办与日程', page: 'tasks' } },
   { path: '/family', component: () => import('../views/Family.vue'), meta: { title: '家庭管理', page: 'family' } },
   { path: '/learning', component: () => import('../views/Learning.vue'), meta: { title: '学习', page: 'learning' } },

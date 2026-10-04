@@ -53,6 +53,46 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- 笔记分类字典（v1.9.39）：取代前端写死的分类；照 pay_categories 的字典表风格。
+-- intake_token 非空 = 该分类对外开「只写」通道（外部 AI/系统带令牌推入，见 /api/note-intake/:token）
+CREATE TABLE IF NOT EXISTS note_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  sort_order INTEGER DEFAULT 0,
+  intake_token TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+INSERT OR IGNORE INTO note_categories(name, sort_order) VALUES
+  ('general', 0), ('工作', 1), ('生活', 2), ('家庭', 3), ('学习', 4), ('想法', 5);
+
+-- 笔记分享链接（v1.9.39）：token 长随机 + code 4 位混合码，两者都得对才放行（链接里都带上，点开即看）。
+-- mode=live 活链接（读当前笔记）/ snapshot 快照（冻结在 snapshot_title/snapshot_body，笔记后续改动不影响）
+CREATE TABLE IF NOT EXISTS note_shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id INTEGER NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  code TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'live',
+  snapshot_title TEXT DEFAULT '',
+  snapshot_body TEXT DEFAULT '',
+  with_audio INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  views INTEGER NOT NULL DEFAULT 0,
+  last_view_at TEXT,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- 笔记双向链接（v1.9.39）：正文 [[标题]] 解析落库；有向存储、无向查询
+-- （不用 links 表名——那是 quick_links 的 /api/links）
+CREATE TABLE IF NOT EXISTS note_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  src_note_id INTEGER NOT NULL,
+  dst_note_id INTEGER NOT NULL,
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(src_note_id, dst_note_id)
+);
+
 CREATE TABLE IF NOT EXISTS todos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -434,6 +474,13 @@ function addCol(d, table, col, def) {
 }
 
 function applyColumnMigrations(d) {
+  // 笔记增强（v1.9.39）：tags=自动标签（逗号分隔，纯本地提取）｜summary/keywords/ai_at=AI 概要缓存
+  // record_id=来源录音（指向主库 vibe_records.id，见笔记页「新增录音」）
+  addCol(d, 'notes', 'tags', "TEXT DEFAULT ''");
+  addCol(d, 'notes', 'summary', "TEXT DEFAULT ''");
+  addCol(d, 'notes', 'keywords', "TEXT DEFAULT ''");
+  addCol(d, 'notes', 'ai_at', 'TEXT');
+  addCol(d, 'notes', 'record_id', 'INTEGER');
   addCol(d, 'business_systems', 'username', "TEXT DEFAULT ''");
   addCol(d, 'business_systems', 'password', "TEXT DEFAULT ''");
   addCol(d, 'emails', 'body', "TEXT DEFAULT ''");
@@ -532,6 +579,12 @@ function initBusinessSchema(d) {
   // 此处为各表建立索引加速 LIKE 查询
   d.exec(`
     CREATE INDEX IF NOT EXISTS idx_notes ON notes(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notes_record ON notes(record_id);
+    CREATE INDEX IF NOT EXISTS idx_note_categories_sort ON note_categories(sort_order, id);
+    CREATE INDEX IF NOT EXISTS idx_note_shares_note ON note_shares(note_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_note_shares_token ON note_shares(token);
+    CREATE INDEX IF NOT EXISTS idx_note_links_src ON note_links(src_note_id);
+    CREATE INDEX IF NOT EXISTS idx_note_links_dst ON note_links(dst_note_id);
     CREATE INDEX IF NOT EXISTS idx_todos ON todos(done, due_date);
     CREATE INDEX IF NOT EXISTS idx_events ON events(start_time);
     CREATE INDEX IF NOT EXISTS idx_news ON news(category, fetched_at);
@@ -1241,6 +1294,8 @@ addCol(db, 'mbti_records', 'ai_analysis_done', 'INTEGER NOT NULL DEFAULT 0'); //
 // 直连与拉取两条路共用——含排队/引擎加载/推理全程，老记录无值显示 —）
 addCol(db, 'vibe_records', 'run_ms', 'INTEGER DEFAULT 0');
 addCol(db, 'vibe_records', 'elapsed_ms', 'INTEGER DEFAULT 0');
+// v1.9.39：1 = 从「笔记 → 新增录音」发起（转写完成后自动建笔记 + 推系统消息）；效率工具页发起的为 0
+addCol(db, 'vibe_records', 'from_notes', 'INTEGER DEFAULT 0');
 // 任务引擎路由（v1.6.0）：该任务由哪套客户端引擎领取——vibeasr=1.5B BitNet 纯CPU | vibe7b=7B vLLM(WSL2+显卡)；
 // 老任务/老 sidecar 无此概念，NULL 与空串一律按 vibeasr 兜底（向后兼容）
 addCol(db, 'vibe_jobs', 'engine', "TEXT DEFAULT 'vibeasr'");
@@ -1399,9 +1454,10 @@ function forEachTenant(fn) {
 }
 
 // ---------- 多租户存量迁移（复制式，一次性） ----------
-// 27 张业务表清单（主库与租户库共有的业务数据表）
+// 30 张业务表清单（主库与租户库共有的业务数据表）
 const TENANT_TABLES = [
   'notes', 'todos', 'events', 'emails', 'family_items', 'kids', 'kid_tasks',
+  'note_categories', 'note_shares', 'note_links',
   'learning_plans', 'learning_records', 'reviews', 'clipboard_items', 'quick_links',
   'business_systems', 'ai_sessions', 'ai_messages', 'email_config', 'email_contacts',
   'family_profiles', 'pay_bills', 'pay_categories', 'pay_budgets', 'files',

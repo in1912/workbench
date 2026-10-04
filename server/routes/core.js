@@ -5,6 +5,7 @@ const { routedDb, db, getTenantDb, getSetting, setSetting } = require('../db');
 const messageService = require('../services/messageService');
 const storagePaths = require('../services/storagePaths');
 const { search } = require('../services/searchService');
+const { extractTitle, extractTags, syncNoteLinks, createNote } = require('../services/noteService');
 
 // 给指定成员推送模块消息（家庭事项/子女学习登记时勾选；消息落主库永久留存）
 function pushModuleMessages(req, module, subject, content, refId) {
@@ -39,44 +40,137 @@ router.get('/overview', (req, res) => {
 });
 
 // ---------- 笔记 ----------
+// 标题/标签提取、[[双链]] 解析 → services/noteService.js（与外部写入、转写建笔记共用）
 router.get('/notes', (req, res) => {
   const q = (req.query.q || '').trim();
-  let rows;
+  const cat = (req.query.category || '').trim();
+  const conds = [];
+  const args = [];
   if (q) {
-    const like = `%${q}%`;
-    rows = req.tdb.prepare(
-      'SELECT * FROM notes WHERE title LIKE ? OR content LIKE ? OR category LIKE ? ORDER BY updated_at DESC'
-    ).all(like, like, like);
-  } else {
-    rows = req.tdb.prepare('SELECT * FROM notes ORDER BY updated_at DESC').all();
+    conds.push('(title LIKE ? OR content LIKE ? OR tags LIKE ?)');
+    args.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
-  res.json(rows);
+  // v1.9.39：分类改为精确过滤（老前端仍可传 q 做模糊搜索）
+  if (cat) { conds.push('category = ?'); args.push(cat); }
+  const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : '';
+  res.json(req.tdb.prepare(`SELECT * FROM notes${where} ORDER BY updated_at DESC`).all(...args));
 });
-// 根据内容自动提取标题：优先取首句（截断 20 字），否则取开头
-function extractTitle(content) {
-  const text = String(content || '').replace(/\s+/g, ' ').trim();
-  if (!text) return '无标题笔记';
-  const first = text.split(/[。！？!?\n；;]/)[0].trim();
-  if (first) return first.slice(0, 20);
-  return text.slice(0, 20);
-}
+
+// ---------- 笔记分类字典（v1.9.39）----------
+router.get('/notes/categories', (req, res) => {
+  const rows = req.tdb.prepare('SELECT * FROM note_categories ORDER BY sort_order, id').all();
+  const cnt = req.tdb.prepare('SELECT category, COUNT(*) c FROM notes GROUP BY category').all();
+  const map = Object.fromEntries(cnt.map((r) => [r.category, r.c]));
+  res.json(rows.map((r) => ({ ...r, note_count: map[r.name] || 0 })));
+});
+router.post('/notes/categories', (req, res) => {
+  const name = String((req.body && req.body.name) || '').trim().slice(0, 20);
+  if (!name) return res.status(400).json({ error: '分类名不能为空' });
+  const maxRow = req.tdb.prepare('SELECT MAX(sort_order) m FROM note_categories').get();
+  const order = Number.isFinite(Number(req.body.sort_order)) && req.body.sort_order !== undefined
+    ? Number(req.body.sort_order) : (Number(maxRow.m) || 0) + 1;
+  const r = req.tdb.prepare('INSERT OR IGNORE INTO note_categories(name,sort_order) VALUES(?,?)').run(name, order);
+  if (!r.changes) return res.status(400).json({ error: '该分类已存在' });
+  res.json({ id: Number(r.lastInsertRowid) });
+});
+router.put('/notes/categories/:id', (req, res) => {
+  const cur = req.tdb.prepare('SELECT * FROM note_categories WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: '分类不存在' });
+  const b = req.body || {};
+  // 令牌动作：gen=生成/轮换（第 5 条外部写入），clear=收回
+  let token = cur.intake_token;
+  if (b.token_action === 'gen') token = crypto.randomBytes(16).toString('hex');
+  else if (b.token_action === 'clear') token = '';
+  const name = b.name !== undefined ? String(b.name).trim().slice(0, 20) || cur.name : cur.name;
+  const order = b.sort_order !== undefined ? Number(b.sort_order) || 0 : cur.sort_order;
+  if (name !== cur.name && req.tdb.prepare('SELECT id FROM note_categories WHERE name=? AND id<>?').get(name, cur.id)) {
+    return res.status(400).json({ error: '分类名已被占用' });
+  }
+  req.tdb.prepare('UPDATE note_categories SET name=?, sort_order=?, intake_token=? WHERE id=?')
+    .run(name, order, token, cur.id);
+  res.json({ ok: true, intake_token: token });
+});
+router.delete('/notes/categories/:id', (req, res) => {
+  const cur = req.tdb.prepare('SELECT * FROM note_categories WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: '分类不存在' });
+  if (cur.name === 'general') return res.status(400).json({ error: '「未分类」不可删除' });
+  const used = req.tdb.prepare('SELECT COUNT(*) c FROM notes WHERE category=?').get(cur.name).c;
+  if (used && req.query.force !== '1') {
+    return res.status(409).json({ error: `该分类下还有 ${used} 条笔记`, count: used, need_force: true });
+  }
+  if (used) req.tdb.prepare("UPDATE notes SET category='general' WHERE category=?").run(cur.name);
+  req.tdb.prepare('DELETE FROM note_categories WHERE id=?').run(cur.id);
+  res.json({ ok: true, moved: used });
+});
+
 router.post('/notes', (req, res) => {
-  const { content, category } = req.body;
-  const r = req.tdb.prepare(
-    "INSERT INTO notes(title,content,category) VALUES(?,?,?)"
-  ).run(extractTitle(content), content || '', category || 'general');
-  res.json({ id: r.lastInsertRowid });
+  const { content, category, record_id, title } = req.body;
+  const id = createNote(req.tdb, { title, content: content || '', category, record_id });
+  res.json({ id });
 });
 router.put('/notes/:id', (req, res) => {
-  const { content, category } = req.body;
-  req.tdb.prepare(
-    "UPDATE notes SET title=?, content=?, category=?, updated_at=datetime('now','localtime') WHERE id=?"
-  ).run(extractTitle(content), content ?? '', category ?? 'general', req.params.id);
+  const { content, category, title } = req.body;
+  const tdb = req.tdb;
+  const cur = tdb.prepare('SELECT * FROM notes WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: '笔记不存在' });
+  const cat = category ?? cur.category;
+  tdb.prepare(
+    "UPDATE notes SET title=?, content=?, category=?, tags=?, updated_at=datetime('now','localtime') WHERE id=?"
+  ).run(
+    (title && String(title).trim().slice(0, 60)) || extractTitle(content), content ?? '', cat,
+    extractTags(content, tdb), req.params.id
+  );
+  syncNoteLinks(tdb, req.params.id, content);
   res.json({ ok: true });
 });
 router.delete('/notes/:id', (req, res) => {
-  req.tdb.prepare('DELETE FROM notes WHERE id=?').run(req.params.id);
+  const tdb = req.tdb;
+  const id = req.params.id;
+  tdb.prepare('DELETE FROM note_shares WHERE note_id=?').run(id);
+  tdb.prepare('DELETE FROM note_links WHERE src_note_id=? OR dst_note_id=?').run(id, id);
+  tdb.prepare('DELETE FROM notes WHERE id=?').run(id);
+  // 注意：录音笔记关联的 vibe_records / 音频文件【不删】——那是用户真实录音，留在「效率工具→录音转写」可查
   res.json({ ok: true });
+});
+
+// AI 概要 + 关键词（第 3 条）：生成结果落库（summary/keywords/ai_at），刷新不丢
+router.post('/notes/:id/ai-meta', async (req, res) => {
+  try {
+    const row = req.tdb.prepare('SELECT * FROM notes WHERE id=?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: '笔记不存在' });
+    const text = String(row.content || '').slice(0, 8000);
+    if (!text.trim()) return res.status(400).json({ error: '笔记内容为空' });
+    const aiService = require('../services/aiService');
+    const summary = await aiService.summarize(text, '请用 150 字以内总结这篇笔记的核心要点，直接输出总结，不要前后缀。', req.tdb);
+    let keywords = '';
+    try {
+      keywords = await aiService.summarize(text, '提取这篇笔记的 5 个关键词，用中文逗号分隔，只输出关键词，不要解释。', req.tdb);
+      keywords = String(keywords || '').replace(/[，,、\s]+/g, ',').replace(/^,|,$/g, '').slice(0, 120);
+    } catch { /* 关键词失败不影响概要 */ }
+    req.tdb.prepare("UPDATE notes SET summary=?, keywords=?, ai_at=datetime('now','localtime') WHERE id=?")
+      .run(String(summary || '').slice(0, 500), keywords, row.id);
+    res.json({ summary: String(summary || ''), keywords });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 双向链接：出链 + 反链（有向存储、无向查询，UNION ALL 两个方向）
+router.get('/notes/:id/links', (req, res) => {
+  const id = req.params.id;
+  const rows = req.tdb.prepare(`
+    SELECT dst_note_id AS id, 'out' AS dir FROM note_links WHERE src_note_id = ?
+    UNION ALL
+    SELECT src_note_id AS id, 'in'  AS dir FROM note_links WHERE dst_note_id = ?
+  `).all(id, id);
+  const get = req.tdb.prepare('SELECT id, title, category FROM notes WHERE id=?');
+  res.json(rows.map((r) => { const n = get.get(r.id); return n ? { ...n, dir: r.dir } : null; }).filter(Boolean));
+});
+
+// 录音笔记页用：按 vibe_records.id 反查关联的笔记条目（未转写时还没建，返回 {}）
+router.get('/notes/by-record/:rid', (req, res) => {
+  const row = req.tdb.prepare('SELECT * FROM notes WHERE record_id=? ORDER BY id DESC LIMIT 1').get(req.params.rid);
+  res.json(row || {});
 });
 
 // ---------- 待办 ----------

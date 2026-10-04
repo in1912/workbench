@@ -8,7 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 const multer = require('multer');
-const { db, dataDir, getSetting, setSetting } = require('../db');
+const { db, dataDir, getSetting, setSetting, getTenantDb } = require('../db');
 const storagePaths = require('../services/storagePaths');
 const { audioDuration, AUDIO_MIME } = require('../lib/audioMeta');
 const paths = require('../services/vibeasrPaths');
@@ -236,17 +236,18 @@ router.post('/vibe/upload', upload.any(), (req, res) => {
   if (!duration && hint > 0) duration = hint;    // 非 WAV/MP3 时回落客户端解码时长
   if (!duration) duration = Math.max(0, Number(req.body.duration_sec) || 0); // 录音兜底：起止时间差
   const source = req.body.source === 'upload' ? 'upload' : 'record';
+  const fromNotes = req.body.from_notes === '1' || req.body.from_notes === 1 ? 1 : 0; // v1.9.39：笔记页「新增录音」发起
   // Blob 无显式类型时 multer 收到 application/octet-stream，按扩展名兜底（<audio> 播放需要正确 mime）
   const mime = file.mimetype && file.mimetype !== 'application/octet-stream' ? file.mimetype : (AUDIO_MIME[ext] || file.mimetype || 'application/octet-stream');
   let full = '';
   try { full = saveAudio(file); } catch (e) { return res.status(500).json({ error: '保存失败：' + e.message }); }
   const u = db.prepare('SELECT display_name, nickname, username FROM users WHERE id=?').get(req.user.id);
-  const info = db.prepare(`INSERT INTO vibe_records(user_id,user_name,source,fmt,started_at,ended_at,duration_sec,file_path,file_mime,file_size)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`)
+  const info = db.prepare(`INSERT INTO vibe_records(user_id,user_name,source,fmt,started_at,ended_at,duration_sec,file_path,file_mime,file_size,from_notes)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
     .run(req.user.id, userLabel(u), source, ['wav', 'mp3'].includes(ext) ? ext : (ext || 'wav'),
       String(req.body.started_at || '').slice(0, 19) || nowStr(),
       String(req.body.ended_at || '').slice(0, 19) || nowStr(),
-      duration, full, mime, file.buffer.length);
+      duration, full, mime, file.buffer.length, fromNotes);
   res.json({ ok: true, id: Number(info.lastInsertRowid), duration_sec: Math.round(duration * 10) / 10 });
 });
 
@@ -273,7 +274,7 @@ router.get('/vibe/records', (req, res) => {
   const pageSize = Math.max(5, Math.min(100, parseInt(req.query.pageSize, 10) || 5));
   const total = db.prepare('SELECT COUNT(*) c FROM vibe_records').get().c;
   const rows = db.prepare(`SELECT id,user_name,source,fmt,started_at,ended_at,duration_sec,file_mime,file_size,file_path,fmt AS file_fmt,
-    status,run_ms,CASE WHEN status='done' AND transcript_md<>'' THEN 1 ELSE 0 END has_text,transcript_chars,model,elapsed_ms,transcribed_at,error,created_at
+    status,run_ms,CASE WHEN status='done' AND transcript_md<>'' THEN 1 ELSE 0 END has_text,transcript_chars,model,elapsed_ms,transcribed_at,error,created_at,from_notes
     FROM vibe_records ORDER BY id DESC LIMIT ? OFFSET ?`).all(pageSize, (page - 1) * pageSize);
   // 转写速度估算（最近 10 次成功转写 elapsed/duration 中位数 RTF），供前端转写进度条估时
   let rtf_est = 0;
@@ -361,6 +362,35 @@ function finishTranscribe(rowId, content, model) {
   const elapsed = Number(row.run_ms) > 0 ? Date.now() - Number(row.run_ms) : 0;
   db.prepare(`UPDATE vibe_records SET status='done', transcript_md=?, transcript_json=?, transcript_chars=?, transcribed_at=?, model=?, elapsed_ms=?, error='' WHERE id=?`)
     .run(md, JSON.stringify(utter), chars, nowStr(), model, elapsed, rowId);
+  // v1.9.39：从「笔记 → 新增录音」发起的（from_notes=1）转写完成后，①自动建一条笔记（混排进笔记列表）
+  // ②推一条系统消息（带摘要/字数/时长/耗时），点消息直达该录音笔记页。
+  // 效率工具页发起的批量转写不打这个标记，行为不变（不建笔记、不推消息）。
+  if (row.from_notes) {
+    try { onNoteTranscribed(row, md, chars, elapsed); } catch (e) { console.warn('[vibe] 转写后建笔记/推消息失败:', e.message); }
+  }
+}
+// 录音笔记转写完成后的收尾：建笔记（幂等）+ 推消息
+function onNoteTranscribed(row, md, chars, elapsed) {
+  const tdb = getTenantDb(row.user_id);
+  const exist = tdb.prepare('SELECT id FROM notes WHERE record_id=? LIMIT 1').get(row.id);
+  if (!exist) {
+    const noteService = require('../services/noteService');
+    noteService.createNote(tdb, {
+      title: `录音 ${row.started_at || nowStr()}`,
+      content: md, category: 'general', record_id: row.id,
+    });
+  }
+  const mmss = (s) => { const t = Math.max(0, Math.round(Number(s) || 0)); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+  const secs = Math.max(0, Math.round(Number(elapsed) / 1000));
+  const summary = String(md || '').replace(/[#>*`_\-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  try {
+    require('../services/messageService').send(db, {
+      from_user: row.user_id, to_user: row.user_id,
+      subject: '录音转写完成',
+      content: `共 ${chars} 字｜时长 ${mmss(row.duration_sec)}｜转写耗时 ${secs} 秒\n${summary}`,
+      module: 'vibe', ref_id: row.id,
+    });
+  } catch (e) { console.warn('[vibe] 转写完成消息推送失败:', e.message); }
 }
 
 async function runTranscribe(rowId) {
@@ -417,9 +447,12 @@ router.get('/vibe/transcript/:id', (req, res) => {
   const row = getRow(req.params.id);
   if (!row) return res.status(404).json({ error: '记录不存在' });
   res.json({
-    id: row.id, status: row.status, run_ms: row.run_ms || 0, transcript_md: row.transcript_md || '',
+    id: row.id, status: row.status, run_ms: row.run_ms || 0, elapsed_ms: row.elapsed_ms || 0,
+    transcript_md: row.transcript_md || '',
     transcript_chars: row.transcript_chars, model: row.model, error: row.error,
     transcribed_at: row.transcribed_at, duration_sec: row.duration_sec,
+    file_path: row.file_path, file_size: row.file_size, fmt: row.fmt, source: row.source,
+    started_at: row.started_at, ended_at: row.ended_at, from_notes: row.from_notes || 0,
   });
 });
 

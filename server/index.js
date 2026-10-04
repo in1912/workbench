@@ -28,6 +28,7 @@ const xiaozhiRoutes = require('./routes/xiaozhiRoutes');
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
 const flashToolRoutes = require('./routes/flashToolRoutes');
+const noteShareRoutes = require('./routes/noteShareRoutes'); // 笔记分享 + 外部写入令牌（v1.9.39）
 const scheduler = require('./scheduler');
 const dingtalkStream = require('./services/dingtalkStreamService');
 
@@ -87,7 +88,8 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
   '/xiaozhi/bridge', // 智能板桥接（v1.9.11：板端固件 MCP 工具回连，key 即凭证，照 /vibe/job 模式）
   '/xiaozhi/firmware', // 智能板固件下载（v1.9.12：同一桥接密钥或管理员令牌，路由内自校验；无工具链环境从构建机代理）
   '/xiaozhi/photo', // 智能板照片上传（v1.9.17：固件 POST 二进制 JPEG，路由级 raw 解析 + 桥接密钥自校验）
-  '/pets/desktop']; // 桌面宠物（key 即凭证：state/frame/action）
+  '/pets/desktop', // 桌面宠物（key 即凭证：state/frame/action）
+  '/share', '/note-intake']; // 笔记分享（token+4位码即凭证）/ 外部写入令牌（v1.9.39）。⚠️ 路由内一律 403/404，绝不 401
 app.use('/api', (req, res, next) => {
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();
   // 智能家居独立应用：无登录页，直接注入内置本地账号（管理员），所有 /api 一律放行。
@@ -143,6 +145,7 @@ app.use('/api', (req, res, next) => {
 // API 路由
 app.use('/api', authRoutes);
 app.use('/api', coreRoutes);
+app.use('/api', noteShareRoutes); // 笔记分享 /share/n/:token（免登录）+ 管理 /notes/shares/*（继承笔记页权限）+ 外部写入 /note-intake/:token（v1.9.39）
 app.use('/api', miscRoutes); // 含 /system-info、前端错误上报、文件存档/搜索等通用接口
 app.use('/api', mihomeRoutes);
 app.use('/api', ccLightRoutes);
