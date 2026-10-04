@@ -27,6 +27,24 @@ function syncDefaultTodos(d, username) {
   setSetting(d, 'last_template_date', today);
 }
 
+// 每日笔记自动创建：租户在笔记设置里打开 daily_note.auto_create 后，每天凌晨自动建当天那篇。
+// 与 syncDefaultTodos 同一套路：每租户每天只跑一次（last_daily_note_date 记日期），
+// 真正的创建走 noteService.ensureDailyNote，与 POST /notes/daily 共用一份逻辑（幂等靠 daily_date）。
+function ensureDailyNotes(d, username) {
+  const cfg = getSetting(d, 'daily_note', null) || {};
+  if (!cfg.auto_create) return;
+  const { localToday } = require('./services/noteStatsService');
+  const today = localToday();
+  if (getSetting(d, 'last_daily_note_date', '') === today) return;
+  const { ensureDailyNote } = require('./services/noteService');
+  const template = cfg.template_id
+    ? d.prepare('SELECT content FROM note_templates WHERE id=?').get(Number(cfg.template_id) || -1)
+    : null;
+  const r = ensureDailyNote(d, today, { folder_id: cfg.folder_id, template });
+  setSetting(d, 'last_daily_note_date', today);
+  if (r.created) console.log(`[scheduler] 已创建今日笔记 ${today}${username ? `（${username}）` : ''}`);
+}
+
 // 邮箱拉取：固定每 5 分钟巡检一次，各租户各账号按自己的 refresh_minutes 与上次拉取时间决定是否到点
 // （v1.7.0 多邮箱：逐账号判断到点，到点即整租户拉取一遍启用中的账号；时间戳按账号分开记）
 async function pollEmails() {
@@ -157,6 +175,17 @@ function init() {
     try { syncDefaultTodos(d, username); } catch (e) { console.error(`[scheduler] 默认待办启动补跑失败(${username}):`, e.message); }
   });
 
+  // 每天 05:00 自动创建当天笔记（逐租户，开关在笔记设置里；启动时也补跑一次，
+  // 服务器夜里重启也不会漏掉当天那篇）
+  cron.schedule('0 5 * * *', () => {
+    forEachTenant((d, uid, username) => {
+      try { ensureDailyNotes(d, username); } catch (e) { console.error(`[scheduler] 每日笔记创建失败(${username}):`, e.message); }
+    });
+  }, { timezone: 'Asia/Shanghai' });
+  forEachTenant((d, uid, username) => {
+    try { ensureDailyNotes(d, username); } catch (e) { console.error(`[scheduler] 每日笔记启动补跑失败(${username}):`, e.message); }
+  });
+
   // 每周日 21:00 清理 90 天前的旧新闻（历史新闻留存 90 天；新闻在哪个库就清哪个）+ 各租户邮件垃圾箱
   const cleanJob = cron.schedule('0 21 * * 0', () => {
     const emailService = require('./services/emailService');
@@ -249,4 +278,4 @@ function init() {
   console.log('[scheduler] 定时任务已启动：每日 06:00 默认待办 / 08:00 新闻 / 09:00 百度榜单存档 / 09:23 SSL证书到期检查 / 每周日 21:00 清理 / 通勤按租户并集时刻 / Skill 任务 / 飞书群触发词轮询(30s) / 日程提醒巡检(每分钟)');
 }
 
-module.exports = { init, tasks, syncDefaultTodos, rescheduleCommute };
+module.exports = { init, tasks, syncDefaultTodos, ensureDailyNotes, rescheduleCommute };

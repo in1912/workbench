@@ -44,6 +44,9 @@
           <button class="small" @click="shiftMonth(-1)">‹ 上月</button>
           <b>{{ calYear }} 年 {{ calMonth + 1 }} 月</b>
           <button class="small" @click="shiftMonth(1)">下月 ›</button>
+          <label class="cal-notes-toggle" title="在日期格里显示当天写过的笔记标题（需要笔记权限）">
+            <input v-model="showNoteTitles" type="checkbox"> 显示笔记
+          </label>
         </div>
         <div class="cal-grid">
           <div v-for="w in weekLabels" :key="w" class="cal-week">{{ w }}</div>
@@ -70,6 +73,14 @@
               <div v-if="(dayEvents[d] || []).length > 3" class="cal-more" @click.stop="openList(d)">
                 +{{ (dayEvents[d] || []).length - 3 }} 更多
               </div>
+            </div>
+            <!-- 笔记插件：日程之后追加当天笔记标题（开关默认关，关了之后这里完全不渲染） -->
+            <div v-if="showNoteTitles && d && (noteTitlesByDay[d] || []).length" class="cal-notes">
+              <a v-for="n in (noteTitlesByDay[d] || []).slice(0, 3)" :key="n.id" class="cal-note"
+                 :class="{ daily: n.daily }" :title="n.title || '未命名'" href="javascript:;"
+                 @click.stop="openNoteTab(n.id)">📝 {{ n.title || '未命名' }}</a>
+              <a v-if="(noteTitlesByDay[d] || []).length > 3" class="cal-note more" href="javascript:;"
+                 @click.stop="openNoteTab(noteTitlesByDay[d][0].id)">+{{ (noteTitlesByDay[d] || []).length - 3 }}</a>
             </div>
           </div>
         </div>
@@ -179,11 +190,12 @@
 
 <script setup>
 import { nextTick, ref, computed, watch, onMounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { api } from '../api';
 import { canTab, firstTab } from '../tabs';
 import UserPicker from '../components/UserPicker.vue';
 const route = useRoute();
+const router = useRouter();
 
 const tab = ref(firstTab('tasks', 'cal'));
 // 成员选择器数据源（日程共享给谁）
@@ -238,6 +250,25 @@ const calDays = computed(() => {
   while (arr.length % 7 !== 0) arr.push(null);
   return arr;
 });
+
+// ---- 笔记插件：日历格里显示当天笔记标题（默认关） ----
+// 只加这一块，calDays / dayEvents / 节假日 / 跨天条的既有逻辑一行不动。
+const showNoteTitles = ref(localStorage.getItem('cal_show_notes') === '1');
+const noteTitlesByDay = ref({});
+async function loadNoteTitles() {
+  if (!showNoteTitles.value) { noteTitlesByDay.value = {}; return; }
+  const ds = calDays.value.filter(Boolean);
+  if (!ds.length) { noteTitlesByDay.value = {}; return; }
+  try {
+    noteTitlesByDay.value = (await api.get(`/notes/by-day?from=${ds[0]}&to=${ds[ds.length - 1]}`)) || {};
+  } catch {
+    // 没有笔记权限的用户会拿到 403，静默当没有即可，日历本身照常用
+    noteTitlesByDay.value = {};
+  }
+}
+function openNoteTab(id) { router.push(`/notes?note=${id}`); }
+watch(showNoteTitles, (v) => { localStorage.setItem('cal_show_notes', v ? '1' : '0'); loadNoteTitles(); });
+watch([calYear, calMonth, weekStart], () => loadNoteTitles());
 
 function holidayInfo(dateStr) {
   return holidays.value[dateStr.slice(5)] || null;
@@ -483,6 +514,7 @@ onMounted(async () => {
     weekStart.value = c.weekStart || 'monday';
   } catch {}
   loadHolidays();
+  loadNoteTitles();
 });
 </script>
 
@@ -503,6 +535,13 @@ onMounted(async () => {
 .cal-evt.span-mid { border-left-color: var(--accent2); background: var(--bg2); opacity: .92; border-radius: 0; border-right: 2px solid var(--accent2); }
 .cal-evt.span-start { border-radius: 3px 0 0 3px; border-right: 2px solid var(--accent2); }
 .cal-evt.span-end { border-radius: 0 3px 3px 0; border-left: none; border-right: 2px solid var(--accent2); padding-left: 6px; }
+/* 笔记插件：挂在日期格下方的标题 chip */
+.cal-notes-toggle { margin-left: auto; font-size: 12px; color: var(--text3); display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.cal-notes { display: flex; flex-direction: column; gap: 2px; border-top: 1px dashed var(--border); padding-top: 3px; }
+.cal-note { font-size: 10.5px; color: var(--text2); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 3px; border-radius: 3px; }
+.cal-note:hover { background: var(--bg2); color: var(--accent); }
+.cal-note.daily { color: var(--accent); }
+.cal-note.more { color: var(--text3); }
 .cal-span-start, .cal-span-end, .cal-span-mid { color: var(--accent2); font-size: 10px; margin: 0 2px; }
 /* 节假日/补班日期底色（同看板节日日历） */
 .cal-cell.cal-holiday { background: rgba(52, 211, 153, .12); }

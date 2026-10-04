@@ -8,6 +8,7 @@
     "build:sh": "vite build --config vite.sh.config.js"
   },
   "dependencies": {
+    "d3-force": "^3.0.0",
     "flv.js": "^1.6.2",
     "leaflet": "^1.9.4",
     "mammoth": "^1.12.2",

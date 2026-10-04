@@ -15,7 +15,7 @@ const HJ = { Authorization: 'Bearer ' + tA };
 
 let pass = 0, fail = 0;
 const ck = (n, c, x = '') => { c ? (pass++, console.log('  ✓', n)) : (fail++, console.log('  ✗', n, x)); };
-const B = 'http://localhost:3000/api';
+const B = (process.env.E2E_BASE || 'http://localhost:3000') + '/api'; // E2E_BASE 用来指向另起的临时实例
 const j = async (r) => { const t = await r.text(); try { return JSON.parse(t); } catch { return { __raw: t.slice(0, 120) }; } };
 
 const notes = [];          // 本次创建的笔记 id

@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
--- 笔记分类字典（v1.9.39）：取代前端写死的分类；照 pay_categories 的字典表风格。
+-- 笔记分类字典（v1.9.39）——**已是死表**：v1.9.41 起分类并入 note_folders 的多级文件夹树，
+-- 新代码一律不再读写本表。表与种子都留着（apply 从不删东西，删了会让主库 purge 语义变化），
+-- /notes/categories 这个历史路径改为直接服务 note_folders，老调用方照常可用。
 -- intake_token 非空 = 该分类对外开「只写」通道（外部 AI/系统带令牌推入，见 /api/note-intake/:token）
 CREATE TABLE IF NOT EXISTS note_categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +93,133 @@ CREATE TABLE IF NOT EXISTS note_links (
   dst_note_id INTEGER NOT NULL,
   created_at TEXT DEFAULT (datetime('now','localtime')),
   UNIQUE(src_note_id, dst_note_id)
+);
+
+-- ========== 笔记知识系统（v1.9.41） ==========
+
+-- 多级文件夹：取代 note_categories 的角色。树形结构下「工作/2026」与「生活/2026」
+-- 要能并存，所以唯一性是**按父节点**的（UNIQUE(parent_id,name)），不是全局唯一。
+-- SQLite 的唯一约束把 NULL 视作互不相同，所以顶层重名靠下面的部分唯一索引补上。
+-- intake_token 非空 = 该文件夹对外开「只写」通道（外部系统带令牌推入，见 /api/note-intake/:token）。
+CREATE TABLE IF NOT EXISTS note_folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER,
+  sort_order INTEGER DEFAULT 0,
+  intake_token TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(parent_id, name)
+);
+-- 顶层文件夹（parent_id IS NULL）的名称唯一：没有这条，重名顶层会绕过上面的组合唯一
+CREATE UNIQUE INDEX IF NOT EXISTS idx_note_folders_root_name ON note_folders(name) WHERE parent_id IS NULL;
+INSERT OR IGNORE INTO note_folders(name, parent_id, sort_order) VALUES
+  ('general', NULL, 0), ('工作', NULL, 1), ('生活', NULL, 2),
+  ('家庭', NULL, 3), ('学习', NULL, 4), ('想法', NULL, 5);
+
+-- 自定义属性定义（右侧栏「笔记属性」+ 数据库视图的列定义）；值存 notes.props 的 JSON
+CREATE TABLE IF NOT EXISTS note_property_defs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL UNIQUE,
+  label TEXT DEFAULT '',
+  type TEXT NOT NULL DEFAULT 'text',
+  options TEXT DEFAULT '',
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- 模板：闪念/文献/永久三套预置 + 用户自建。「笔记类型」靠模板 + 标签表达，不做硬字段
+CREATE TABLE IF NOT EXISTS note_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  content TEXT DEFAULT '',
+  folder_id INTEGER,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- 标签联结表：真标签聚合（标签云/跨文件夹筛选）。
+-- notes.tags 那个逗号串保留为兼容缓存，供 searchService 与 ?q= 继续用。
+-- source 是**关键**：manual=用户手动加的（永远保留）、inline=正文里的 #标签（随正文重算）、
+-- auto=本地词频提取（随正文重算）。没有这一列的话，手动标签会在下次保存正文时被自动标签冲掉。
+CREATE TABLE IF NOT EXISTS note_tags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'auto',
+  UNIQUE(note_id, tag)
+);
+
+-- 未解析双链：[[标题]] 指向尚不存在的笔记时落这里（旧版是静默丢弃），目标建好后回填
+CREATE TABLE IF NOT EXISTS note_unresolved_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  src_note_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(src_note_id, title)
+);
+
+-- 别名：改名时把旧标题登记为别名，别处的 [[旧标题]] 仍能解析（顺带救活历史链接）
+CREATE TABLE IF NOT EXISTS note_aliases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id INTEGER NOT NULL,
+  alias TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- 书签：笔记 / 文件夹 / 段落三种（anchor 存标题文本，点过去滚动到该标题）
+CREATE TABLE IF NOT EXISTS note_bookmarks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL DEFAULT 'note',
+  note_id INTEGER,
+  folder_id INTEGER,
+  anchor TEXT DEFAULT '',
+  label TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- 笔记附件（图片等）：storage_path 落盘则库内不存内容；未配上传根目录时退回 data 列存 base64
+CREATE TABLE IF NOT EXISTS note_attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id INTEGER,
+  filename TEXT DEFAULT '',
+  mime TEXT DEFAULT '',
+  size INTEGER DEFAULT 0,
+  storage_path TEXT DEFAULT '',
+  data TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- 白板（无限画布）：视口存 JSON {x,y,zoom}；卡片存世界坐标
+CREATE TABLE IF NOT EXISTS note_boards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  viewport TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+-- 白板卡片：type=note 时 note_id 是**活链接**（每次 join 当前标题，不是冻结副本）
+CREATE TABLE IF NOT EXISTS note_board_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id INTEGER NOT NULL,
+  type TEXT NOT NULL DEFAULT 'note',
+  note_id INTEGER,
+  attachment_id INTEGER,
+  text TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  x REAL DEFAULT 0, y REAL DEFAULT 0,
+  w REAL DEFAULT 240, h REAL DEFAULT 120,
+  z INTEGER DEFAULT 0,
+  color TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS note_board_edges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id INTEGER NOT NULL,
+  from_item_id INTEGER NOT NULL,
+  to_item_id INTEGER NOT NULL,
+  label TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS todos (
@@ -481,6 +610,15 @@ function applyColumnMigrations(d) {
   addCol(d, 'notes', 'keywords', "TEXT DEFAULT ''");
   addCol(d, 'notes', 'ai_at', 'TEXT');
   addCol(d, 'notes', 'record_id', 'INTEGER');
+  // 笔记知识系统（v1.9.41）：folder_id=所属文件夹（note_folders.id，NULL=未归档）
+  // props=自定义属性 JSON（{"key":value}）｜daily_date=每日笔记的日期（仅日记非空，部分唯一索引保证一天一条）
+  // word_count=保存时算好的字数（统计插件的「写作字数/打卡」直接聚合这一列，不再每次全表算）
+  // 注意：notes.category 那个旧列**不删也不迁移**（SQLite 删列有风险），新代码一律改读 folder_id；
+  //      老值留在库里当历史，`?category=` 的兼容翻译见 noteRoutes。
+  addCol(d, 'notes', 'folder_id', 'INTEGER');
+  addCol(d, 'notes', 'props', "TEXT DEFAULT '{}'");
+  addCol(d, 'notes', 'daily_date', 'TEXT');
+  addCol(d, 'notes', 'word_count', 'INTEGER DEFAULT 0');
   addCol(d, 'business_systems', 'username', "TEXT DEFAULT ''");
   addCol(d, 'business_systems', 'password', "TEXT DEFAULT ''");
   addCol(d, 'emails', 'body', "TEXT DEFAULT ''");
@@ -546,6 +684,22 @@ function applyColumnMigrations(d) {
   addCol(d, 'family_items', 'ext_id', "TEXT DEFAULT ''"); // 钉钉消息 msgId（跨重推去重用）
 }
 
+// 笔记归属回填（v1.9.41）：老笔记的 folder_id 是空的（旧模型用 notes.category 字符串），
+// 一律兜到 general，免得它们掉出所有文件夹筛选器。
+// 说明：这里**故意不做**「分类名 → 新文件夹」的精确搬运——用户已明确本模块处于测试阶段，
+// 允许重置，功能最优优先；旧分类名只当历史值留在 notes.category 里。
+function backfillNoteFolders(d) {
+  // 一次性（带标记）：folder_id 为 NULL 是「移出文件夹」的合法状态，
+  // 不能每次启动都把它们捞回 general，否则用户手动移出去的动作会在重启后被撤销
+  if (getSetting(d, 'note_folder_backfill_v1941', false)) return;
+  const g = d.prepare("SELECT id FROM note_folders WHERE name='general' AND parent_id IS NULL").get();
+  if (g) {
+    const r = d.prepare('UPDATE notes SET folder_id=? WHERE folder_id IS NULL').run(g.id);
+    if (r.changes) console.log(`[db] 笔记归属回填 ${r.changes} 条 → general`);
+  }
+  setSetting(d, 'note_folder_backfill_v1941', true);
+}
+
 // 业务库初始化：DDL + 结构迁移 + 索引（幂等，主库/租户库共用）
 function initBusinessSchema(d) {
   d.exec(BUSINESS_DDL);
@@ -575,6 +729,9 @@ function initBusinessSchema(d) {
 
   applyColumnMigrations(d);
 
+  // 老笔记归属回填（v1.9.41，一次性；见 backfillNoteFolders）
+  try { backfillNoteFolders(d); } catch (e) { console.warn('[db] 笔记归属回填跳过:', e.message); }
+
   // 中文全文搜索：SQLite FTS5 默认分词对中文不友好，个人数据量级用 LIKE 足够，
   // 此处为各表建立索引加速 LIKE 查询
   d.exec(`
@@ -585,6 +742,22 @@ function initBusinessSchema(d) {
     CREATE INDEX IF NOT EXISTS idx_note_shares_token ON note_shares(token);
     CREATE INDEX IF NOT EXISTS idx_note_links_src ON note_links(src_note_id);
     CREATE INDEX IF NOT EXISTS idx_note_links_dst ON note_links(dst_note_id);
+    -- 笔记知识系统（v1.9.41）
+    CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notes_daily ON notes(daily_date);
+    -- 每日笔记一天一条：部分唯一索引（NULL 不参与唯一性，普通笔记随便多少条）
+    -- 靠它做并发安全的幂等——同一天重复点「今日笔记」只可能得同一条
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_daily_uq ON notes(daily_date) WHERE daily_date IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id, sort_order, id);
+    CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag, note_id);
+    CREATE INDEX IF NOT EXISTS idx_note_tags_note ON note_tags(note_id);
+    CREATE INDEX IF NOT EXISTS idx_note_unresolved ON note_unresolved_links(title);
+    CREATE INDEX IF NOT EXISTS idx_note_bookmarks ON note_bookmarks(kind, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_note_attach_note ON note_attachments(note_id);
+    CREATE INDEX IF NOT EXISTS idx_note_templates_sort ON note_templates(sort_order, id);
+    CREATE INDEX IF NOT EXISTS idx_note_propdefs_sort ON note_property_defs(sort_order, id);
+    CREATE INDEX IF NOT EXISTS idx_note_board_items ON note_board_items(board_id, z);
+    CREATE INDEX IF NOT EXISTS idx_note_board_edges ON note_board_edges(board_id);
     CREATE INDEX IF NOT EXISTS idx_todos ON todos(done, due_date);
     CREATE INDEX IF NOT EXISTS idx_events ON events(start_time);
     CREATE INDEX IF NOT EXISTS idx_news ON news(category, fetched_at);
@@ -1454,10 +1627,16 @@ function forEachTenant(fn) {
 }
 
 // ---------- 多租户存量迁移（复制式，一次性） ----------
-// 30 张业务表清单（主库与租户库共有的业务数据表）
+// 41 张业务表清单（主库与租户库共有的业务数据表）
+// ⚠️ 新建租户表**必须**同时进这里 + BUSINESS_DDL + 索引块，否则：
+//    ① BUSINESS_DDL 漏了 → 惰性建的新租户库缺表；② 这里漏了 → 一次性主库→租户复制与主库 purge 都跳过它。
 const TENANT_TABLES = [
   'notes', 'todos', 'events', 'emails', 'family_items', 'kids', 'kid_tasks',
   'note_categories', 'note_shares', 'note_links',
+  // 笔记知识系统（v1.9.41）。note_categories 是上一版的死表，暂留观察一版再删
+  'note_folders', 'note_property_defs', 'note_templates', 'note_tags',
+  'note_unresolved_links', 'note_aliases', 'note_bookmarks', 'note_attachments',
+  'note_boards', 'note_board_items', 'note_board_edges',
   'learning_plans', 'learning_records', 'reviews', 'clipboard_items', 'quick_links',
   'business_systems', 'ai_sessions', 'ai_messages', 'email_config', 'email_contacts',
   'family_profiles', 'pay_bills', 'pay_categories', 'pay_budgets', 'files',

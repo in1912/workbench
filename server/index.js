@@ -28,6 +28,7 @@ const xiaozhiRoutes = require('./routes/xiaozhiRoutes');
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
 const flashToolRoutes = require('./routes/flashToolRoutes');
+const noteRoutes = require('./routes/noteRoutes'); // 笔记知识系统（v1.9.41）：所有 /notes/* 的唯一所有者
 const noteShareRoutes = require('./routes/noteShareRoutes'); // 笔记分享 + 外部写入令牌（v1.9.39）
 const scheduler = require('./scheduler');
 const dingtalkStream = require('./services/dingtalkStreamService');
@@ -145,6 +146,7 @@ app.use('/api', (req, res, next) => {
 // API 路由
 app.use('/api', authRoutes);
 app.use('/api', coreRoutes);
+app.use('/api', noteRoutes); // 笔记知识系统（v1.9.41）：/notes/* 全部端点。必须排在 noteShareRoutes 之前，/notes/shares/* 仍是它的
 app.use('/api', noteShareRoutes); // 笔记分享 /share/n/:token（免登录）+ 管理 /notes/shares/*（继承笔记页权限）+ 外部写入 /note-intake/:token（v1.9.39）
 app.use('/api', miscRoutes); // 含 /system-info、前端错误上报、文件存档/搜索等通用接口
 app.use('/api', mihomeRoutes);

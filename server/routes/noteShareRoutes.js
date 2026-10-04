@@ -141,8 +141,9 @@ router.post('/note-intake/:token', (req, res) => {
   const token = String(req.params.token || '');
   if (!token || token.length < 16) return res.status(403).json({ error: '令牌无效' });
   const found = findAcrossTenants((tdb) => {
-    const c = tdb.prepare("SELECT * FROM note_categories WHERE intake_token=? AND intake_token<>''").get(token);
-    return c ? { cat: c, tdb } : null;
+    // v1.9.41：写入令牌从「分类」改挂「文件夹」（note_categories 已退役成死表）
+    const c = tdb.prepare("SELECT * FROM note_folders WHERE intake_token=? AND intake_token<>''").get(token);
+    return c ? { cat: { ...c, id: Number(c.id) }, tdb } : null;
   });
   if (!found) return res.status(403).json({ error: '令牌无效' });
   const b = req.body || {};
@@ -156,7 +157,7 @@ router.post('/note-intake/:token', (req, res) => {
   const noteService = require('../services/noteService');
   const id = noteService.createNote(found.tdb, {
     title: title || extractFrom(summary, content),
-    content, category: found.cat.name, summary,
+    content, folder_id: found.cat.id, summary,
   });
   res.json({ ok: true, id, category: found.cat.name });
 });
