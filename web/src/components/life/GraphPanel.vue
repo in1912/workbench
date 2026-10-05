@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div ref="cardEl" class="card graph-card" :style="boxH ? { height: boxH + 'px' } : {}">
     <h3>
       关系图
       <span style="display:flex; gap:6px; align-items:center">
@@ -31,20 +31,22 @@
       <span class="grow"></span>
       <button class="small" @click="picked = null">关闭</button>
     </div>
-    <div class="muted" style="margin-top:8px">
+    <div class="muted foot" style="margin-top:8px">
       孤立的点（一条关联都没有）不会出现在这里——它们恰恰说明有些东西还被你单独搁着，没接到任何目标上。
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount, nextTick, inject } from 'vue';
 import { api } from '../../api';
 import { ENTITY_LABEL } from './lifeUtils';
 
 const emit = defineEmits(['toast']);
 const wrap = ref(null);
 const cv = ref(null);
+const cardEl = ref(null);
+const boxH = ref(0);
 const nodes = ref([]);
 const edges = ref([]);
 const loading = ref(true);
@@ -113,10 +115,21 @@ function layout(ns, es, w, h) {
   }
 }
 
+// v1.10.21：画布高度不再按宽度折算、不再封 560px —— 卡片整体量出自己离视口顶部多远，
+// 高度 = innerHeight - top - 26（和领域面板 measure() 同一套）。.graph-card 是纵向 flex，
+// 标题/图例/选中信息条固定高，剩下的全给画布（.canvas-wrap flex:1）。
+function measure() {
+  const el = cardEl.value;
+  if (!el) return;
+  const top = el.getBoundingClientRect().top;
+  const h = Math.max(360, Math.round(window.innerHeight - top - 26));
+  if (h !== boxH.value) boxH.value = h;
+}
+
 function fit() {
   const el = wrap.value;
   if (!el) return { w: 600, h: 420 };
-  return { w: el.clientWidth || 600, h: Math.max(320, Math.min(560, (el.clientWidth || 600) * 0.62)) };
+  return { w: el.clientWidth || 600, h: Math.max(320, el.clientHeight || 420) };
 }
 
 function draw() {
@@ -239,21 +252,42 @@ async function reload() {
   }
 }
 
-const onResize = () => { if (nodes.value.length) { const { w, h } = fit(); layout(nodes.value, edges.value, w, h); draw(); } };
+const onResize = () => { if (nodes.value.length) { measure(); const { w, h } = fit(); layout(nodes.value, edges.value, w, h); draw(); } };
+
+// v1.10.21：本页全页自适应（不封 1200px 宽、画布撑满到视口底部）。App.vue 的 .main 默认
+// 1200px 封顶，这里挂载时打开不限宽开关、卸载时关掉 —— 切到别的页签 / 离开 /life 时本面板
+// 必然卸载（Life.vue 是 v-else-if 链）；inject 拿不到就静默跳过，样式退回封顶。
+const mainFull = inject('wbMainFull', null);
+
+let ro = null;
 onMounted(() => {
+  if (mainFull) mainFull.value = true;   // 本页不限宽（见 inject 处注释）
+  measure();
   reload();
   window.addEventListener('resize', onResize);
   cv.value.addEventListener('mousemove', onMove);
+  // 父容器尺寸一变（toast 把标签栏顶下去、字体变化）就重量高度；只重画不重排 ——
+  // toast 只挪几十像素，整图重新布局会让节点每次提示都洗一次牌。
+  if (typeof ResizeObserver !== 'undefined' && cardEl.value?.parentElement) {
+    ro = new ResizeObserver(() => { measure(); draw(); });
+    ro.observe(cardEl.value.parentElement);
+  }
 });
 onBeforeUnmount(() => {
+  if (mainFull) mainFull.value = false;
   window.removeEventListener('resize', onResize);
   if (cv.value) cv.value.removeEventListener('mousemove', onMove);
+  if (ro) { ro.disconnect(); ro = null; }
   cancelAnimationFrame(raf);
 });
 </script>
 
 <style scoped>
-.canvas-wrap { position: relative; width: 100%; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+/* v1.10.21：整卡纵向 flex + 外层量高（measure() 给 :style 高度）—— 标题/图例/选中条固定高，
+   画布拿走剩下的全部高度；不写死 calc(100vh - Npx) 就不会被「上面多了条 toast」这类偏移坑到。 */
+.graph-card { display: flex; flex-direction: column; min-height: 0; }
+.graph-card h3, .legend, .pick, .foot { flex: 0 0 auto; }
+.canvas-wrap { position: relative; width: 100%; flex: 1 1 auto; min-height: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 canvas { display: block; cursor: grab; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; font-size: 12px; color: var(--text2); }
 .lg { display: inline-flex; align-items: center; gap: 4px; }
