@@ -336,9 +336,11 @@ function makeDoc(n) {
 }
 
 // 打一篇笔记的页签（录音笔记仍然跳到录音页，保持老行为）
-async function openNoteTab(n) {
+// force=true 时不跳录音页：**只给「进页面时自动打开最近一篇」用**。否则最近改动的若是录音产生的笔记，
+// 一进笔记页就被弹去录音页——用户看到的是「没打开笔记」，而不是「打开了最近那篇」。
+async function openNoteTab(n, force = false) {
   if (!n) return;
-  if (n.record_id) { router.push(`/notes/rec/${n.record_id}`); return; }
+  if (n.record_id && !force) { router.push(`/notes/rec/${n.record_id}`); return; }
   const id = Number(n.id ?? n);
   if (!Number.isFinite(id)) return;
   const t = openNote(id, n.title || '未命名');
@@ -707,8 +709,10 @@ onMounted(async () => {
   for (const f of folderTree.value) loadFolderNotes(f.id);
   await handleQuery();
   if (!activeTab.value) {
+    // 打开最近修改的那一篇：list 是 /notes 的返回，服务端已按 updated_at DESC 排序，取第一条即可。
+    // force=true —— 就算它是录音产生的笔记也在笔记页打开，不弹去录音页（见 openNoteTab 注释）。
     const first = list.value[0];
-    if (first) await openNoteTab(first);
+    if (first) await openNoteTab(first, true);
   }
 });
 defineExpose({ handleQuery });

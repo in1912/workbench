@@ -136,6 +136,7 @@ const TAB_PATHS = {
   life: [
     ['today', []], ['goals', []], ['actions', []], ['habits', []],
     ['reviews', []], ['projects', []], ['domains', []], ['graph', []],
+    ['guide', []],   // 使用流程（v1.10.1）：空数组 = 只有授权勾选项，不约束任何接口
   ],
   family: [
     ['family', ['/family']],

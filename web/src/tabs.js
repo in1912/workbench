@@ -12,6 +12,8 @@ export const TAB_DEFS = {
     { key: 'projects', label: '项目' },
     { key: 'domains', label: '领域' },
     { key: 'graph', label: '关系' },
+    // 使用流程（v1.10.1）：放最后——它是说明书，不是每天要点的页
+    { key: 'guide', label: '使用流程' },
   ],
   tasks: [
     { key: 'cal', label: '日历' },

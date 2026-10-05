@@ -20,6 +20,7 @@
     <ProjectsPanel v-else-if="tab === 'projects'" @toast="toast" />
     <DomainsPanel v-else-if="tab === 'domains'" @toast="toast" />
     <GraphPanel   v-else-if="tab === 'graph'"   @toast="toast" />
+    <GuidePanel   v-else-if="tab === 'guide'"   @go="go" />
   </div>
 </template>
 
@@ -35,6 +36,7 @@ import ReviewsPanel from '../components/life/ReviewsPanel.vue';
 import ProjectsPanel from '../components/life/ProjectsPanel.vue';
 import DomainsPanel from '../components/life/DomainsPanel.vue';
 import GraphPanel from '../components/life/GraphPanel.vue';
+import GuidePanel from '../components/life/GuidePanel.vue';
 
 const route = useRoute();
 const defs = TAB_DEFS.life || [];

@@ -17,7 +17,8 @@ try {
   await page.waitForTimeout(1200);
   const tabs = await page.locator('.tabs button').allTextContents();
   console.log('tab顺序:', JSON.stringify(tabs));
-  console.log(tabs[0].trim() === '中英文听写' ? '✓ 听写在第一位' : '✗ 第一位是 ' + tabs[0]);
+  // 标签后来简化成「听写」，这条断言没跟着改，一直在报假红；两种写法都收
+  console.log(['听写', '中英文听写'].includes(tabs[0].trim()) ? '✓ 听写在第一位' : '✗ 第一位是 ' + tabs[0]);
   console.log(await page.locator('.dict textarea').count() ? '✓ 默认落在听写编辑页' : '✗ 默认页不是听写');
   await page.screenshot({ path: 'Logs/dictation-first-tab.png' });
 } finally { await browser.close(); db.prepare('DELETE FROM sessions WHERE token=?').run(token); }

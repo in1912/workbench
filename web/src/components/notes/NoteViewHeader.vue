@@ -36,6 +36,14 @@
       <span v-if="note.daily_date" class="tag ok small">每日笔记 {{ note.daily_date }}</span>
       <span v-if="folderPath" class="muted small" style="margin-left:auto">{{ folderPath }}</span>
     </div>
+
+    <!-- 时间行（v1.10.1）：查看时一眼看到「什么时候建的、最后一次改动是什么时候」。
+         库里存的是 SQLite 的 localtime 字符串（YYYY-MM-DD HH:MM:SS），原样显示即可，不做时区换算。 -->
+    <div v-if="note.id" class="line wrap times">
+      <span class="muted small">创建于 {{ fmtTime(note.created_at) }}</span>
+      <span class="sep" />
+      <span class="muted small">最后修改 {{ fmtTime(note.updated_at) }}</span>
+    </div>
   </div>
 </template>
 
@@ -57,6 +65,13 @@ defineEmits(['save', 'delete', 'move', 'share', 'manage', 'download-md', 'downlo
   'manage-folders', 'open-record', 'insert-text', 'replace-text']);
 
 const folderPath = computed(() => props.note.folder_path || '');
+
+// '2026-10-05 08:12:33' → '2026-10-05 08:12'；缺值一律显示「—」而不是空白（老笔记可能没有这一列）
+function fmtTime(s) {
+  const t = String(s || '').trim();
+  if (!t) return '—';
+  return t.length >= 16 ? t.slice(0, 16) : t;
+}
 </script>
 
 <style scoped>
