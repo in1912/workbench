@@ -153,10 +153,18 @@ async function request(method, url, body, retried = false, timeoutMs = 180000) {
       } catch { /* 自愈未成，按原样报错 */ }
     }
     report(`非JSON响应 ${method} ${url} → HTTP ${res.status}：${snippet}`);
+    // v1.10.8：生产站 cc.in1912.cc 前面是 Cloudflare，它超时/出错时回的是自己那张 HTML 错误页，
+    // 于是用户看到一句「HTTP 502，非 JSON：<!DOCTYPE html>…」完全不知道发生了什么。
+    // 认出这是网关代答，直接把「请求没到工作台 + 最可能是超时」说出来。
+    const isGatewayPage = /cloudflare|cf-error|Attention Required|Error 5\d\d/i.test(text);
     throw new Error(
       snippet.includes('invalid token')
         ? 'NAS 会话已失效（网关拒绝了请求）：请打开 NAS 网页重新登录后刷新本页，或从飞牛桌面重新进入应用'
-        : `接口响应异常（HTTP ${res.status}，非 JSON：${snippet}）`
+        : (isGatewayPage
+          ? `请求被网关掐断了（HTTP ${res.status}）——它没能到达工作台，页面里这段 HTML 是网关自己的错误页，不是工作台返回的。`
+            + '最常见的原因是这个请求跑得太久（网关等待源站的上限约 100 秒）。'
+            + '如果是 IM 同步：进度按会话逐个记录，再点一次「同步」会接着上次的位置继续，不会白做、也不会重复落库。'
+          : `接口响应异常（HTTP ${res.status}，非 JSON：${snippet}）`)
     );
   }
   if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);

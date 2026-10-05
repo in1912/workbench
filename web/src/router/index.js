@@ -12,7 +12,7 @@ const routes = [
   // 笔记分享公开页（v1.9.39）：无需登录，token 在路径、4 位码在 ?c=
   { path: '/s/:token', component: () => import('../views/ShareView.vue'), meta: { title: '分享的笔记', public: true } },
   // 人生管理系统（v1.10.0）：独立侧栏页；后端所有接口都在 /api/life/* 下
-  { path: '/life', component: () => import('../views/Life.vue'), meta: { title: '人生', page: 'life' } },
+  { path: '/life', component: () => import('../views/Life.vue'), meta: { title: 'lifeOS', page: 'life' } },
   { path: '/tasks', component: () => import('../views/Tasks.vue'), meta: { title: '待办与日程', page: 'tasks' } },
   { path: '/family', component: () => import('../views/Family.vue'), meta: { title: '家庭管理', page: 'family' } },
   { path: '/learning', component: () => import('../views/Learning.vue'), meta: { title: '学习', page: 'learning' } },
@@ -23,15 +23,18 @@ const routes = [
   // 不再是独立页面，旧地址带 tab 参数重定向到新位置
   { path: '/business', redirect: (to) => ({ path: '/tools', query: { ...to.query, tab: 'business' } }) },
   { path: '/ai', component: () => import('../views/AiChat.vue'), meta: { title: 'AI 助手', page: 'ai' } },
-  { path: '/pets', component: () => import('../views/Pets.vue'), meta: { title: '我的宠物', page: 'pets' } },
+  // 电子宠物 v1.10.10（需求⑨）整页并入「效率工具」的 tab；旧地址与书签一律重定向过去。
+  // 原来宠物页自己的 tab 参数也叫 tab（/pets?tab=adopt），跟效率工具的 tab 撞名，
+  // 所以挪到 sub 参数：/pets?tab=adopt → /tools?tab=pets&sub=adopt（PetsPanel 读 sub）。
+  { path: '/pets', redirect: (to) => ({ path: '/tools', query: { tab: 'pets', ...(to.query.tab ? { sub: to.query.tab } : {}) } }) },
   // 智能家居（2026-09 v1.6.8）：米家扫码绑定 + 家庭/房间/设备卡片控制
   { path: '/smart-home', component: () => import('../views/SmartHome.vue'), meta: { title: '智能家居', page: 'smarthome' } },
   // Agent红绿灯：v1.9.22 曾升格独立页，v1.9.23 放回智能家居子 tab；旧地址/书签重定向过去
   { path: '/cc-light', redirect: (to) => ({ path: '/smart-home', query: { ...to.query, tab: 'cclight' } }) },
   // 「打字赚钱」4 个 tab 已并入学习页（2026-09 v1.2.0）；旧地址带参跳转过去（tab key 不变）
   { path: '/typing', redirect: (to) => ({ path: '/learning', query: { tab: to.query.tab || 'practice' } }) },
-  // 「领养宠物」已并回电子宠物模块的 tab；旧地址带参跳转过去
-  { path: '/adopt', redirect: { path: '/pets', query: { tab: 'adopt' } } },
+  // 「领养宠物」已并回电子宠物模块的 tab；v1.10.10 起宠物模块又并进效率工具，这里一路跳到 /tools
+  { path: '/adopt', redirect: { path: '/tools', query: { tab: 'pets', sub: 'adopt' } } },
   { path: '/messages', component: () => import('../views/Messages.vue'), meta: { title: '短消息', page: 'messages' } },
   // 「AI 推送」已并入业务系统页；旧地址重定向过去
   { path: '/push', redirect: '/business' },

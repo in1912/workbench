@@ -4,14 +4,26 @@
     <div class="ns-top">
       <TabStack @closed="onTabClosed" />
       <div class="ns-top-act">
+        <!-- 窄屏（<900px）左栏变成浮动抽屉，这个 ☰ 是它唯一的入口（v1.10.2 补上）：
+             在此之前 leftOpen 只被赋过 false，窄屏下文件树/分区/视图入口根本打不开 -->
+        <button v-if="narrow" class="small" :title="leftOpen ? '收起左栏' : '展开左栏（文件树 / 搜索 / 标签 / 视图）'"
+                @click="leftOpen = !leftOpen">☰</button>
         <button class="small" title="新建笔记（Alt+N）" @click="newNote()">＋ 新建</button>
         <button class="small" title="快速切换（Ctrl/⌘+O）" @click="openSwitcher()">🔍 切换</button>
         <button class="small" title="命令面板（Ctrl/⌘+Shift+P）" @click="openPalette()">⌘ 面板</button>
+        <!-- IM连接（v1.10.5，需求③）：以本人身份授权，把 IM 聊天记录归档成笔记。
+             放在【新建】【切换】【面板】之后，右侧那个 ⇥ 是布局开关，留在最右边。 -->
+        <button class="small" title="IM连接：授权飞书等 IM，把聊天记录归档成笔记" @click="imOpen = true">🔗 IM连接</button>
         <button class="small" :title="rightOpen ? '收起右栏' : '展开右栏'" @click="toggleRight()">{{ rightOpen ? '⇥' : '⇤' }}</button>
       </div>
     </div>
 
     <div class="ns-body">
+      <!-- 窄屏遮罩（v1.10.2 补 ☰ 时漏想的一处）：它必须只盖「正文区」。
+           1.10.2 上线后真机点检发现：遮罩 position:fixed + inset:0 会连顶栏一起盖住，
+           于是 ☰ 自己（title 写着「收起左栏」）以及 新建/切换/面板/⇤ 在抽屉打开期间全都点不动 ——
+           点哪都只关抽屉。改成 absolute 贴在 .ns-body 上，顶栏就一直是活的。 -->
+      <div v-if="narrow && leftOpen" class="ns-scrim" @click="leftOpen = false" />
       <aside v-if="!narrow || leftOpen" class="ns-pane ns-left" :style="{ width: narrow ? '78vw' : leftW + 'px' }">
         <NotesSidebar
           :section="section" :tree="folderTree" :open-folders="openFolders" :notes-by-folder="notesByFolder"
@@ -33,7 +45,10 @@
           @open-view="openView" @manage-folders="folderModal = true" />
       </aside>
 
-      <Splitter v-if="!narrow && leftOpen" v-model="leftW" :min="180" :max="520" :default-width="260"
+      <!-- v1.10.5：条件里的 leftOpen 去掉。leftOpen 只在窄屏由 ☰ 赋值，
+           大屏下它恒为 false —— 于是这根分隔条**从来没在大屏渲染过**，左栏只读不可拖。
+           左栏在大屏是常驻的（<aside> 的判断是 !narrow || leftOpen），分隔条跟着它走即可。 -->
+      <Splitter v-if="!narrow" v-model="leftW" :min="180" :max="560" :default-width="300"
                 @done="savePaneWidths" />
 
       <section class="ns-pane ns-center">
@@ -43,10 +58,11 @@
                           @save="saveTab(activeKey)" @delete="delNote" @move="moveActive" @share="shareOpen = true"
                           @manage="manageOpen = true" @download-md="downloadNoteMd(activeDoc.note)"
                           @download-html="downloadNoteHtml(activeDoc.note, catLabel)"
-                          @manage-folders="folderModal = true" @open-record="openRecordPage"
+                          @open-record="openRecordPage"
                           @insert-text="(t) => editorRef?.insertText(t)"
                           @replace-text="(t) => editorRef?.replaceText(t)" />
           <NoteEditor ref="editorRef" :note="activeDoc.note" :mode="activeDoc.mode" :resolve-wiki="resolveWiki"
+                      :titles="allTitles" :doc-key="activeKey"
                       @update:mode="activeDoc.mode = $event" @save="saveTab(activeKey)"
                       @open-note="openNoteById" @new-note="(t) => newNote(t)" />
           <div v-if="activeDoc.note.summary" class="sumbox">
@@ -104,16 +120,18 @@
         </div>
       </section>
 
-      <Splitter v-if="!narrow && rightOpen" v-model="rightW" invert :min="200" :max="560" :default-width="300"
+      <Splitter v-if="!narrow && rightOpen" v-model="rightW" invert :min="200" :max="900" :default-width="600"
                 @done="savePaneWidths" />
 
       <aside v-if="rightOpen" class="ns-pane ns-right" :style="{ width: narrow ? '84vw' : rightW + 'px' }">
         <NotesRightPanel :mode="rightMode" :headings="headings" :prop-defs="propDefs"
+                         :active-note-id="activeNoteId"
                          :props-of="activeDoc?.note?.props || {}" :links="activeDoc?.links || {}"
                          :note-title="activeDoc?.note?.title || ''" :tags="tags" :stats="stats"
                          @update:mode="rightMode = $event" @collapse="toggleRight" @go-heading="goHeading"
                          @set-prop="setProp" @manage-props="propsModal = true" @open-note="openNoteById"
-                         @create-note="(t) => newNote(t)" @filter-tag="filterByTag" />
+                         @create-note="(t) => newNote(t)" @filter-tag="filterByTag"
+                         @open-full-graph="openView('graph')" />
       </aside>
     </div>
 
@@ -123,6 +141,9 @@
     <NoteShareManage v-if="manageOpen && activeDoc?.note?.id" :note="activeDoc.note" @close="manageOpen = false" />
     <CategoryManageModal v-if="folderModal" :folders="flatFolders" :external="external"
                          @close="folderModal = false" @changed="reloadFolders" />
+    <!-- IM连接（v1.10.5）：同步出来的笔记直接在这里打开页签，不用去文件树里找 -->
+    <ImConnectModal v-if="imOpen" @close="imOpen = false"
+                    @open-note="(id) => { imOpen = false; openNoteTab(id); }" />
 
     <!-- 属性定义管理 -->
     <div v-if="propsModal" class="modal-backdrop" @click.self="propsModal = false">
@@ -201,8 +222,6 @@
       </div>
     </div>
 
-    <!-- 窄屏左栏浮动遮罩 -->
-    <div v-if="narrow && leftOpen" class="ns-scrim" @click="leftOpen = false" />
   </div>
 </template>
 
@@ -240,19 +259,28 @@ import TabStack from './TabStack.vue';
 import Splitter from './Splitter.vue';
 import RecList from './RecList.vue';
 import CategoryManageModal from './CategoryManageModal.vue';
+import ImConnectModal from './ImConnectModal.vue';
 
 const route = useRoute();
 const router = useRouter();
 const { tabs, activeKey, active: activeTab, openNote, openDraft, openUnique, activate, close, setDirty, patchByNoteId, docs, getDoc, setDoc, hasDirty, closeNote } = useNotesTabs();
 
 // ---------- 布局 ----------
-const paneW = (() => { try { return JSON.parse(localStorage.getItem('notes.paneWidths') || '{}'); } catch { return {}; } })();
-const leftW = ref(Number(paneW.left) || 260);
-const rightW = ref(Number(paneW.right) || 300);
+// v1.10.5（需求⑧）：默认宽度整体调大 —— 左栏 260→300、右栏（大纲/图谱那列）300→600（翻一倍）。
+// 存档带版本号 v=2：**没有版本号的旧存档一律忽略一次**，否则浏览器里那个旧默认值（300）
+// 会把新默认值原地盖掉，用户看到的是「改了跟没改一样」。代价是用户之前手拖过的宽度也重置一次。
+const paneW = (() => {
+  try {
+    const o = JSON.parse(localStorage.getItem('notes.paneWidths') || '{}');
+    return Number(o && o.v) === 2 ? o : {};
+  } catch { return {}; }
+})();
+const leftW = ref(Number(paneW.left) || 300);
+const rightW = ref(Number(paneW.right) || 600);
 const rightOpen = ref(localStorage.getItem('notes.rightOpen') !== '0');
 const leftOpen = ref(false);
 const narrow = ref(false);
-function savePaneWidths() { try { localStorage.setItem('notes.paneWidths', JSON.stringify({ left: leftW.value, right: rightW.value })); } catch { /* 忽略 */ } }
+function savePaneWidths() { try { localStorage.setItem('notes.paneWidths', JSON.stringify({ v: 2, left: leftW.value, right: rightW.value })); } catch { /* 忽略 */ } }
 function toggleRight() { rightOpen.value = !rightOpen.value; try { localStorage.setItem('notes.rightOpen', rightOpen.value ? '1' : '0'); } catch { /* 忽略 */ } }
 function onResize() {
   const was = narrow.value;
@@ -315,6 +343,7 @@ const shareOpen = ref(false);
 const manageOpen = ref(false);
 const folderModal = ref(false);
 const propsModal = ref(false);
+const imOpen = ref(false);   // IM连接（v1.10.5）
 const tplModal = ref(false);
 const tplForm = ref({ id: null, name: '', content: '' });
 const tplErr = ref('');
@@ -325,7 +354,10 @@ const rightMode = ref('outline');
 function makeDoc(n) {
   return {
     note: n,
-    mode: (n.content || '').trim() ? 'preview' : 'edit',
+    // v1.10.2 先改成「默认编辑态」，v1.10.3 又按用户后来的要求改回**默认预览**：
+    // 打开先看渲染结果，想改就在预览正文上双击（NoteEditor 里挂的 dblclick）直接进编辑，
+    // 进去时光标仍落在开头（makeState 的 selection:0，那是更早一版的需求，两者不冲突）。
+    mode: 'preview',
     dirty: false,
     saving: false,
     savedAt: '',
@@ -659,7 +691,7 @@ const COMMANDS = [
   { t: '快速切换笔记', key: 'o', ctrl: true, run: () => openSwitcher() },
   { t: '保存当前笔记', key: 's', ctrl: true, run: () => activeTab.value && saveTab(activeTab.value.key) },
   { t: '关闭当前页签', run: () => activeTab.value && close(activeTab.value.key) },
-  { t: '切换 编辑 / 分屏 / 预览', run: () => { const d = activeDoc.value; if (d) d.mode = d.mode === 'edit' ? 'split' : d.mode === 'split' ? 'preview' : 'edit'; } },
+  { t: '切换 编辑 / 分屏 / 预览 / 源码', run: () => { const d = activeDoc.value; if (!d) return; const NEXT = { edit: 'split', split: 'preview', preview: 'source', source: 'edit' }; d.mode = NEXT[d.mode] || 'edit'; } },
   { t: '知识图谱', run: () => openView('graph') },
   { t: '时间线', run: () => openView('timeline') },
   { t: '数据库查询', run: () => openView('query') },
@@ -724,7 +756,7 @@ defineExpose({ handleQuery });
 @media (max-width: 900px) { .nshell { height: calc(100vh - 170px); } }
 .ns-top { display: flex; align-items: flex-end; gap: 8px; }
 .ns-top-act { display: flex; gap: 4px; margin-left: auto; padding-bottom: 3px; }
-.ns-body { display: flex; flex: 1; min-height: 0; padding-top: 6px; }
+.ns-body { display: flex; flex: 1; min-height: 0; padding-top: 6px; position: relative; }
 .ns-pane { min-width: 0; min-height: 0; }
 .ns-left { display: flex; flex-direction: column; border-right: 1px solid var(--border); padding-right: 8px; overflow: hidden; }
 .ns-right { border-left: 1px solid var(--border); padding-left: 8px; overflow: hidden; }
@@ -737,8 +769,12 @@ defineExpose({ handleQuery });
 .swrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .swrow.on { background: var(--bg3); }
 .swrow :deep(mark) { background: var(--amber); color: #000; border-radius: 2px; }
-.ns-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 5; }
-.narrow .ns-left { position: fixed; top: 60px; bottom: 0; left: 0; z-index: 6; background: var(--bg); padding: 8px; box-shadow: 0 0 24px rgba(0,0,0,.4); }
+/* 遮罩贴在 .ns-body 上（不是视口）：只盖正文区，顶栏的 ☰ 与其它按钮在抽屉打开时依然可点。
+   z-index 7 要**高于两个浮动面板（6）**：1.10.2 上线后点检发现，窄屏下左抽屉（78vw）+ 右面板
+   正好铺满整屏，遮罩在 6 下面一点都露不出来 —— 于是「点空白处关抽屉」也做不到，
+   只剩刷新页面一条路。抬到面板之上，抽屉本身（8）再抬到遮罩之上，两个关闭手势就都通了。 */
+.ns-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.4); z-index: 7; }
+.narrow .ns-left { position: fixed; top: 60px; bottom: 0; left: 0; z-index: 8; background: var(--bg); padding: 8px; box-shadow: 0 0 24px rgba(0,0,0,.4); }
 .narrow .ns-right { position: fixed; top: 60px; bottom: 0; right: 0; z-index: 6; background: var(--bg); padding: 8px; box-shadow: 0 0 24px rgba(0,0,0,.4); }
 </style>
 

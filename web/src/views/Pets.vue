@@ -1,6 +1,9 @@
 <template>
   <div>
-    <h2 class="page-title">我的宠物
+    <!-- v1.10.10（需求⑨）：本组件整块嵌进「效率工具」页当 tab 用，嵌进去时不再画页标题
+         （外层 Tools.vue 已经有「效率工具」这个 page-title 了，再画一个就是两层标题）。
+         子 tab 栏保留 —— 跟「推送任务」「个人账务」嵌入时的样子一致。 -->
+    <h2 v-if="!embedded" class="page-title">我的宠物
       <span class="muted" style="font-size:12px; font-weight:400">像素萌宠 · 喂养互动 · 好感度成长</span>
       <a v-if="canTab('pets','adopt')" class="adopt-link" @click="tab='adopt'">＋ 领养新宠物</a>
     </h2>
@@ -344,7 +347,15 @@ import { SPECIES_LIST } from '../pets/pixelSprites.js';
 import { ANIMS, PREVIEW_GROUPS } from '../pets/pixelPets.js';
 import { renderDesktopFrames } from '../pets/desktopFrames.js';
 
-const tab = ref(firstTab('pets', 'pets'));
+// embedded：被 Tools.vue 当 tab 嵌进来时传 true —— 少画一层页标题。
+// sub：外层把「要直开哪个子 tab」从路由 query.sub 递进来（/tools?tab=pets&sub=adopt）。
+//      不嵌时（理论上不会再有，旧 /pets 已重定向）仍读 route.query.tab，两条都认。
+const props = defineProps({
+  embedded: { type: Boolean, default: false },
+  sub: { type: String, default: '' },
+});
+
+const tab = ref(firstTab('pets', props.sub || 'pets'));
 const route = useRoute();
 const me = computed(() => JSON.parse(localStorage.getItem('wb_user') || 'null'));
 const isAdmin = computed(() => me.value?.role === 'admin');
@@ -673,10 +684,12 @@ onMounted(async () => {
   if (tab.value === 'checkin') loadCheckin();
 });
 
-// 深链支持：/pets?tab=adopt（旧 /adopt 地址重定向过来）直开对应 tab。
+// 深链支持：v1.10.10 起子 tab 走 sub（/tools?tab=pets&sub=adopt，旧 /pets?tab=adopt 与 /adopt 都重定向到这）。
+// 兼容老的 route.query.tab（万一还有没被重定向到的书签）。
 // 同组件内 hash 跳转不会重挂载，用 watch 兜住两种进入方式。
-watch(() => route.query.tab, (t) => {
-  if (t && canTab('pets', String(t))) tab.value = String(t);
+watch([() => props.sub, () => route.query.tab], ([s, t]) => {
+  const want = String(s || t || '');
+  if (want && canTab('pets', want)) tab.value = want;
 }, { immediate: true });
 
 // 进设置 tab 时拉取桌面宠物配置（首次）

@@ -6,9 +6,19 @@
       <button class="collapse" title="收起右栏" @click="$emit('collapse')">›</button>
     </div>
 
-    <div class="rp-body">
+    <!-- 图谱那一档要铺满右栏高度：canvas 是 height:100%，父级必须是能定高的 flex 列
+         （默认的 overflow-y:auto / block 流里，flex:1 不起作用，画布会塌成 0 高） -->
+    <div class="rp-body" :class="{ 'rp-body-fill': mode === 'graph' }">
       <template v-if="mode === 'tabs'"><TabStack vertical /></template>
       <template v-else-if="mode === 'outline'"><OutlinePanel :headings="headings" @go="$emit('go-heading', $event)" /></template>
+      <template v-else-if="mode === 'graph'">
+        <!-- 本篇的知识图谱（v1.10.3）：只画「这篇 + 一跳/两跳邻居」，
+             取数走 GET /notes/graph/local/:id（服务端才算得出邻居，前端拿不到全图也不影响）。
+             要求来自用户：「右侧框增加一个按钮【图谱】，放在大纲后面，显示本篇文章的知识图谱连接」。 -->
+        <GraphView v-if="activeNoteId" compact :focus-note-id="activeNoteId"
+                   @open-note="$emit('open-note', $event)" @open-full="$emit('open-full-graph')" />
+        <div v-else class="muted small">先打开一篇笔记，这里会画出它的链接关系。</div>
+      </template>
       <template v-else-if="mode === 'props'">
         <PropertiesPanel :defs="propDefs" :values="propsOf" @set="(k, v) => $emit('set-prop', k, v)" @manage="$emit('manage-props')" />
       </template>
@@ -50,12 +60,14 @@
 // 一行一个模式，切换只是换组件，不做嵌套路由（右栏的选择不需要进浏览器历史）。
 import TabStack from './TabStack.vue';
 import OutlinePanel from './OutlinePanel.vue';
+import GraphView from './GraphView.vue';
 import PropertiesPanel from './PropertiesPanel.vue';
 import BacklinksPanel from './BacklinksPanel.vue';
 import NotesHelp from './NotesHelp.vue';
 
 defineProps({
   mode: { type: String, default: 'outline' },
+  activeNoteId: { type: [Number, null], default: null },
   headings: { type: Array, default: () => [] },
   propDefs: { type: Array, default: () => [] },
   propsOf: { type: Object, default: () => ({}) },
@@ -64,10 +76,12 @@ defineProps({
   tags: { type: Array, default: () => [] },
   stats: { type: Object, default: () => ({}) },
 });
-defineEmits(['update:mode', 'collapse', 'go-heading', 'set-prop', 'manage-props', 'open-note', 'create-note', 'filter-tag']);
+defineEmits(['update:mode', 'collapse', 'go-heading', 'set-prop', 'manage-props', 'open-note', 'create-note',
+  'filter-tag', 'open-full-graph']);
 
 const MODES = [
   { k: 'outline', t: '大纲', title: '正文标题导航' },
+  { k: 'graph', t: '图谱', title: '本篇的知识图谱（一跳 / 两跳邻居）' },
   { k: 'links', t: '链接', title: '出链 / 反链 / 未解析' },
   { k: 'props', t: '属性', title: '自定义属性' },
   { k: 'tags', t: '标签', title: '全部标签' },
@@ -85,6 +99,7 @@ const MODES = [
 .rp-tabs button.on { background: var(--accent); color: #fff; }
 .rp-tabs .collapse { margin-left: auto; border-color: var(--border); }
 .rp-body { flex: 1; min-height: 0; overflow-y: auto; }
+.rp-body-fill { display: flex; flex-direction: column; overflow: hidden; }
 .tagrow { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 5px; cursor: pointer; }
 .tagrow:hover { background: var(--bg3); }
 .stat .big { font-size: 18px; font-weight: 600; }

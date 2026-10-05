@@ -73,8 +73,18 @@ async function clickText(text, timeout = T) {
   return 'clicked';
 }
 async function expectText(text, timeout = T) {
-  await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
-  return 'seen';
+  // 挑「第一个**可见**的匹配」，不能拿 .first() 直接等。
+  // 原因（v1.10.3 改「默认预览」之后踩到的）：编辑器 .cm-wrap 在预览态是 display:none，但节点还在 DOM 里、
+  // 内容是**同一段源文**，而且它排在预览前面 —— .first() 落到那个隐藏节点上，waitFor(visible) 必然超时，
+  // 明明是渲染好好的却被判失败。
+  const l = page.getByText(text, { exact: false });
+  const end = Date.now() + timeout;
+  for (;;) {
+    const n = await l.count();
+    for (let i = 0; i < n; i++) if (await l.nth(i).isVisible()) return 'seen';
+    if (Date.now() >= end) throw new Error(`等不到可见文本「${text}」（匹配 ${n} 个，全部隐藏或根本不存在）`);
+    await page.waitForTimeout(120);
+  }
 }
 async function expectSel(sel, timeout = T) {
   await page.locator(sel).first().waitFor({ state: 'visible', timeout });
@@ -231,7 +241,10 @@ if (!fatal) {
   }
   await step('右栏「链接」里能看到未解析的 [[不存在的目标]]', async () => {
     await clickBtn(/^链接$/);
-    await expectText('不存在的目标', 6000);
+    // 必须断言在**右栏面板里**：正文预览里也有这几个字（`[[不存在的目标]]` 渲染成链接），
+    // 只等「页面上有这几个字」等于什么都没验。
+    await page.locator('.rp-body').getByText('不存在的目标').first()
+      .waitFor({ state: 'visible', timeout: 6000 });
     return '未解析已在面板里';
   }, 900);
 }
@@ -260,15 +273,20 @@ await step('打开后日历格子里出现当天笔记标题「甲 · 起点」'
 }, 800);
 
 console.log('\n== 十一、窄屏 + 暗色 ==');
+// 窄屏下左栏是浮动抽屉、默认收起（避免一进页面就挡住正文），靠顶栏的 ☰ 展开。
+// v1.10.2 之前 leftOpen 只被赋过 false —— 那个 ☰ 是当时补的入口，这一步顺带守住它。
 await step('视口压到 820px 重进笔记页', async () => {
   await page.setViewportSize({ width: 820, height: 900 });
   await page.goto(`${B}/#/notes`, { waitUntil: 'domcontentloaded' });
+  await page.locator('.nshell.narrow').first().waitFor({ state: 'visible', timeout: 8000 });
+  await page.locator('.ns-top-act button', { hasText: '☰' }).first().click({ timeout: 8000 });
   await expectText('文件', 8000);
-  return '窄屏壳体在';
+  return '窄屏壳体在，左栏抽屉能展开';
 }, 1500);
 await step('切暗色重载', async () => {
   await page.evaluate(() => localStorage.setItem('wb_theme', 'dark'));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.ns-top-act button', { hasText: '☰' }).first().click({ timeout: 8000 });
   await expectText('文件', 8000);
   return '暗色在';
 }, 1500);
@@ -278,6 +296,55 @@ await step('视口还原 1400px', async () => {
   await expectText('文件', 8000);
   return '还原';
 }, 1200);
+
+console.log('\n== 十二、长笔记：编辑器必须能滚到底（v1.10.4 修的线上缺陷）==');
+// 缺陷长这样：.cm-editor 被 @codemirror/view 的基础主题钉成 position:relative!important，
+// 于是「绝对定位铺满 .cm-wrap」那条 CSS 从来没生效 —— 一篇 200 行的笔记把 .cm-editor 撑到 4700px，
+// 塞在 600px 的 .cm-wrap 里被 overflow:hidden 裁掉，而 .cm-scroller 自身盒子跟内容一样高，
+// **永远不滚动**：用户只能看到前 36 行，往下滚不动。短笔记看不出来，长笔记必现。
+// 所以这一节用一篇 200 行的笔记当尺子：盒子高度必须被约束住、滚到底必须能看见最后一行。
+const LONG_LINES = [];
+for (let i = 1; i <= 200; i++) LONG_LINES.push(i === 200 ? 'SENTINEL-END-第200行' : `第 ${i} 行：这是一行把文档撑长的正文。`);
+LONG_LINES.splice(20, 0, '```bash', 'ls -la /tmp', '```');
+const nLong = await A('POST', '/api/notes', { title: '长文探针', content: LONG_LINES.join('\n') });
+
+await step('打开 200 行的长笔记并进编辑态', async () => {
+  await page.goto(`${B}/#/notes?note=${nLong.id}`, { waitUntil: 'domcontentloaded' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.mbtn', { hasText: '编辑' }).first().waitFor({ state: 'visible', timeout: T });
+  await page.locator('.mbtn', { hasText: '编辑' }).first().click({ timeout: T });
+  await page.waitForTimeout(1500);
+  return '就位';
+}, 800);
+const longBox = await page.evaluate(() => {
+  const wrap = document.querySelector('.cm-wrap');
+  const ed = document.querySelector('.cm-editor');
+  const sc = document.querySelector('.cm-scroller');
+  return {
+    wrapH: Math.round(wrap.getBoundingClientRect().height), edH: Math.round(ed.getBoundingClientRect().height),
+    sh: sc.scrollHeight, ch: sc.clientHeight,
+  };
+});
+ck('编辑器盒子被约束在容器里（不再撑成整篇文档那么高）',
+   longBox.edH <= longBox.wrapH + 4 && longBox.edH > 200, JSON.stringify(longBox));
+ck('内容比可视区高（说明确实是长文，尺子有效）', longBox.sh > longBox.ch * 2, JSON.stringify(longBox));
+
+await step('在编辑器里滚到底', async () => {
+  await page.mouse.move(500, 500);
+  for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, 900); await page.waitForTimeout(100); }
+  return '滚了';
+}, 400);
+const longEnd = await page.evaluate(() => {
+  const sc = document.querySelector('.cm-scroller');
+  const lines = [...document.querySelectorAll('.cm-line')];
+  return {
+    st: sc.scrollTop, sh: sc.scrollHeight, ch: sc.clientHeight,
+    hasSentinel: sc.textContent.includes('SENTINEL-END'),
+    lines: lines.length,
+  };
+});
+ck('滚动真的生效了（scrollTop > 0）', longEnd.st > 0, JSON.stringify(longEnd));
+ck('滚到底能看见最后一行（第 200 行哨兵）', longEnd.hasSentinel === true, JSON.stringify(longEnd));
 
 // ---- 汇总 ----
 console.log('\n== 浏览器错误明细 ==');

@@ -115,6 +115,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_note_folders_root_name ON note_folders(nam
 INSERT OR IGNORE INTO note_folders(name, parent_id, sort_order) VALUES
   ('general', NULL, 0), ('工作', NULL, 1), ('生活', NULL, 2),
   ('家庭', NULL, 3), ('学习', NULL, 4), ('想法', NULL, 5);
+-- IM 连接器（v1.10.5，需求④）：导入的聊天记录落成笔记。顶层【IM连接】。
+-- v1.10.14 起**只种顶层**：原来还种了 飞书/钉钉/企业微信/其他 四个平台子文件夹，
+-- 但「钉钉/企业微信」压根没跑通（官方通道拿不到个人聊天记录），空目录挂在笔记树里只会让人困惑，
+-- 所以改成**用到才建**：IM连接/<平台>/<连接器备注名>，由 imService.connectorFolderId 按需建。
+-- 老库里已经存在的空目录由 imService.migrateImFolders 在启动时清掉（这里没法删 —— INSERT OR IGNORE 只加不删）。
+INSERT OR IGNORE INTO note_folders(name, parent_id, sort_order)
+  VALUES ('IM连接', NULL, 6);
 
 -- 自定义属性定义（右侧栏「笔记属性」+ 数据库视图的列定义）；值存 notes.props 的 JSON
 CREATE TABLE IF NOT EXISTS note_property_defs (
@@ -738,6 +745,75 @@ CREATE TABLE IF NOT EXISTS life_links (
   created_at TEXT DEFAULT (datetime('now','localtime')),
   UNIQUE(src_type, src_id, dst_type, dst_id, relation)
 );
+
+-- ========== IM 连接器（v1.10.5，需求①~⑤）==========
+-- 目标：以**用户身份**（不是群机器人）授权，拉取该用户自己的单聊/群聊记录，落成笔记。
+-- 合规红线（写死在代码里）：只走官方开放平台 OpenAPI + 官方 OAuth 授权码流程；
+-- 绝不逆向抓包、绝不模拟客户端 Cookie、绝不爬虫。用户随时可以在这里「解除授权」。
+--
+-- app_secret / access_token / refresh_token **明文存租户库**：它们等价于「该用户自己的钥匙」，
+-- 而租户库本来就是该用户自己的私有库（每个用户一个 tenant-<uid>.sqlite，不跨用户共享）。
+-- 接口返回给前端时一律**擦掉**这三个字段（见 imService.publicConnector）。
+CREATE TABLE IF NOT EXISTS im_connectors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL DEFAULT 'feishu',   -- feishu|dingtalk|wecom（当前只有 feishu 实现了授权）
+  label TEXT DEFAULT '',                     -- 用户备注，如「公司飞书」。留空时用企业识别码兜底
+  app_id TEXT DEFAULT '',
+  app_secret TEXT DEFAULT '',
+  redirect_uri TEXT DEFAULT '',
+  access_token TEXT DEFAULT '',
+  refresh_token TEXT DEFAULT '',
+  expires_at TEXT DEFAULT '',                -- 本地时间；到点前用 refresh_token 换新
+  tenant_key TEXT DEFAULT '',                -- 「IM 授权企业的识别码」（飞书 = tenant_key）
+  user_open_id TEXT DEFAULT '',
+  user_name TEXT DEFAULT '',
+  status TEXT DEFAULT 'new',                 -- new|authorized|expired|error
+  folder_id INTEGER,                         -- 落地文件夹（IM连接/<平台>/<备注名>，v1.10.14 起按**连接器**分）
+  last_sync_at TEXT DEFAULT '',
+  last_error TEXT DEFAULT '',
+  -- 定时同步（v1.10.14，需求③）：**每条连接器各设各的**，互不影响。
+  -- auto_last_at 是**北京时间**字符串（不是 datetime('now','localtime')，见 scheduler.runImAutoSync
+  -- 与 imService.cstStamp —— 它要跟 autoSyncSlot 的时点字符串比大小，两边必须同口径）。
+  auto_sync INTEGER DEFAULT 0,               -- 0/1 开关
+  auto_freq TEXT DEFAULT 'daily',            -- daily|weekly
+  auto_time TEXT DEFAULT '08:00',            -- HH:MM（北京时间）
+  auto_weekday INTEGER DEFAULT 1,            -- weekly 用：1=周一 … 7=周日
+  auto_days INTEGER DEFAULT 30,              -- 每次拉取的范围（天）；只对「还没有游标」的会话生效
+  auto_last_at TEXT DEFAULT '',              -- 上次自动跑的时刻（北京时间）
+  auto_last_result TEXT DEFAULT '',          -- 上次自动跑的结果（一句话，直接显示在界面上）
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+-- 一次授权 → 一个会话 → 一篇笔记（增量追加）。会话级游标 last_msg_time 保证重复同步不重复落库。
+CREATE TABLE IF NOT EXISTS im_chats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  connector_id INTEGER NOT NULL,
+  chat_id TEXT NOT NULL,
+  chat_name TEXT DEFAULT '',
+  chat_mode TEXT DEFAULT '',                 -- p2p|group|topic
+  note_id INTEGER,
+  last_msg_time TEXT DEFAULT '',             -- 已同步到的消息时间（毫秒字符串，飞书 create_time 原样）
+  msg_count INTEGER DEFAULT 0,
+  last_sync_at TEXT DEFAULT '',
+  last_error TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE(connector_id, chat_id)
+);
+-- 同步日志：拉了多少、哪个会话失败、失败原因。出问题时用户/我都能直接看。
+CREATE TABLE IF NOT EXISTS im_sync_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  connector_id INTEGER,
+  level TEXT DEFAULT 'info',                 -- info|warn|error
+  message TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+-- OAuth 待回跳 state：**主库**表（回跳请求没有登录态，只能靠 state 反查是哪个用户/哪条连接器）。
+-- 一次性 + 10 分钟过期（见 imService.takeState）。
+CREATE TABLE IF NOT EXISTS im_oauth_states (
+  state TEXT PRIMARY KEY,
+  uid INTEGER NOT NULL,
+  connector_id INTEGER NOT NULL,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 `;
 
 // 为已有表补充新列（SQLite ADD COLUMN，幂等）
@@ -766,6 +842,14 @@ function applyColumnMigrations(d) {
   addCol(d, 'notes', 'props', "TEXT DEFAULT '{}'");
   addCol(d, 'notes', 'daily_date', 'TEXT');
   addCol(d, 'notes', 'word_count', 'INTEGER DEFAULT 0');
+  // IM 连接器定时同步（v1.10.14）：每条连接器各设各的时点/频率/范围（详见 im_connectors 的建表注释）
+  addCol(d, 'im_connectors', 'auto_sync', 'INTEGER DEFAULT 0');
+  addCol(d, 'im_connectors', 'auto_freq', "TEXT DEFAULT 'daily'");
+  addCol(d, 'im_connectors', 'auto_time', "TEXT DEFAULT '08:00'");
+  addCol(d, 'im_connectors', 'auto_weekday', 'INTEGER DEFAULT 1');
+  addCol(d, 'im_connectors', 'auto_days', 'INTEGER DEFAULT 30');
+  addCol(d, 'im_connectors', 'auto_last_at', "TEXT DEFAULT ''");
+  addCol(d, 'im_connectors', 'auto_last_result', "TEXT DEFAULT ''");
   addCol(d, 'business_systems', 'username', "TEXT DEFAULT ''");
   addCol(d, 'business_systems', 'password', "TEXT DEFAULT ''");
   addCol(d, 'emails', 'body', "TEXT DEFAULT ''");
@@ -937,6 +1021,8 @@ function initBusinessSchema(d) {
     CREATE INDEX IF NOT EXISTS idx_life_reviews_period ON life_reviews(type, period_key);
     CREATE INDEX IF NOT EXISTS idx_life_projects_goal ON life_projects(goal_id, status);
     CREATE INDEX IF NOT EXISTS idx_life_sops_domain ON life_sops(domain_id, archived);
+    -- IM 连接器（v1.10.5）：日志按连接器倒序翻；会话游标靠 UNIQUE(connector_id,chat_id) 自带索引
+    CREATE INDEX IF NOT EXISTS idx_im_sync_logs ON im_sync_logs(connector_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
     CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
     -- 今日主线按天取：部分索引（NULL 不参与，普通待办不占索引）
@@ -1825,6 +1911,9 @@ const TENANT_TABLES = [
   // ② cleanupMainBusinessTables 清主库残留。漏了它 = 老数据搬不过去，不是「租户库缺表」。
   'life_domains', 'life_goals', 'life_key_results', 'life_habits', 'life_habit_logs',
   'life_reviews', 'life_projects', 'life_sops', 'life_links',
+  // IM 连接器（v1.10.5）：授权凭证 + 会话游标 + 同步日志。im_oauth_states 是**主库**表
+  // （OAuth 回跳没有登录态，只能靠 state 反查用户），故意不进这份清单。
+  'im_connectors', 'im_chats', 'im_sync_logs',
 ];
 // 归租户库的 settings 键（其余留在主库）
 const TENANT_SETTING_KEYS = [
@@ -2275,6 +2364,72 @@ function migrateCclightBackToSmarthome() {
   console.log('[db] v1.9.23 Agent红绿灯放回智能家居页：用户授权已回迁');
 }
 migrateCclightBackToSmarthome();
+
+// 一次性迁移（2026-10 v1.10.10，需求⑨）：电子宠物从独立侧栏页「pets」并入「效率工具」页的 tab。
+//   页面：allowed_pages 里的 'pets' 剥掉（该页已从 PAGES 消失），同时保证 'tools' 在列表里 ——
+//         少了它这一步，受限用户的 allowed_pages 里就只剩别的页，**效率和宠物一起没了**。
+//   细分：allowed_tabs.pets 整键删除；该页原来**没有细分**（缺键 = 页内全开）就什么也不用补
+//         （tools 缺键同样是全开，权限自然保住）；原来**勾过具体子 tab** 的，说明这人确实在用宠物功能，
+//         给 tools 补上 'pets' 键。一个宠物子 tab 都没勾（= 空数组，本来就被挡在外面）就不补，不扩权。
+//   顺带清死键：tools 细分里的 plans/records/review 随三个 tab 一起删（它们已不在 TAB_PATHS.tools 里，
+//         留着会被下一次保存时的 sanitizeTabs 剥掉，这里先清干净免得两边不一致）。
+//   ⚠️ 提权防线（很容易漏）：allowed_pages 的语义是**空数组 = 不限制**。所以「原来只被授权了宠物页
+//         （allowed_pages === ['pets']）且一个宠物子 tab 都没勾」这种账号，剥掉 'pets' 之后列表会变成
+//         空数组 —— 那等于把这号人**放开成能看全部页面**，是个真提权。这里给它们留下 tools 页但
+//         一个 tab 都不开（tabs.tools = []），等价于"有页面、什么都点不动"，与原来的处境一致。
+// 幂等（守卫 pets_into_tools_v11010b —— 末尾的 b 是因为 v1.10.10 首次上线用的是不带 b 的键，
+//     那版漏了上面这条提权防线；换键才能让已经跑过一版的库把缺口补上），主库 + 全部租户库同跑。
+function migratePetsIntoTools() {
+  const fix = (d) => {
+    if (getSetting(d, 'pets_into_tools_v11010b', false)) return;
+    setSetting(d, 'pets_into_tools_v11010b', true);
+    const users = (() => { try { return d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all(); } catch { return []; } })();
+    for (const u of users) {
+      let pages;
+      try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+      let tabs;
+      try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+      let changed = false;
+      const petsTabs = (tabs && typeof tabs === 'object' && Array.isArray(tabs.pets)) ? tabs.pets : null;
+      const hadPage = Array.isArray(pages) && pages.includes('pets');
+      // 这个账号**是不是真的在用宠物功能**：
+      //   pets 细分缺键 = 页内全开 → 在用；细分是数组 → 勾过至少一个子 tab 才算在用。
+      //   空数组（勾了页、一个子 tab 都没勾）是"本来就被挡在外面"，搬家时不能顺手放进来。
+      const hadPetUse = hadPage && (petsTabs === null || petsTabs.length > 0);
+      if (hadPage) {
+        pages = pages.filter((p) => p !== 'pets');
+        if (hadPetUse) {
+          if (!pages.includes('tools')) {
+            // 原来没有工具页 → 补上，但**只给 pets 一个 tab**，不让他顺带拿到录音转写/推送任务等
+            pages.push('tools');
+            tabs.tools = Array.isArray(tabs.tools) ? [...new Set([...tabs.tools, 'pets'])] : ['pets'];
+          } else if (Array.isArray(tabs.tools) && !tabs.tools.includes('pets')) {
+            // 本来就有工具页且是细分列表 → 补 'pets'；
+            // 本来就有工具页且**没有细分**（缺键 = 全部 tab 开放）→ pets 自然可用，什么都不用写
+            tabs.tools = [...tabs.tools, 'pets'];
+          }
+        }
+        // 剥完变空 = 原来是「只授权了宠物页」。空数组在 canAccess 里是**不限制**，
+        // 直接留着就是提权 —— 给他留一个工具页、一个 tab 都不开。
+        if (pages.length === 0) { pages = ['tools']; tabs.tools = []; }
+        changed = true;
+      }
+      if (tabs && typeof tabs === 'object') {
+        if ('pets' in tabs) { delete tabs.pets; changed = true; }
+        if (Array.isArray(tabs.tools)) {
+          const cleaned = tabs.tools.filter((t) => t !== 'plans' && t !== 'records' && t !== 'review');
+          if (cleaned.length !== tabs.tools.length) { tabs.tools = cleaned; changed = true; }
+        }
+      }
+      if (changed) d.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE id=?')
+        .run(JSON.stringify(pages), JSON.stringify(tabs), u.id);
+    }
+  };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] v1.10.10 电子宠物并入效率工具页：用户授权已迁移');
+}
+migratePetsIntoTools();
 
 // 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
 // （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。

@@ -77,13 +77,22 @@ ck('改过之后列表头名换成 A（服务端确实按最后修改排）', le
 ck('改过之后默认打开「基线笔记A」', (await openNotes()) === '基线笔记A', '实际：' + await titleOf());
 
 console.log('\n== ② 查看页显示创建时间 / 最后修改时间 ==');
-const created = (await page.getByText(/创建于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/).first().innerText()).trim();
-const updated = (await page.getByText(/最后修改 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/).first().innerText()).trim();
-ck('「创建于」是完整日期时间', /创建于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(created), created);
-ck('「最后修改」是完整日期时间', /最后修改 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(updated), updated);
+// v1.10.2：这两枚时间从「独占一行」挪到「AI 总结/续写/翻译」那一行，格式也压缩成
+// 「创建 10-05 09:45」（今年不写年份），完整时间戳改挂在 title 上。
+const created = (await page.getByText(/创建 (\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}/).first().innerText()).trim();
+const updated = (await page.getByText(/修改 (\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}/).first().innerText()).trim();
+ck('「创建」是日期+时分', /^创建 (\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}$/.test(created), created);
+ck('「修改」是日期+时分', /^修改 (\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}$/.test(updated), updated);
 const row = (await A('GET', `/api/notes/${nA.id}`)) || {};
-ck('显示值与接口返回一致', created.endsWith(String(row.created_at || '').slice(0, 16)) && updated.endsWith(String(row.updated_at || '').slice(0, 16)),
+// 今年只显示「月-日 时:分」，往年的才带年份 —— 所以比对时按同一条规则把接口值裁一下
+const tailOf = (s) => { const f = String(s || '').slice(0, 16); return f.startsWith(String(new Date().getFullYear())) ? f.slice(5) : f; };
+ck('显示值与接口返回一致', created.endsWith(tailOf(row.created_at)) && updated.endsWith(tailOf(row.updated_at)),
   `${created} / ${updated} vs ${row.created_at} / ${row.updated_at}`);
+const tips = await page.locator('.note-head .line.wrap span.nowrap').evaluateAll((els) => els.map((e) => [e.textContent.trim(), e.getAttribute('title')]));
+ck('省掉的年份没丢：悬停提示里是完整时间戳',
+  tips.some((t) => t[0].startsWith('创建') && String(t[1]).endsWith(String(row.created_at || '').slice(0, 19))) &&
+  tips.some((t) => t[0].startsWith('修改') && String(t[1]).endsWith(String(row.updated_at || '').slice(0, 19))),
+  JSON.stringify(tips));
 await page.screenshot({ path: path.join(ROOT, 'Logs/shots/v1101-note-times.png'), clip: { x: 190, y: 60, width: 1240, height: 200 } });
 ck('库里最后修改确实晚于创建（显示只到分钟，故用原始值判）', String(row.updated_at) !== String(row.created_at), `${row.created_at} / ${row.updated_at}`);
 

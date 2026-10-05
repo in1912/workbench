@@ -8,8 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DATA = path.join(ROOT, 'data', 'tmp-perm-pets-e2e');
-const PORT = 3999;
+// DATA/PORT 允许用环境变量顶掉：本机常年挂着别的调试服务时，固定端口/目录会互相抢
+//（撞端口 → 连不上；目录被别的进程占着 → rmSync EPERM 直接崩）。
+const DATA = process.env.E2E_DATA ? path.resolve(process.env.E2E_DATA) : path.join(ROOT, 'data', 'tmp-perm-pets-e2e');
+const PORT = Number(process.env.E2E_PORT || 3999);
 const B = `http://127.0.0.1:${PORT}`;
 
 process.env.DATA_DIR = DATA; // 必须在 import server 模块之前
@@ -30,7 +32,11 @@ const srv = spawn(process.execPath, ['--no-warnings', 'server/index.js'], {
 });
 srv.stdout.on('data', () => {});
 srv.stderr.on('data', (d) => console.error('[srv-err]', String(d).slice(0, 300)));
-await sleep(2500);
+// 固定 sleep 2500ms 曾经在冷启动慢一点时直接 fetch failed（服务还没监听）。改成轮询探活。
+for (let i = 0; i < 80; i++) {
+  try { const rr = await fetch(`${B}/api/system-info`); if (rr.ok) break; } catch { /* 还没起来 */ }
+  await sleep(250);
+}
 
 const login = async (u, p) => (await fetch(`${B}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) })).json();
 

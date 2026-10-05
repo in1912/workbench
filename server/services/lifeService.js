@@ -577,6 +577,116 @@ function domainOverview(tdb, id) {
   };
 }
 
+// ---------- 领域 CRUD（v1.10.5，需求⑩） ----------
+// 图标白名单：领域图标走本地 Material Icons 字体，写错名字侧栏会渲染成「一串字母」而不是图标
+// （v1.6.2 起的老坑，前端下拉框也只列这一份）。不在表里的输入一律退回 'flag'，不报错。
+const DOMAIN_ICONS = [
+  'flag', 'work', 'savings', 'favorite', 'home', 'group', 'trending_up', 'school',
+  'fitness_center', 'menu_book', 'psychology', 'public', 'star', 'attach_money',
+  'self_improvement', 'diversity_3', 'lightbulb', 'rocket_launch',
+];
+
+function domainBad(msg, code = 400) { const e = new Error(msg); e.code = code; return e; }
+
+function domainCounts(tdb, id) {
+  const n = Number(id);
+  const one = (sql) => Number(tdb.prepare(sql).get(n).c);
+  return {
+    // 挡住删除的是「界面上看得见的那些目标」；已归档的目标不在领域面板里显示，
+    // 硬挡会让用户对着一个空领域反复点删除也删不掉，所以只对它们解引用（见 deleteDomain）。
+    goals: one("SELECT COUNT(*) c FROM life_goals WHERE domain_id=? AND status<>'archived'"),
+    archived_goals: one("SELECT COUNT(*) c FROM life_goals WHERE domain_id=? AND status='archived'"),
+    projects: one('SELECT COUNT(*) c FROM life_projects WHERE domain_id=?'),
+    habits: one('SELECT COUNT(*) c FROM life_habits WHERE domain_id=?'),
+    sops: one('SELECT COUNT(*) c FROM life_sops WHERE domain_id=?'),
+  };
+}
+
+function domainNameTaken(tdb, name, exceptId = null) {
+  const row = tdb.prepare('SELECT id FROM life_domains WHERE name=?').get(name);
+  return !!row && Number(row.id) !== Number(exceptId);
+}
+
+function cleanDomainName(v) {
+  const name = String(v == null ? '' : v).trim();
+  if (!name) throw domainBad('领域名称不能为空');
+  if ([...name].length > 20) throw domainBad('领域名称最多 20 个字');
+  return name;
+}
+
+function createDomain(tdb, b = {}) {
+  const name = cleanDomainName(b.name);
+  if (domainNameTaken(tdb, name)) throw domainBad(`已经有一个叫「${name}」的领域了`);
+  const icon = DOMAIN_ICONS.includes(b.icon) ? b.icon : 'flag';
+  const sort = (b.sort_order === undefined || b.sort_order === null || b.sort_order === '')
+    ? Number(tdb.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 n FROM life_domains').get().n)
+    : Number(b.sort_order);
+  const r = tdb.prepare('INSERT INTO life_domains(name,icon,color,sort_order) VALUES(?,?,?,?)')
+    .run(name, icon, String(b.color || ''), Number.isFinite(sort) ? sort : 0);
+  return Number(r.lastInsertRowid);
+}
+
+function updateDomain(tdb, id, b = {}) {
+  const cur = tdb.prepare('SELECT * FROM life_domains WHERE id=?').get(Number(id));
+  if (!cur) return null;
+  let name = cur.name;
+  if (b.name !== undefined) {
+    name = cleanDomainName(b.name);
+    if (domainNameTaken(tdb, name, id)) throw domainBad(`已经有一个叫「${name}」的领域了`);
+  }
+  const icon = b.icon === undefined ? cur.icon : (DOMAIN_ICONS.includes(b.icon) ? b.icon : cur.icon);
+  const color = b.color === undefined ? cur.color : String(b.color || '');
+  const sort = (b.sort_order === undefined || b.sort_order === null || b.sort_order === '')
+    ? cur.sort_order : Number(b.sort_order);
+  tdb.prepare('UPDATE life_domains SET name=?,icon=?,color=?,sort_order=?,archived=? WHERE id=?').run(
+    name, icon, color, Number.isFinite(sort) ? sort : cur.sort_order,
+    b.archived === undefined ? cur.archived : (b.archived ? 1 : 0), Number(id));
+  return tdb.prepare('SELECT * FROM life_domains WHERE id=?').get(Number(id));
+}
+
+/**
+ * 删领域（需求⑩：「删除时提示是否领域内有目标，有目标的需要删除后才能删除领域」）。
+ *
+ * 规矩（两道闸，服务端是硬闸、前端那道只是提前把话说清楚）：
+ * ① 该领域下还有**未归档的目标** → 一律拒（`?force=1` 也不行）：用户明确要求先把目标删掉/改走后才能删领域；
+ * ② 项目 / 习惯 / SOP 还挂着这个领域 → 不给 force 时拒并报数（前端弹确认），force=1 才放行：
+ *    此时把它们的 domain_id 置空（记录本身不删），并逐条清掉 life_links 里的对应关系边
+ *    —— 铁律：解引用必须同时清边，否则图谱里会留下指着空气的线。
+ * 已归档的目标（面板看不见它们）走 ② 同一条路：解引用 + 清边，并在返回值里报数，让前端能如实说明。
+ */
+function deleteDomain(tdb, id, { force = false } = {}) {
+  const dom = tdb.prepare('SELECT * FROM life_domains WHERE id=?').get(Number(id));
+  if (!dom) return null;
+  const c = domainCounts(tdb, id);
+  if (c.goals > 0) {
+    const e = domainBad(
+      `「${dom.name}」下还有 ${c.goals} 个目标，请先把这些目标删掉或改到别的领域，再删除领域`, 409);
+    e.counts = c; throw e;
+  }
+  const others = c.projects + c.habits + c.sops + c.archived_goals;
+  if (others > 0 && !force) {
+    const parts = [];
+    if (c.projects) parts.push(`${c.projects} 个项目`);
+    if (c.habits) parts.push(`${c.habits} 个习惯`);
+    if (c.sops) parts.push(`${c.sops} 条 SOP`);
+    if (c.archived_goals) parts.push(`${c.archived_goals} 个已归档目标`);
+    const e = domainBad(
+      `「${dom.name}」下还有 ${parts.join('、')}，删除领域会把它们的「领域」清空（记录本身不删）`, 409);
+    e.counts = c; e.canForce = true; throw e;
+  }
+  const cleared = {};
+  for (const [type, table] of [['project', 'life_projects'], ['habit', 'life_habits'],
+                               ['sop', 'life_sops'], ['goal', 'life_goals']]) {
+    const rows = tdb.prepare(`SELECT id FROM ${table} WHERE domain_id=?`).all(Number(id));
+    for (const row of rows) link.unlink(tdb, type, row.id, 'domain', Number(id));
+    cleared[type === 'goal' ? 'archived_goals' : type + 's'] =
+      tdb.prepare(`UPDATE ${table} SET domain_id=NULL WHERE domain_id=?`).run(Number(id)).changes;
+  }
+  link.purgeEntity(tdb, 'domain', id);   // 兜底：领域作为 src/dst 的其它关系边（比如领域↔领域）
+  tdb.prepare('DELETE FROM life_domains WHERE id=?').run(Number(id));
+  return { name: dom.name, cleared };
+}
+
 // ---------- 今日 / 仪表盘 ----------
 /**
  * 今日：主线任务 + 今日到期 + 习惯打卡态 + 该写还没写的复盘。
@@ -652,6 +762,6 @@ module.exports = {
   listReviews, saveReview, reviewToSop,
   listProjects, createProject, updateProject, deleteProject,
   listSops, createSop, updateSop, deleteSop, useSop,
-  listDomains, domainOverview,
+  listDomains, domainOverview, createDomain, updateDomain, deleteDomain, domainCounts, DOMAIN_ICONS,
   today, dashboard,
 };

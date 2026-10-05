@@ -309,13 +309,19 @@ const user = computed(() => {
   try { return JSON.parse(localStorage.getItem('wb_user') || 'null'); } catch { return null; }
 });
 const denied = computed(() => !!route.query.denied);
-// 悬浮宠物与电子宠物页共用 'pets' 页面权限
+// 悬浮宠物与「效率工具 → 电子宠物」共用同一个权限键。
+// v1.10.10（需求⑨）：宠物模块从独立页并入效率工具，授权键由页面 'pets' 改成 tab 'tools.pets'
+//（线上存量授权已由 db.js 的一次性迁移平移过去，见 migratePetsIntoTools）。
 const hasPets = computed(() => {
   const u = user.value;
   if (!u) return false;
   if (u.role === 'admin') return true;
   const allowed = u.allowed_pages || [];
-  return !allowed.length || allowed.includes('pets');
+  // 未做页面限制（allowed_pages 为空）= 全部页面开放
+  if (!allowed.length) return true;
+  if (!allowed.includes('tools')) return false;      // 连效率工具都没开
+  const t = (u.allowed_tabs || {}).tools;
+  return t === undefined || t === null || (Array.isArray(t) && t.includes('pets'));
 });
 
 const allNavs = NAV_ITEMS;

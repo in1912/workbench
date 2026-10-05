@@ -61,20 +61,25 @@ export const TAB_DEFS = {
   // 个人账务（原独立页）→ family 页 tab；此处不再有独立 business/pay 页定义
   // v1.8.0：「私有项目」页（dep/pro/mbti 三大测试中心）整体移除，迁至独立项目 Private_Mini
   tools: [
-    // 智作平台（文案库）排第一（2026-09 v1.6.2）：iframe 嵌入同源 /zhizu/，自带登录与角色体系
-    { key: 'zhizu', label: '智作平台' },
-    // 录音转写为默认落点（2026-09-22 用户要求：模块默认进录音转写）
+    // 录音转写（v1.10.10，需求⑨）：从第二个挪到**第一个**，并且是本页默认落点。
+    // 用户原话：「效率工具默认进入后显示录音转写，录音转写放在第一个 tab 页」。
     { key: 'vibe', label: '录音转写' },
+    // 智作平台（文案库，2026-09 v1.6.2）：iframe 嵌入同源 /zhizu/，自带登录与角色体系
+    { key: 'zhizu', label: '智作平台' },
     { key: 'clip', label: '剪贴板' },
     { key: 'links', label: '快捷启动' },
-    // 学习页移来的 3 个 tab（2026-09 v1.2.0）
-    { key: 'plans', label: '学习计划' },
-    { key: 'records', label: '学习记录' },
-    { key: 'review', label: '复盘' },
+    // v1.10.10（需求⑨）：「学习计划 / 学习记录 / 复盘」三个 tab 按用户要求**整块去掉**
+    //（plans / records / review）。后端 /learning/plans、/learning/records、/reviews 端点与
+    // learning_plans / learning_records / reviews 三张表都**原样保留**，只是不再有入口。
     // 电脑监控（v1.3.5）
     { key: 'monitor', label: '电脑监控' },
     // 语音配音从「学习」页移来（2026-09 v1.6.5）
     { key: 'tts', label: '语音配音' },
+    // 电子宠物（v1.10.10，需求⑨）：原独立侧栏页整体并入本页。
+    // 页内的「我的宠物 / 领养 / 打卡 / 养育记录 / 设置与预览 / 宠物分配」六个子 tab 仍是
+    // PetsPanel 自己的 tab 栏（与「推送任务」「个人账务」同一套嵌法），这里只占**一个**外层 tab。
+    // 权限键就一个 'pets'：后端 TAB_PATHS.tools 里 ['pets', ['/pets']] 一网打尽整个 /api/pets。
+    { key: 'pets', label: '电子宠物' },
     // 业务系统整页并入，改名「推送任务」（2026-09 v1.7.0，内含 4 个子 tab）
     { key: 'business', label: '推送任务' },
     // 隐藏伪 tab：推送任务内部的子功能细分（不出现在效率工具 tab 栏，权限表可勾选限制）
@@ -91,6 +96,11 @@ export const TAB_DEFS = {
     // 用户管理从独立页并入（2026-09 v1.7.0）：设置页 tab（仅管理员可见，视图内部再按角色拦截）
     { key: 'users', label: '用户管理' },
   ],
+  // 电子宠物（v1.10.10，需求⑨）：本页已并入「效率工具」的一个 tab，不再出现在侧栏，
+  // 因此下面这组键不会再被权限表渲染出来、也拿不到 allowed_tabs.pets ——
+  // canTab('pets', k) 于是恒为「全开」，PetsPanel 内部六个子 tab 对所有能看到电子宠物 tab 的人都开放
+  // （这正是预期：外层只守一道 tools.pets，内部子 tab 是纯 UI 分段）。
+  // 定义保留是为了别处万一还引用 key 时不至于取到 undefined。
   pets: [
     { key: 'pets', label: '我的宠物' },
     { key: 'adopt', label: '领养宠物' },

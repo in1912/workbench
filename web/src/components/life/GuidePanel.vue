@@ -3,7 +3,7 @@
     <h3>使用流程 <span class="muted" style="font-weight:400">一圈跑通；点任一格可直接跳到那一页</span></h3>
 
     <!-- 手搓 SVG 流程图（不引图库）：坐标写死在 nodes/edges 里，改文案只动数据不动画法 -->
-    <svg class="flow" :viewBox="`0 0 ${W} ${H}`" role="img" aria-label="人生模块使用流程图">
+    <svg class="flow" :viewBox="`0 0 ${W} ${H}`" role="img" aria-label="lifeOS 使用流程图">
       <defs>
         <marker id="life-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" class="head" />
@@ -30,7 +30,7 @@
     <div class="legend">
       <div class="lg"><b>进度永不落库</b>：目标进度一律由关键结果（及子目标）现算——所以仪表盘上的数和明细永远一致，不存在「显示 70% 但底下没几条」。改 KR 的当前值，目标进度当场跟着动。</div>
       <div class="lg"><b>删了要顺手清边</b>：删目标 / 行动 / 项目时，它们之间的关系边会一并删掉，关系图不会留下连不到任何东西的孤岛。</div>
-      <div class="lg"><b>行动就是工作台的待办</b>：人生页的「行动」复用工作台的 todos 表（只多挂了目标、项目、领域等几列）——在待办页勾掉的，这里也是完成状态，反之亦然。</div>
+      <div class="lg"><b>行动就是工作台的待办</b>：lifeOS 的「行动」复用工作台的 todos 表（只多挂了目标、项目、领域等几列）——在待办页勾掉的，这里也是完成状态，反之亦然。</div>
       <div class="lg"><b>先跑起来再补齐</b>：最小闭环是「领域 → 目标 → KR → 行动 → 今日完成 → 复盘」；习惯、项目、关系图都是锦上添花，缺了不影响主循环。</div>
     </div>
   </div>

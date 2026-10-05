@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2 class="page-title">人生
+    <h2 class="page-title">lifeOS
       <span class="muted" style="font-size:12px; font-weight:400">目标 · 行动 · 复盘 · 习惯 · 项目 · 关系</span>
     </h2>
 

@@ -23,6 +23,7 @@ function int(v, field = 'id') {
 }
 
 // 统一的处理包装：服务层抛的 {code:400} 变成 400，其余记日志并 500
+// v1.10.5：补 409 通道（删领域时「里面还有东西」用，带 counts / can_force 给前端弹确认）
 function ok(fn) {
   return (req, res) => {
     try {
@@ -30,6 +31,13 @@ function ok(fn) {
     } catch (e) {
       if (e && e.code === 400) return res.status(400).json({ error: e.message });
       if (e && e.code === 404) return res.status(404).json({ error: e.message });
+      if (e && e.code === 409) {
+        return res.status(409).json({
+          error: e.message,
+          ...(e.counts ? { counts: e.counts } : {}),
+          ...(e.canForce ? { can_force: true } : {}),
+        });
+      }
       console.error('[life]', req.method, req.originalUrl, e);
       res.status(500).json({ error: '服务端错误：' + (e && e.message ? e.message : '未知') });
     }
@@ -85,6 +93,20 @@ router.get('/life/domains/:id', ok((req, res) => {
   const d = svc.domainOverview(req.tdb, int(req.params.id));
   if (!d) return notFound(res, '领域');
   res.json(d);
+}));
+// 领域增删改（v1.10.5，需求⑩）。删除的两道闸写在 svc.deleteDomain 里：
+// 有未归档目标 → 409（force 也不行）；项目/习惯/SOP 挂着 → 409 报数，?force=1 才解引用。
+router.post('/life/domains', ok((req, res) =>
+  res.json({ id: svc.createDomain(req.tdb, req.body || {}) })));
+router.put('/life/domains/:id', ok((req, res) => {
+  const d = svc.updateDomain(req.tdb, int(req.params.id), req.body || {});
+  if (!d) return notFound(res, '领域');
+  res.json(d);
+}));
+router.delete('/life/domains/:id', ok((req, res) => {
+  const r = svc.deleteDomain(req.tdb, int(req.params.id), { force: req.query.force === '1' });
+  if (!r) return notFound(res, '领域');
+  res.json({ ok: true, ...r });
 }));
 
 // ---------- 目标 ----------

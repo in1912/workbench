@@ -99,6 +99,12 @@ function syncNoteTags(tdb, noteId, content, manualTags) {
   return final.map((r) => r[0]);
 }
 
+// 笔记标题的长度上限。**别再退回 60** —— IM 归档的标题规则是「对方姓名-日期时间-会话 ID」，
+// 而一个飞书 chat_id（oc_ + 32 位）就有 35 个字符，加上时间（16）和两个连字符已经 53，
+// 姓名只要超过 7 个字就撞线。60 会把 chat_id 从中间截断，而这串 ID 正是这篇笔记的稳定身份。
+// 120 够放 68 个字的姓名/群名；显示侧不靠这个数（页签、列表都自己用 CSS 省略）。
+const TITLE_MAX = 120;
+
 // ---------- 双链 ----------
 const WIKI_RE = /\[\[([^\[\]\n]{1,80})\]\]/g;
 
@@ -210,7 +216,7 @@ function createNote(tdb, {
     fid = g ? Number(g.id) : null;
   }
   const fname = fid ? (tdb.prepare('SELECT name FROM note_folders WHERE id=?').get(fid) || {}).name || '' : '';
-  const finalTitle = String(title || '').trim().slice(0, 60) || extractTitle(text);
+  const finalTitle = String(title || '').trim().slice(0, TITLE_MAX) || extractTitle(text);
   const r = tdb.prepare(
     `INSERT INTO notes(title,content,category,folder_id,tags,summary,props,record_id,daily_date,word_count)
      VALUES(?,?,?,?,?,?,?,?,?,?)`
@@ -308,5 +314,5 @@ module.exports = {
   folderMap, folderSubtreeIds,
   createNote, deleteNote, decorateNote,
   fillTemplate, ensureDailyNote,
-  WIKI_RE, INLINE_TAG_RE,
+  WIKI_RE, INLINE_TAG_RE, TITLE_MAX,
 };

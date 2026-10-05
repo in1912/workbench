@@ -4,7 +4,7 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const express = require('express');
-const { onImported, getTenantDb, dataDir, ensureLocalUser } = require('./db');
+const { onImported, getTenantDb, dataDir, ensureLocalUser, forEachTenant } = require('./db');
 const ipBan = require('./services/ipBanService');
 const auth = require('./auth');
 const coreRoutes = require('./routes/core');
@@ -31,6 +31,8 @@ const flashToolRoutes = require('./routes/flashToolRoutes');
 const noteRoutes = require('./routes/noteRoutes'); // 笔记知识系统（v1.9.41）：所有 /notes/* 的唯一所有者
 const noteShareRoutes = require('./routes/noteShareRoutes'); // 笔记分享 + 外部写入令牌（v1.9.39）
 const lifeRoutes = require('./routes/lifeRoutes'); // 人生管理系统（v1.10.0）：所有 /life/* 的唯一所有者
+const imRoutes = require('./routes/imRoutes'); // IM 连接器（v1.10.5）：所有 /im/* 的唯一所有者（含免登回跳 /im/callback）
+const imService = require('./services/imService'); // 启动时要用一次：IM 落地文件夹改版的一次性迁移（v1.10.14）
 const scheduler = require('./scheduler');
 const dingtalkStream = require('./services/dingtalkStreamService');
 
@@ -90,6 +92,7 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
   '/xiaozhi/bridge', // 智能板桥接（v1.9.11：板端固件 MCP 工具回连，key 即凭证，照 /vibe/job 模式）
   '/xiaozhi/firmware', // 智能板固件下载（v1.9.12：同一桥接密钥或管理员令牌，路由内自校验；无工具链环境从构建机代理）
   '/xiaozhi/photo', // 智能板照片上传（v1.9.17：固件 POST 二进制 JPEG，路由级 raw 解析 + 桥接密钥自校验）
+  '/im/callback', // IM 连接器 OAuth 回跳（v1.10.5，飞书那边跳回来，没有工作台登录态；只认一次性 state）
   '/pets/desktop', // 桌面宠物（key 即凭证：state/frame/action）
   '/share', '/note-intake']; // 笔记分享（token+4位码即凭证）/ 外部写入令牌（v1.9.39）。⚠️ 路由内一律 403/404，绝不 401
 app.use('/api', (req, res, next) => {
@@ -150,6 +153,7 @@ app.use('/api', coreRoutes);
 app.use('/api', noteRoutes); // 笔记知识系统（v1.9.41）：/notes/* 全部端点。必须排在 noteShareRoutes 之前，/notes/shares/* 仍是它的
 app.use('/api', noteShareRoutes); // 笔记分享 /share/n/:token（免登录）+ 管理 /notes/shares/*（继承笔记页权限）+ 外部写入 /note-intake/:token（v1.9.39）
 app.use('/api', lifeRoutes); // 人生管理系统（v1.10.0）：目标/行动/复盘/习惯/项目/领域/SOP/关系引擎，全部在 /life/* 下
+app.use('/api', imRoutes); // IM 连接器（v1.10.5）：/im/*（连接器/授权/同步/日志）+ 免登回跳 /im/callback
 app.use('/api', miscRoutes); // 含 /system-info、前端错误上报、文件存档/搜索等通用接口
 app.use('/api', mihomeRoutes);
 app.use('/api', ccLightRoutes);
@@ -316,6 +320,16 @@ onImported(() => {
     return;
   }
   auth.initAdmin();
+  // IM 落地文件夹改版（v1.10.14）：老库里按平台分的目录要拆成「按连接器分」，
+  // 并把已归档的笔记搬到各自连接器的目录下。**放在这里而不是 db.js**：imService 依赖 db，
+  // 在 db.js 初始化途中 require 它会拿到半成品的 exports（循环依赖）。migrateImFolders 幂等，
+  // 重启跑多少遍都是同一结果（第二次 moved=0、removed=0）。
+  forEachTenant((d, uid, username) => {
+    try {
+      const r = imService.migrateImFolders(d);
+      if (r.moved || r.removed) console.log(`[im] 落地文件夹迁移(${username})：搬到连接器目录 ${r.moved} 篇，清掉空目录 ${r.removed} 个`);
+    } catch (e) { console.warn(`[im] 落地文件夹迁移跳过(${username}):`, e.message); }
+  });
   scheduler.init();
   dingtalkStream.start(); // 钉钉机器人长连接（接收群里 @机器人 的消息）
 });

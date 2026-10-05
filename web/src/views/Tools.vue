@@ -2,17 +2,17 @@
   <div>
     <h2 class="page-title">效率工具</h2>
     <div class="tabs">
-      <!-- 智作平台（文案库，v1.6.2）排第一：iframe 嵌同源 /zhizu/，自带登录/角色，随工作台进程启动 -->
-      <button v-if="canTab('tools','zhizu')" :class="{active: tab==='zhizu'}" @click="switchTab('zhizu')">智作平台</button>
+      <!-- 录音转写（v1.10.10，需求⑨）：**第一个** tab，也是本页默认落点。 -->
       <button v-if="canTab('tools','vibe')" :class="{active: tab==='vibe'}" @click="switchTab('vibe')">录音转写</button>
+      <!-- 智作平台（文案库，v1.6.2）：iframe 嵌同源 /zhizu/，自带登录/角色，随工作台进程启动 -->
+      <button v-if="canTab('tools','zhizu')" :class="{active: tab==='zhizu'}" @click="switchTab('zhizu')">智作平台</button>
       <button v-if="canTab('tools','clip')" :class="{active: tab==='clip'}" @click="switchTab('clip')">剪贴板</button>
       <button v-if="canTab('tools','links')" :class="{active: tab==='links'}" @click="switchTab('links')">快捷启动</button>
-      <!-- 学习页移来的 3 个 tab（2026-09 v1.2.0） -->
-      <button v-if="canTab('tools','plans')" :class="{active: tab==='plans'}" @click="switchTab('plans')">学习计划</button>
-      <button v-if="canTab('tools','records')" :class="{active: tab==='records'}" @click="switchTab('records')">学习记录</button>
-      <button v-if="canTab('tools','review')" :class="{active: tab==='review'}" @click="switchTab('review')">复盘</button>
+      <!-- v1.10.10（需求⑨）：原来在这里的「学习计划 / 学习记录 / 复盘」三个 tab 已按用户要求去掉 -->
       <button v-if="canTab('tools','monitor')" :class="{active: tab==='monitor'}" @click="switchTab('monitor')">电脑监控</button>
       <button v-if="canTab('tools','tts')" :class="{active: tab==='tts'}" @click="switchTab('tts')">语音配音</button>
+      <!-- 电子宠物（v1.10.10，需求⑨）：原独立侧栏页整体并入本页，六个子 tab 在面板内部 -->
+      <button v-if="canTab('tools','pets')" :class="{active: tab==='pets'}" @click="switchTab('pets')">电子宠物</button>
       <!-- 推送任务（原「业务系统」独立页整页并入，2026-09 v1.7.0；内含 4 个子 tab，任一子 tab 有权限即可见） -->
       <button v-if="canBusiness" :class="{active: tab==='business'}" @click="switchTab('business')">推送任务</button>
       <!-- 文件存档（原独立页并入）：倒数第二个 tab -->
@@ -146,58 +146,9 @@
     </template>
 
     <!-- ============ 三大测评中心已移至「私有项目」页（2026-09 v1.6.2） ============ -->
-
-    <!-- ============ 学习计划（自学习页移来） ============ -->
-    <template v-else-if="tab==='plans'">
-      <div class="card" style="margin-bottom:12px">
-        <div class="row">
-          <input v-model="plan.skill" placeholder="技能 / 课程名称" class="grow" />
-          <input v-model="plan.goal" placeholder="学习目标" class="grow" />
-          <button class="primary" @click="addPlan">添加计划</button>
-        </div>
-      </div>
-      <div class="card">
-        <div v-for="p in data.plans" :key="p.id" class="list-item">
-          <div class="grow">
-            <div class="t"><span class="badge" :class="p.status==='active' ? 'blue' : 'green'">{{ p.status==='active' ? '进行中' : '已完成' }}</span> {{ p.skill }}</div>
-            <div class="d" v-if="p.goal">{{ p.goal }}</div>
-          </div>
-          <button v-if="p.status==='active'" class="small" @click="finishPlan(p)">完成</button>
-          <button class="icon-btn" @click="delPlan(p)">✕</button>
-        </div>
-        <div v-if="!data.plans.length" class="empty">暂无学习计划</div>
-      </div>
-    </template>
-
-    <!-- ============ 学习记录（自学习页移来） ============ -->
-    <template v-else-if="tab==='records'">
-      <div class="card" style="margin-bottom:12px">
-        <div class="row" style="margin-bottom:10px">
-          <select v-model="rec.plan_id" style="width:180px">
-            <option :value="null">未关联计划</option>
-            <option v-for="p in data.plans" :key="p.id" :value="p.id">{{ p.skill }}</option>
-          </select>
-          <input v-model="rec.record_date" type="date" style="width:150px" />
-        </div>
-        <textarea v-model="rec.content" rows="2" placeholder="今天学了什么？"></textarea>
-        <div class="row" style="margin-top:10px">
-          <input v-model="rec.gains" placeholder="收获（可选）" class="grow" />
-          <input v-model="rec.problems" placeholder="遇到的问题（可选）" class="grow" />
-          <button class="primary" @click="addRecord">记录</button>
-        </div>
-      </div>
-      <div class="card">
-        <div v-for="r in data.records" :key="r.id" class="list-item">
-          <div class="grow">
-            <div class="t"><span class="badge blue">{{ r.record_date }}</span> <span v-if="r.skill" class="badge amber">{{ r.skill }}</span> {{ r.content }}</div>
-            <div class="d" v-if="r.gains">收获：{{ r.gains }}</div>
-            <div class="d" v-if="r.problems">问题：{{ r.problems }}</div>
-          </div>
-          <button class="icon-btn" @click="delRecord(r)">✕</button>
-        </div>
-        <div v-if="!data.records.length" class="empty">暂无学习记录，学完记得记一笔</div>
-      </div>
-    </template>
+    <!-- v1.10.10（需求⑨）：原「学习计划 / 学习记录 / 复盘」三个 tab 的中段标记整块删除。
+         后端 /learning/plans、/learning/records、/reviews 三个端点与它们的表**都还在**，
+         数据一条没动，只是界面上不再有入口。 -->
 
     <!-- ============ 电脑监控（v1.3.5） ============ -->
     <MonitorPanel v-else-if="tab==='monitor'" />
@@ -205,8 +156,11 @@
     <!-- ============ 语音配音（自学习页移来，2026-09 v1.6.5） ============ -->
     <TtsPanel v-else-if="tab==='tts'" />
 
-    <!-- ============ 录音转写（VibeVoice-ASR） ============ -->
+    <!-- ============ 录音转写（VibeVoice-ASR，默认 tab） ============ -->
     <VibeVoiceTab v-else-if="tab==='vibe'" />
+
+    <!-- ============ 电子宠物（原独立侧栏页整页并入，v1.10.10 需求⑨） ============ -->
+    <PetsPanel v-else-if="tab==='pets'" embedded :sub="String(route.query.sub || '')" />
 
     <!-- ============ 推送任务（原「业务系统」页整页并入，v1.7.0） ============ -->
     <BusinessPanel v-else-if="tab==='business'" />
@@ -217,39 +171,20 @@
     <!-- ============ 全局搜索（原独立页并入，v1.7.0；?q= 带词自动执行） ============ -->
     <SearchPanel v-else-if="tab==='search'" />
 
-    <!-- ============ 复盘（自学习页移来） ============ -->
-    <template v-else>
-      <div class="row" style="margin-bottom:12px">
-        <button class="primary" @click="aiReview" :disabled="aiLoading">{{ aiLoading ? '生成中...' : 'AI 一键生成复盘草稿' }}</button>
-        <span class="muted">基于最近 20 条学习记录自动生成「进展 / 收获 / 问题 / 改进计划」</span>
-      </div>
-      <div v-if="aiLoading" class="card" style="margin-bottom:12px"><div class="muted">AI 正在分析你的学习记录...</div></div>
-      <div v-if="reviewDraft" class="card" style="margin-bottom:14px; background:var(--bg3); border-color:var(--accent)">
-        <div class="markdown-body" v-html="renderedDraft"></div>
-        <div class="row" style="margin-top:12px">
-          <input v-model="reviewPeriod" placeholder="复盘周期，如：2026 年第 33 周" class="grow" />
-          <button class="primary" @click="saveReview">保存复盘</button>
-        </div>
-      </div>
-      <div class="card">
-        <h3>历史复盘</h3>
-        <div v-for="rv in reviews" :key="rv.id" class="list-item">
-          <div class="grow">
-            <div class="t"><span class="badge blue">{{ rv.period || '未命名周期' }}</span> <span class="muted">{{ rv.created_at?.slice(0,16) }}</span></div>
-            <div class="d">{{ rv.content.slice(0, 200) }}...</div>
-          </div>
-          <button class="icon-btn" @click="delReview(rv)">✕</button>
-        </div>
-        <div v-if="!reviews.length" class="empty">还没有复盘记录</div>
-      </div>
-    </template>
+    <!-- ============ 兜底 ============ -->
+    <!-- v1.10.10 之前这里是「复盘」的 v-else 分支。复盘去掉后不能再拿它兜底（否则任意未匹配的
+         tab key 都会渲染出复盘表单），改成一句提示。tab 已在 script 里用 TAB_DEFS 校验过，
+         正常路径到不了这里；真到了（旧书签 /tools?tab=dep 之类）也只是这一句，不会白屏。 -->
+    <div v-else class="card muted" style="padding:24px; text-align:center">
+      这个 tab 已经不在「效率工具」里了（或没有对应权限）—— 请从上面的 tab 栏重新选一个。
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { marked } from 'marked';
+// marked 随「复盘」tab 一起去掉了（那是本页唯一用到 markdown 渲染的地方）
 import { api, prefixUrl } from '../api';
 import { canTab, firstTab, TAB_DEFS } from '../tabs';
 import MonitorPanel from '../components/MonitorPanel.vue';
@@ -259,21 +194,35 @@ import TtsPanel from '../learning/TtsPanel.vue';
 import BusinessPanel from './Business.vue';
 import FilesPanel from './Files.vue';
 import SearchPanel from './Search.vue';
+// 电子宠物（v1.10.10，需求⑨）：原独立页整页并入本页的一个 tab（embedded 少画一层页标题）
+import PetsPanel from './Pets.vue';
 
 const route = useRoute();
 const router = useRouter();
 
-const tab = ref(firstTab('tools', 'zhizu')); // 默认落点=智作平台（2026-09-23 用户要求；v1.5.10 曾为录音转写）
-// 支持 /tools?tab=xxx 直达；切 tab 时同步地址栏（学习页移来的 3 个 tab 旧链接 /learning?tab=plans 也自然回落到本页）
+// v1.10.10（需求⑨）：默认落点改回**录音转写**（用户要求「效率工具默认进入后显示录音转写」）。
+// 2026-09-23 曾按当时的要求改成智作平台，现在按新要求改回来；录音转写同时是 tab 栏第一个。
+const tab = ref(firstTab('tools', 'vibe'));
+// 支持 /tools?tab=xxx 直达；切 tab 时同步地址栏（旧的 /learning?tab=plans 之类会落在兜底提示上）
 // canTab 对管理员「未知 key」也放行（allowedTabs=null），必须再用 TAB_DEFS 校验 key 真实存在——
-// 否则旧收藏 /tools?tab=dep（已移入私有项目）会把 tab 置成不存在的键，无高亮且内容落进 v-else 复盘分支
+// 否则旧收藏 /tools?tab=dep（已移入私有项目）会把 tab 置成不存在的键，无高亮且内容落进兜底分支
 const isToolsTab = (t) => TAB_DEFS.tools.some((d) => d.key === t);
 function switchTab(t) {
   tab.value = t;
-  router.replace({ query: { ...route.query, tab: t } });
+  // sub 只对「电子宠物」有意义（那是它内部子 tab 的落点参数）；切走时一并清掉，
+  // 免得地址栏里留着一个已经无关的 sub，回头再点电子宠物又被拽回旧子 tab。
+  const q = { ...route.query, tab: t };
+  if (t !== 'pets') delete q.sub;
+  router.replace({ query: q });
 }
 watch(() => route.query.tab, (t) => {
-  if (t && t !== tab.value && isToolsTab(String(t)) && canTab('tools', String(t))) { tab.value = String(t); load(); }
+  if (t) {
+    if (t !== tab.value && isToolsTab(String(t)) && canTab('tools', String(t))) { tab.value = String(t); load(); }
+    return;
+  }
+  // 地址栏里没有 tab 了（最常见的是在 /tools?tab=pets 上点侧栏「效率工具」——
+  // 同文档内的 hash 跳转不会重挂组件，tab 会一直停在旧值）→ 回到默认落点。
+  tab.value = firstTab('tools', 'vibe');
 });
 if (route.query.tab && isToolsTab(String(route.query.tab)) && canTab('tools', String(route.query.tab))) tab.value = String(route.query.tab);
 
@@ -303,25 +252,17 @@ function dlClip(type) {
 const clipOnline = (d) => Date.now() - (Number(d.last_seen) || 0) < 15 * 60 * 1000; // 15 分钟内有上报=在线（与服务端一致）
 const fmtTs = (ms) => (Number(ms) > 0 ? new Date(Number(ms)).toLocaleString('sv').slice(0, 19) : '—');
 
-// ---------- 学习计划 / 学习记录 / 复盘（自学习页移来） ----------
-const data = ref({ plans: [], records: [] });
-const reviews = ref([]);
-const plan = ref({ skill: '', goal: '' });
-const rec = ref({ plan_id: null, content: '', gains: '', problems: '', record_date: new Date().toISOString().slice(0, 10) });
-const reviewDraft = ref('');
-const reviewPeriod = ref('');
-const aiLoading = ref(false);
-
-const renderedDraft = computed(() => marked.parse(reviewDraft.value || ''));
+// ---------- 学习计划 / 学习记录 / 复盘：v1.10.10（需求⑨）已整块移除 ----------
+// 三个 tab 的表单、列表与请求函数（/learning、/learning/plans、/learning/records、/reviews、
+// /ai/review）全部删掉，连带 data/reviews/plan/rec/reviewDraft/reviewPeriod/aiLoading 这几个 ref。
+// 后端端点与数据没动 —— 想恢复只要把中段标记和这几个函数加回来。
 
 async function load() {
   // 各数据源独立容错：无对应 tab 权限时接口 403，不能拖垮其他 tab
-  // （三大测评中心的数据加载在 TestCenterTab 组件内自行完成）
+  // （推送任务/文件存档/全局搜索的数据在各自组件内加载）
   try { await loadClips(); } catch { clips.value = []; clipTotal.value = 0; }
   try { if (canTab('tools', 'clip')) clipDevices.value = await api.get('/clipboard/devices'); } catch { clipDevices.value = []; }
   try { links.value = await api.get('/links'); } catch { links.value = []; }
-  try { data.value = await api.get('/learning'); } catch { data.value = { plans: [], records: [] }; }
-  try { if (canTab('tools', 'review')) reviews.value = await api.get('/reviews'); } catch { reviews.value = []; }
 }
 
 // 剪贴板：服务端分页拉取（筛选条件变化一律回到第 1 页）
@@ -367,45 +308,6 @@ async function delLink(l) { await api.del(`/links/${l.id}`); await load(); }
 function host(url) {
   try { return new URL(url).hostname.replace('www.', ''); } catch { return url; }
 }
-
-async function addPlan() {
-  if (!plan.value.skill.trim()) return;
-  await api.post('/learning/plans', plan.value);
-  plan.value = { skill: '', goal: '' };
-  await load();
-}
-async function finishPlan(p) { await api.patch(`/learning/plans/${p.id}`, { status: 'done' }); await load(); }
-async function delPlan(p) { await api.del(`/learning/plans/${p.id}`); await load(); }
-
-async function addRecord() {
-  if (!rec.value.content.trim()) return;
-  await api.post('/learning/records', rec.value);
-  rec.value = { plan_id: null, content: '', gains: '', problems: '', record_date: new Date().toISOString().slice(0, 10) };
-  await load();
-}
-async function delRecord(r) { await api.del(`/learning/records/${r.id}`); await load(); }
-
-async function aiReview() {
-  aiLoading.value = true;
-  reviewDraft.value = '';
-  try {
-    const r = await api.post('/ai/review');
-    reviewDraft.value = r.content;
-    reviewPeriod.value = '';
-  } catch (e) {
-    reviewDraft.value = '生成失败：' + e.message;
-  } finally {
-    aiLoading.value = false;
-  }
-}
-async function saveReview() {
-  await api.post('/reviews', { period: reviewPeriod.value || new Date().toISOString().slice(0, 10), content: reviewDraft.value });
-  reviewDraft.value = '';
-  reviewPeriod.value = '';
-  await load();
-  tab.value = 'review';
-}
-async function delReview(rv) { await api.del(`/reviews/${rv.id}`); await load(); }
 
 onMounted(load);
 </script>

@@ -1,6 +1,17 @@
 <template>
   <div class="gv">
-    <div class="gtop">
+    <!-- 紧凑态（右栏「图谱」页签）：只画「本篇 + 邻居」，工具栏换成一跳/两跳与适配 -->
+    <div v-if="compact" class="gtop">
+      <button class="small" :class="{ on: depth === 1 }" title="只画直接相连的笔记" @click="setDepth(1)">1 跳</button>
+      <button class="small" :class="{ on: depth === 2 }" title="再往外一层" @click="setDepth(2)">2 跳</button>
+      <button class="small" :disabled="!viewNodes.length" @click="fit">适配</button>
+      <button class="small" title="打开整页图谱（也能从左边栏的「图谱」进）" @click="$emit('open-full')">全屏</button>
+      <span class="muted small" style="margin-left:auto">
+        {{ viewNodes.length }} 点 / {{ viewEdges.length }} 边{{ truncated ? '（已截断）' : '' }}
+      </span>
+    </div>
+
+    <div v-else class="gtop">
       <input v-model="q" placeholder="只看标题/正文含…" style="width:170px" @keyup.enter="reload">
       <select v-model="folderId" style="width:150px" @change="reload">
         <option value="">全部文件夹</option>
@@ -28,6 +39,10 @@
       <div v-else-if="!viewNodes.length" class="center-hint">
         没有可画的节点。正文里写 <code>[[另一篇的标题]]</code> 就会连起来。
       </div>
+      <!-- 只有自己一个点（一条链接都没有）：点照画（空心=孤岛），但上面补一句怎么连起来更好 -->
+      <div v-else-if="compact && !viewEdges.length" class="lonely-hint">
+        这篇还没有链接：正文里写 <code>[[另一篇的标题]]</code> 就会连起来
+      </div>
       <div class="glegen">
         <span v-for="g in groups" :key="g" class="lg"><i :style="{ background: colorOf(g, groups) }" />{{ g }}</span>
         <span v-if="islandCount" class="lg"><i class="hollow" />孤岛（无链接）</span>
@@ -44,7 +59,7 @@
 // 都要自己接管渲染循环才顺；d3-force 只出坐标，画的方式由我们定。Canvas 撑得住几千点，SVG 不行。
 //
 // 布局跑完 300 tick 就 stop()，静止时不吃 CPU；只有拖拽/数据变化才重启。
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force';
 import { api } from '../../api';
 import { buildAdjacency, degreeStats, subgraph, colorOf as hueOf, collectGroups } from '../../utils/graphData';
@@ -52,8 +67,11 @@ import { buildAdjacency, degreeStats, subgraph, colorOf as hueOf, collectGroups 
 const props = defineProps({
   folders: { type: Array, default: () => [] },
   focusNoteId: { type: [Number, null], default: null },
+  // 紧凑态：右栏「图谱」页签用。取数换成 GET /notes/graph/local/:id（服务端只回「本篇 + N 跳邻居」），
+  // 工具栏收成「1 跳/2 跳/适配/全屏」，双击不再改聚焦（本来就是局部图）。
+  compact: { type: Boolean, default: false },
 });
-const emit = defineEmits(['open-note']);
+const emit = defineEmits(['open-note', 'open-full']);
 
 const colorOf = hueOf;
 const wrapEl = ref(null);
@@ -68,6 +86,7 @@ const viewNodes = ref([]);
 const viewEdges = ref([]);
 const islandOnly = ref(false);
 const focusId = ref(props.focusNoteId || null);
+const depth = ref(1);
 const hoverTip = ref(null);
 
 const groups = computed(() => collectGroups(baseNodes.value));
@@ -79,6 +98,20 @@ const islandCount = computed(() => stats.value.islands.size);
 async function reload() {
   loading.value = true;
   try {
+    if (props.compact) {
+      const id = Number(props.focusNoteId);
+      if (!id) { baseNodes.value = []; baseEdges.value = []; applyView(); return; }
+      const d = await api.get(`/notes/graph/local/${id}?depth=${depth.value}`);
+      baseNodes.value = d.nodes || [];
+      baseEdges.value = d.edges || [];
+      truncated.value = !!d.truncated;
+      // 把「本篇」标成选中：白色外圈 + 一定画标题，一眼能认出中心是哪篇
+      selId = Number(d.center) || id;
+      applyView();
+      await nextTick();
+      requestAnimationFrame(() => fit());   // 右栏是后来才铺开的，第一帧量出来的宽高可能是 0
+      return;
+    }
     const qs = [];
     if (q.value.trim()) qs.push('q=' + encodeURIComponent(q.value.trim()));
     if (folderId.value !== '') qs.push('folder_id=' + encodeURIComponent(folderId.value));
@@ -90,6 +123,7 @@ async function reload() {
   } catch (e) { baseNodes.value = []; baseEdges.value = []; alert('读取图谱失败：' + e.message); }
   finally { loading.value = false; }
 }
+function setDepth(n) { if (depth.value === n) return; depth.value = n; reload(); }
 
 function applyView() {
   let ns = baseNodes.value;
@@ -247,6 +281,7 @@ function evPos(e) { const r = cv.value.getBoundingClientRect(); return { x: e.cl
 function onDown(e) {
   const p = evPos(e);
   const n = pick(p.x, p.y);
+  userAdjusted = true;   // 从这里起用户接管视角，resize 不再自动适配
   cv.value.setPointerCapture?.(e.pointerId);
   if (n) {
     drag = { node: n, moved: false, sx: p.x, sy: p.y };
@@ -291,6 +326,7 @@ function onUp(e) {
 }
 
 function onDblClick(e) {
+  if (props.compact) return;   // 紧凑态本来就是局部图，双击再聚焦没有意义
   const p = evPos(e);
   const n = pick(p.x, p.y);
   if (n) { focusId.value = n.id; applyView(); }
@@ -298,6 +334,7 @@ function onDblClick(e) {
 
 function onWheel(e) {
   const p = evPos(e);
+  userAdjusted = true;
   const before = toWorld(p.x, p.y);
   const k = Math.max(0.1, Math.min(8, view.value.k * Math.exp(-e.deltaY * 0.0012)));
   const { w, h } = csize();
@@ -310,18 +347,30 @@ function onWheel(e) {
 
 // ---------- 生命周期 ----------
 let ro = null;
+let userAdjusted = false;   // 用户自己缩放过/平移过就不再去抢他的视角
 onMounted(async () => {
-  await reload();
   raf = requestAnimationFrame(loop);
-  ro = new ResizeObserver(() => { dirty = true; });
+  // 观察器必须**先挂上再取数**：紧凑态（右栏）第一次量出来的宽高是 0 —— 面板是切到「图谱」
+  // 那一刻才铺开的。如果先 await reload() 再 observe，那次 0→真实尺寸的变化已经过去了，
+  // 观察器一辈子等不到回调，fit() 用的还是 0 宽，图就缩在角上。
+  ro = new ResizeObserver(() => {
+    dirty = true;
+    if (props.compact && !userAdjusted && snodes.length) fit();
+  });
   if (wrapEl.value) ro.observe(wrapEl.value);
+  await reload();
 });
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf);
   if (ro) ro.disconnect();
   if (sim) sim.stop();
 });
-watch(() => props.focusNoteId, (v) => { focusId.value = v || null; if (baseNodes.value.length) applyView(); });
+watch(() => props.focusNoteId, (v) => {
+  // 紧凑态：换笔记 = 换一篇的局部图，得重新取数（不是在同一张全局图上换聚焦）
+  if (props.compact) { if (v) reload(); else { baseNodes.value = []; baseEdges.value = []; applyView(); } return; }
+  focusId.value = v || null;
+  if (baseNodes.value.length) applyView();
+});
 defineExpose({ reload, focusNote: (id) => { focusId.value = Number(id); applyView(); } });
 </script>
 
@@ -333,6 +382,7 @@ defineExpose({ reload, focusNote: (id) => { focusId.value = Number(id); applyVie
 .gwrap { position: relative; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg2); }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 .center-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 13px; pointer-events: none; text-align: center; padding: 0 20px; }
+.lonely-hint { position: absolute; left: 6px; right: 6px; top: 6px; color: var(--text3); font-size: 11.5px; text-align: center; pointer-events: none; line-height: 1.5; }
 .tip { position: absolute; background: rgba(20,22,28,.92); color: #fff; font-size: 12px; padding: 3px 8px; border-radius: 6px; pointer-events: none; white-space: nowrap; z-index: 2; }
 .glegen { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 10px; flex-wrap: wrap; max-width: calc(100% - 16px); font-size: 11px; color: var(--text2); background: rgba(0,0,0,.25); padding: 4px 8px; border-radius: 6px; }
 .lg { display: flex; align-items: center; gap: 4px; }

@@ -494,3 +494,43 @@ body.tv-mode .tv-exit-btn {
   background: rgba(0, 0, 0, .55); color: #fff; border: 1px solid #4da3ff;
   border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer;
 }
+
+/* ========== 代码配色（笔记编辑器 CodeMirror 6 用，v1.10.2） ==========
+   编辑器里存的是 var(--syn-x) 而不是色值，所以换主题时**不用重建编辑器**，颜色自己就跟着变。
+   --syn-mark 是 Markdown 的结构符号（#、-、>、``` 这些），故意压暗，让正文跳出来。 */
+:root {
+  --syn-mark: #6c7382;
+  --syn-h1: #7db4ff;
+  --syn-hn: #a8b9ff;
+  --syn-link: #4fc1ff;
+  --syn-code: #f2a17c;
+  --syn-quote: #8fa3b8;
+  --syn-keyword: #c678dd;
+  --syn-string: #98c379;
+  --syn-number: #d19a66;
+  --syn-comment: #7f848e;
+  --syn-func: #61afef;
+  --syn-type: #e5c07b;
+  --syn-prop: #e06c75;
+  --syn-op: #56b6c2;
+  --syn-punc: #9aa1b3;
+  --syn-sel: rgba(79, 124, 247, 0.30);
+}
+[data-theme='light'], [data-theme='purple'], [data-theme='pink'] {
+  --syn-mark: #a6aeba;
+  --syn-h1: #1a63c9;
+  --syn-hn: #3b4fa8;
+  --syn-link: #0b6bcb;
+  --syn-code: #b45309;
+  --syn-quote: #5b6b7f;
+  --syn-keyword: #a626a4;
+  --syn-string: #3f8f3f;
+  --syn-number: #986801;
+  --syn-comment: #9aa0a8;
+  --syn-func: #3b6fd4;
+  --syn-type: #a8730a;
+  --syn-prop: #c9402f;
+  --syn-op: #0184bc;
+  --syn-punc: #5a6472;
+  --syn-sel: rgba(45, 95, 217, 0.18);
+}

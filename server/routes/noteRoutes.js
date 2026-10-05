@@ -184,7 +184,7 @@ router.put('/notes/:id', (req, res, next) => {
   if (!cur) return res.status(404).json({ error: '笔记不存在' });
   const b = req.body || {};
   const content = b.content !== undefined ? String(b.content) : cur.content;
-  const title = (b.title !== undefined ? String(b.title).trim().slice(0, 60) : '') || extractTitle(content);
+  const title = (b.title !== undefined ? String(b.title).trim().slice(0, noteService.TITLE_MAX) : '') || extractTitle(content);
   // 归属：folder_id 优先，其次老调用方传来的 category 名，都没有则保持原样
   let fid = b.folder_id !== undefined ? (b.folder_id === null ? null : int(b.folder_id, null)) : cur.folder_id;
   if (b.folder_id === undefined && b.category !== undefined) {
@@ -628,7 +628,7 @@ router.post('/notes/from-template', (req, res) => {
   const now = new Date();
   const date = now.toLocaleString('sv').slice(0, 10);
   const time = now.toTimeString().slice(0, 5);
-  const title = String(b.title || '').trim() || String(t.name || '').slice(0, 60);
+  const title = String(b.title || '').trim().slice(0, noteService.TITLE_MAX) || String(t.name || '').slice(0, noteService.TITLE_MAX);
   const content = fillTemplate(b.content !== undefined ? b.content : t.content, { date, time, title });
   const id = createNote(tdb, {
     title, content,

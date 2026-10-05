@@ -65,7 +65,9 @@ function cleanupSessions() {
 
 // ---------- 页面权限 ----------
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
-const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'pets', 'smarthome', 'settings', 'life'];
+// v1.10.10（需求⑨）：'pets' 从页面清单里去掉 —— 电子宠物整页并入「效率工具」页的 tab，
+// 授权键变成 tools 页下的 'pets'。存量授权由 db.js 的 migratePetsIntoTools 一次性平移。
+const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'smarthome', 'settings', 'life'];
 // v1.9.22 曾把「Agent红绿灯」升格独立页；v1.9.23 放回智能家居页 cclight 子 tab（授权由 db.js 幂等迁移回平）
 // v1.8.0：「私有项目」页（mbti/dep/pro 三大测试中心）已整体移除，迁至独立项目 Private_Mini；
 // 历史 allowed_pages/allowed_tabs 里残留的 'private' 键无害（不再有页面/接口映射到它）
@@ -78,6 +80,9 @@ function pageForPath(p) {
   if (p.startsWith('/emails')) return 'email';
   if (p.startsWith('/contacts')) return 'email'; // 邮箱页「通讯录」tab（email_contacts 表）
   if (p.startsWith('/notes')) return 'notes';
+  // IM 连接器（v1.10.5）：记录落成笔记、界面入口也在笔记页 → 归 notes 页权限。
+  // ⚠️ 少这一行 = 静默变成「仅需登录」。免登的回跳 /im/callback 在 index.js EXEMPT 里，不走这里。
+  if (p.startsWith('/im')) return 'notes';
   // 人生管理系统（v1.10.0）：整套 /api/life/* 归独立侧栏页「人生」。
   // 与 /links（快捷启动，归 tools）不冲突：/li**f**e 与 /li**n**ks 在第 4 个字符就分开了。
   if (p.startsWith('/life')) return 'life';
@@ -113,7 +118,10 @@ function pageForPath(p) {
   // 曾挂在 files 页下——没开「文件存档」权限的成员，日历上节假日全部消失
   if (p.startsWith('/holidays') || p.startsWith('/calendar')) return null;
   if (p.startsWith('/pay')) return 'family'; // 个人账务并入「家庭管理」页（v1.7.0）
-  if (p.startsWith('/pets')) return 'pets'; // 电子宠物（悬浮窗的 state/action 不绑 tab，整页共享）
+  // 电子宠物（v1.10.10 需求⑨）：整页并入「效率工具」，/api/pets/* 归 tools 页 → tools.pets tab。
+  // ⚠️ 写成 'pets' 页（而不是 'tools'）会让这套接口**静默变成仅需登录**：PAGES 里已经没有 'pets' 了，
+  //    权限表也不再有任何东西能勾到它 —— 所以这一行必须跟着页面一起改。
+  if (p.startsWith('/pets')) return 'tools';
   if (p.startsWith('/typing')) return 'learning'; // 打字赚钱 4 个 tab 已并入学习页
   if (p.startsWith('/credit')) return 'learning'; // 赊账兑换（兑现登记/记录页共用列表）
   if (p.startsWith('/piano')) return 'learning'; // 练琴录音
@@ -192,10 +200,13 @@ const TAB_PATHS = {
     ['links', ['/links']],
     // monitor (v1.3.5)
     ['monitor', ['/monitor']],
-    // 学习计划/学习记录/复盘 3 个 tab 从学习页移来（2026-09 v1.2.0）
-    ['plans', ['/learning/plans']],
-    ['records', ['/learning/records']],
-    ['review', ['/reviews']],
+    // 电子宠物（v1.10.10 需求⑨）：整页从独立侧栏页并入本页的一个 tab。
+    // 前缀直接写 /pets（一网打尽列表/喂养/悬浮窗 state/action/领养 POST /pets/…/打卡/记录/设置/分配），
+    // 也就是原来 pets 页那六个 tab 键的路径全归到这一个键上 —— 页内那六个子 tab 现在只是 UI 分段。
+    ['pets', ['/pets']],
+    // 学习计划/学习记录/复盘 3 个 tab（2026-09 v1.2.0 从学习页移来）**v1.10.10 按用户要求去掉**：
+    // 界面上没有入口了，这里的 plans/records/review 三个键一并删掉；
+    // 端点（/learning/plans、/learning/records、/reviews）与数据都还在，只是回到「页级共享、不细分」。
     // 录音转写（VibeVoice-ASR）：录音/上传/列表/转写/导出/设置
     ['vibe', ['/vibe']],
     // 语音配音从「学习」页移来（2026-09 v1.6.5）：音色库管理与引擎安装（安装接口内部再限管理员）；
@@ -219,16 +230,7 @@ const TAB_PATHS = {
     // 飞牛应用 fpk 下载（v1.9.9）：设置页「飞牛应用」tab
     ['fnos', ['/fnos']],
   ],
-  pets: [
-    // 主查看 tab（宠物列表/喂养/悬浮窗）：整页共享端点不绑路径，空数组=仅作授权表勾选项
-    // （缺这条时 sanitizeTabs 会剥掉 'pets' 键 → 授权表勾了保存再打开还是空白）
-    ['pets', []],
-    ['adopt', ['=/pets']], // POST /pets 领养新宠物（「领养宠物」tab 专属）
-    ['checkin', ['/pets/checkins', '/pets/checkin']],
-    ['records', ['/pets/records']],
-    ['settings', ['/pets/config', '/pets/gif']],
-    ['assign', ['/pets/assign', '/pets/members']],
-  ],
+  // v1.10.10（需求⑨）：原来的 pets 页整块没了，端点全部并入下面的 tools 页（见 tools 里的 'pets' 一行）。
   // 智能家居（v1.6.8）：米家总览/控制整页共享；绑定与解绑归「设置」tab
   // v1.6.29：移除「监控」tab 与摄像头事件凭证通道（micam 路由已删，历史 allowed_tabs 里的 monitor 键无害）
   smarthome: [

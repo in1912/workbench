@@ -77,6 +77,65 @@ async function pollEmails() {
   });
 }
 
+// ---------- IM 连接器定时同步（v1.10.14，需求③） ----------
+// 每条连接器各设各的时点/频率/范围（im_connectors.auto_*），这里每分钟巡检一次现算「到点没到点」。
+//
+// 为什么每分钟扫一遍，而不是给每条连接器排一个 cron：用户随时会改时刻、改开关、删连接器。
+// 现算的好处是**没有需要维护的 job**，改配置立刻生效、删连接器不会留下幽灵任务；
+// 代价是每分钟多几十微秒的库查询，可以忽略。
+//
+// 跑起来时**一次跑到底**（不像前端那样每 45 秒交还给浏览器）：分轮本来是为了绕开
+// Cloudflare 对回源请求 ~100 秒的读超时，而这里是服务端自己跑，没有网关卡在中间，没必要分批。
+// 服务器停机错过的那一次，起来后由 autoSyncDue 判定为「已过点、还没跑」自动补跑一次
+//（最多补一次，不是补三天 —— 见 imService.autoSyncSlot 的注释）。
+async function runImAutoSync(d, conn, username) {
+  const imService = require('./services/imService');
+  const who = `${conn.label || conn.provider}#${conn.id}`;
+  if (!imService.lockSync(conn.id)) return;   // 手动点的同步正在跑 → 这一分钟让给它，下一分钟再来
+  const done = (result) => {
+    try {
+      // auto_last_at 用**北京时间**写（与 autoSyncSlot 同一口径，见 imService.cstStamp）：
+      // 这两串要互相比大小，如果一边服务器本地时间、一边北京时间，在 UTC 的容器里会算出
+      // 「刚跑完还判定没跑」→ 每分钟重跑一次。所以这里不能图省事用 datetime('now','localtime')。
+      d.prepare('UPDATE im_connectors SET auto_last_at=?,auto_last_result=? WHERE id=?')
+        .run(imService.cstStamp(Date.now()), String(result).slice(0, 300), Number(conn.id));
+    } catch (e) { console.warn('[scheduler] IM 定时同步结果写回失败:', e.message); }
+  };
+  try {
+    let last = null, round = '';
+    for (let i = 0; i < 200; i++) {   // 上限只是防死循环；正常几轮就完
+      last = await imService.syncConnector(d, conn.id, { sinceDays: Number(conn.auto_days) || 30, round });
+      round = last.round || round;
+      if (last.done) break;
+    }
+    const where = `${last.chats} 个会话，新增 ${last.messages} 条消息`
+      + `${last.notes ? `，新建 ${last.notes} 篇笔记` : ''}`
+      + `${last.errors && last.errors.length ? `，${last.errors.length} 个会话失败` : ''}`;
+    done(where);
+    console.log(`[scheduler] IM 定时同步(${username} / ${who})：${where}`);
+  } catch (e) {
+    const m = String(e.message || e).slice(0, 300);
+    done('失败：' + m);
+    console.warn(`[scheduler] IM 定时同步失败(${username} / ${who})：${m}`);
+  } finally {
+    imService.unlockSync(conn.id);
+  }
+}
+
+function pollImSync() {
+  const imService = require('./services/imService');
+  forEachTenant((d, uid, username) => {
+    let rows = [];
+    try { rows = d.prepare('SELECT * FROM im_connectors WHERE auto_sync=1').all(); } catch { return; }  // 老库还没加列时静默跳过
+    for (const conn of rows) {
+      if (!imService.autoSyncDue(conn)) continue;
+      // 故意不 await：一条连接器可能跑好几分钟，不能把后面的租户堵住。
+      // runImAutoSync 自己把异常吞干净，不会变成 unhandledRejection。
+      runImAutoSync(d, conn, username);
+    }
+  });
+}
+
 // 通勤定时刷新时刻：所有租户 refresh_times 的并集（到点后逐租户强刷各自路线）
 let commuteJobs = [];
 function refreshAllCommutes() {
@@ -232,6 +291,10 @@ function init() {
     } catch (e) { /* 忽略 */ }
   }, { timezone: 'Asia/Shanghai' });
 
+  // IM 连接器定时同步：每分钟巡检，每条连接器按自己设的时点/频率到点就跑（v1.10.14）
+  const imSyncJob = cron.schedule('* * * * *', pollImSync, { timezone: 'Asia/Shanghai' });
+  console.log('[scheduler] 已注册 IM 连接器定时同步巡检：每分钟（各连接器按自配时点）');
+
   // 日程钉钉提醒：每分钟巡检各租户日程，开始前 15 分钟推送（工作通知优先，共享日程同步共享成员）
   const eventRemind = cron.schedule('* * * * *', () => {
     require('./services/eventRemindService').checkAll().catch((e) => console.warn('[scheduler] 日程提醒巡检失败:', e.message));
@@ -259,7 +322,7 @@ function init() {
     } catch (e) { console.warn('[scheduler] SSL 到期检查失败:', e.message); }
   }, { timezone: 'Asia/Shanghai' });
 
-  tasks = [newsJob, boardJob, todoJob, cleanJob, ...commuteJobs, emailJob, feishuPoll, eventRemind, sslRemind];
+  tasks = [newsJob, boardJob, todoJob, cleanJob, ...commuteJobs, emailJob, feishuPoll, imSyncJob, eventRemind, sslRemind];
   skillService.registerAllTenantSkillJobs();
 
   // TTS 引擎开机预热：升级/服务重启会连同 Python sidecar 一起带走（引擎原本是惰性拉起，
@@ -275,7 +338,7 @@ function init() {
         .catch((e) => console.warn('[scheduler] TTS 引擎开机预热失败（可在语音配音页手动启动）:', e.message));
     } catch (e) { console.warn('[scheduler] TTS 引擎预热跳过:', e.message); }
   }, 15 * 1000).unref();
-  console.log('[scheduler] 定时任务已启动：每日 06:00 默认待办 / 08:00 新闻 / 09:00 百度榜单存档 / 09:23 SSL证书到期检查 / 每周日 21:00 清理 / 通勤按租户并集时刻 / Skill 任务 / 飞书群触发词轮询(30s) / 日程提醒巡检(每分钟)');
+  console.log('[scheduler] 定时任务已启动：每日 06:00 默认待办 / 08:00 新闻 / 09:00 百度榜单存档 / 09:23 SSL证书到期检查 / 每周日 21:00 清理 / 通勤按租户并集时刻 / Skill 任务 / 飞书群触发词轮询(30s) / 日程提醒巡检(每分钟) / IM 连接器定时同步巡检(每分钟，各连接器按自配时点)');
 }
 
 module.exports = { init, tasks, syncDefaultTodos, ensureDailyNotes, rescheduleCommute };

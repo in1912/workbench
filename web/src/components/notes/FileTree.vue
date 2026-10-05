@@ -46,8 +46,7 @@
 
 <script setup>
 // 文件夹 + 笔记递归树（v1.9.41）。
-// 笔记按文件夹**懒加载**：个人库里可能上千条，一次全塞进左栏既慢又没意义，
-// 展开哪个文件夹才去要哪个文件夹的笔记（含子文件夹，与后端 ?folder_id= 的语义一致）。
+// 笔记按文件夹**懒加载**：个人库里可能上千条，一次全塞进左栏既慢又没意义，展开哪个文件夹才去要。
 import { ref } from 'vue';
 
 defineOptions({ name: 'FileTree' });
@@ -63,7 +62,12 @@ const emit = defineEmits(['toggle', 'menu', 'open-note', 'new-note', 'move-note'
 
 const dragOver = ref(null);
 const isOpen = (id) => !!props.open[id];
-const notesOf = (id) => props.notes[id] || [];
+// **只显示本层的笔记**。要来的列表是 `GET /notes?folder_id=<id>`，而这个接口默认**连子文件夹一起筛**
+// （图谱、数据库视图要"含后代"是对的），于是展开父目录时，子目录里的笔记会被原样铺在下面、
+// 展开子目录再出现一遍 —— 同一篇笔记在树里出现两次，看着像两条，删父层那条就把子目录里那条删了。
+// 树里一篇笔记只该出现在它真正所属的那一级；这也和外框那个只算直属的 note_count 对得上。
+// 判空要宽容：folder_id 可能来自 JSON（数字或字符串）。
+const notesOf = (id) => (props.notes[id] || []).filter((n) => Number(n.folder_id) === Number(id));
 
 function dragStart(e, kind, id) {
   e.dataTransfer.effectAllowed = 'move';

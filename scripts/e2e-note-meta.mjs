@@ -228,6 +228,38 @@ try {
   if (autoId && autoId !== beforeId) created.push(autoId);
   await A.put('/notes/settings', { daily_note: { auto_create: false } });
 
+  // ---------- 标题长度上限（v1.10.13：60 → 120）----------
+  // 为什么要盯死这个数：IM 归档的标题规则是「对方姓名-日期时间-会话 ID」，而一个飞书 chat_id
+  // （oc_ + 32 位）就 35 个字符，加时间 16 和两个连字符已经 53 —— 姓名只要超过 7 个字就撞上原来的 60，
+  // 标题会被从 chat_id 中间截断（而那串 ID 正是这篇笔记的稳定身份）。所以这里钉住「不许再退回 60」。
+  {
+    const IM_TITLE = "泉哥's Feishu Assistant-2026-09-29 10:48-oc_d072b5362aac789b457fbf5d872b79bd";  // 74 字，实测会撞线的真实样例
+    let r = await A.post('/notes', { title: IM_TITLE, content: '标题长度上限用例' });
+    s.ck('74 字的 IM 式标题建得出来', r.status === 200 && r.body && r.body.id > 0, JSON.stringify(r.body).slice(0, 160));
+    const longId = r.body && r.body.id;
+    if (longId) {
+      created.push(longId);
+      r = await A.get(`/notes/${longId}`);
+      s.ck('★ 标题一个字符都没被截（chat_id 完整）', String(r.body && r.body.title) === IM_TITLE,
+          `长度 ${String(r.body && r.body.title || '').length}/74：${String(r.body && r.body.title || '').slice(-18)}`);
+      // 改标题这条路（PUT）以前也是 60，两个入口都得验
+      const T2 = IM_TITLE.replace('泉哥', '泉哥2');
+      r = await A.put(`/notes/${longId}`, { title: T2 });
+      s.ck('★ PUT 改标题也不截断', String(r.body && r.body.title) === T2, String(r.body && r.body.title || '').slice(-18));
+    }
+    // 上限仍然是**有**的（120），只是够宽容
+    r = await A.post('/notes', { title: '长'.repeat(200), content: '超长标题' });
+    const capped = r.body && r.body.id;
+    if (capped) {
+      created.push(capped);
+      r = await A.get(`/notes/${capped}`);
+      s.ck('超过 120 的标题仍然被削到 120（不是无上限）', String(r.body && r.body.title || '').length === 120,
+          `实长 ${String(r.body && r.body.title || '').length}`);
+    } else {
+      s.ck('超过 120 的标题仍然被削到 120（不是无上限）', false, JSON.stringify(r).slice(0, 120));
+    }
+  }
+
   // ---------- 清理 ----------
   for (const id of created) await del(`/notes/${id}`);
   await del(`/notes/properties/${propId}`);

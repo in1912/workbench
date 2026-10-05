@@ -1,5 +1,10 @@
 <template>
-  <div class="sidebar">
+  <!-- v1.10.9：这个根类原来是 "sidebar"，跟 App.vue 里那套**全局侧栏**的样式撞了名。
+       style.css:117 的 .sidebar 写着 width:190px / position:sticky / height:100vh / border-right，
+       于是笔记页左栏的内容被**死死钉在 190px 宽的一个小框里** —— 拖分隔条时外层 .ns-left
+       确实在变宽（300→560），里面这一层却一动不动，看起来就是「拉宽了没反应，还是个小框」。
+       scoped 样式压不过那条全局规则里独有的属性（width / position / height），改名是唯一的干净解法。 -->
+  <div class="ns-side">
     <div class="row" style="gap:4px; margin-bottom:8px">
       <button class="primary small" @click="$emit('new-note')">＋ 新建</button>
       <button class="small" title="打开今天的日记（Ctrl/⌘+P）" @click="$emit('daily')">今日笔记</button>
@@ -140,7 +145,14 @@ const VIEWS = [
 </script>
 
 <style scoped>
-.sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* 撑满外层 .ns-left（那个宽度才是拖拽控制的），所以这里**不写 width**，只写布局与高度。
+   v1.10.9 起类名从 .sidebar 改成 .ns-side：原来的名字会命中全局侧栏的 width:190px，
+   拖宽左栏时内容不跟着变宽。 */
+.ns-side { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; min-height: 0; }
+/* 顶部那排「＋ 新建 / 今日笔记 / 🔍 / ⌘」：左栏默认 300px 时**恰好放得下**（≈240px 内容宽），
+   不加 nowrap 的话四个按钮会被 flex 均分压扁 —— 「＋ 新建」被拆成三行竖排、「今日笔记」也变竖的。
+   v1.10.5 真机点检时截图里看到的（默认宽度从 260 加宽到 300 之后本该更好看，结果一样难看）。 */
+.ns-side > .row:first-child > button { flex: 0 0 auto; white-space: nowrap; }
 .sectabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 8px; }
 .sectabs button { font-size: 11.5px; padding: 2px 7px; border-radius: 5px; border: 1px solid transparent; background: transparent; color: var(--text2); cursor: pointer; }
 .sectabs button:hover { background: var(--bg3); color: var(--text); }
