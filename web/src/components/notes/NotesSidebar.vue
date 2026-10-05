@@ -22,7 +22,7 @@
       <template v-if="section === 'files'">
         <div class="row" style="margin-bottom:6px">
           <button class="small" @click="$emit('new-folder', null)">＋ 顶层文件夹</button>
-          <button class="small" :disabled="!expandedAll" @click="$emit('collapse-all')">收起全部</button>
+          <button class="small" @click="$emit('toggle-folders')">{{ anyOpen ? '收起全部' : '展开全部' }}</button>
         </div>
         <FileTree :nodes="tree" :open="openFolders" :notes="notesByFolder" :loading="loadingNotes"
                   :active-note-id="activeNoteId"
@@ -108,7 +108,7 @@ defineProps({
   openFolders: { type: Object, default: () => ({}) },
   notesByFolder: { type: Object, default: () => ({}) },
   loadingNotes: { type: Boolean, default: false },
-  expandedAll: { type: Boolean, default: false },
+  anyOpen: { type: Boolean, default: false },
   list: { type: Array, default: () => [] },
   searchQ: { type: String, default: '' },
   searchMode: { type: String, default: 'keyword' },
@@ -123,7 +123,7 @@ defineProps({
 });
 defineEmits(['update:section', 'update:searchQ', 'update:searchMode', 'search', 'clear-search',
   'new-note', 'daily', 'switcher', 'palette', 'open-note', 'toggle-folder', 'folder-menu',
-  'new-folder', 'collapse-all', 'move-note', 'move-folder', 'filter-tag',
+  'new-folder', 'toggle-folders', 'move-note', 'move-folder', 'filter-tag',
   'open-bookmark', 'del-bookmark', 'new-template', 'use-template', 'edit-template', 'del-template',
   'load-recs', 'open-rec', 'new-rec', 'open-view', 'manage-folders']);
 

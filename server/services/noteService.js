@@ -308,11 +308,68 @@ function decorateNote(tdb, row, fmap = null) {
   };
 }
 
+// ---------- 批量反链（v1.10.24）----------
+/** 互链小节的名字。所有由「批量反链」写入的 [[链接]] 都落在这个小节里，重跑只补缺、不重复。 */
+const BACKLINK_SECTION = '## 关联笔记';
+
+/**
+ * 给一组笔记**两两互加** `[[标题]]` 链接：每篇的正文末尾（或既有的「关联笔记」小节里）补上
+ * 指向其余各篇的链接。用户流程：按关键词搜出相关的一批文档 → 全选或挑几篇 → 一键互链。
+ *
+ *  · 幂等：某篇正文里已经有 `[[对方标题]]` 就不再加（包括用户自己手写的同名链接）；
+ *    没有新链接要补的笔记一个字节都不动（updated_at 不前进）。
+ *  · 落点：正文里已有 `## 关联笔记` 小节就补在小节头下面；没有就追加在正文末尾新建小节。
+ *  · 副作用与手动保存完全同口径：word_count 重算、手动标签沿用（syncNoteTags 不传显式数组）、
+ *    note_links 重建、updated_at 前进 —— 它就是一次真实的正文编辑。
+ */
+function backlinkMutual(tdb, ids) {
+  const uniq = [...new Set((Array.isArray(ids) ? ids : []).map(Number)
+    .filter((x) => Number.isInteger(x) && x > 0))];
+  if (uniq.length < 2) { const e = new Error('至少要选两篇笔记才能互链'); e.code = 400; throw e; }
+  const rows = uniq.map((id) => tdb.prepare('SELECT id,title,content FROM notes WHERE id=?').get(id));
+  const miss = rows.findIndex((r) => !r);
+  if (miss >= 0) { const e = new Error(`笔记 ${uniq[miss]} 不存在`); e.code = 404; throw e; }
+  // 同名标题互链没有意义（[[标题]] 只会解析到其中一篇），先挑明
+  const titles = rows.map((r) => String(r.title || '').trim());
+  if (new Set(titles).size !== titles.length) { const e = new Error('所选笔记里有重名标题，[[链接]] 无法区分，请先改名'); e.code = 400; throw e; }
+
+  const upd = tdb.prepare("UPDATE notes SET content=?, word_count=?, updated_at=datetime('now','localtime') WHERE id=?");
+  const details = [];
+  let linksAdded = 0;
+  for (const a of rows) {
+    const content = String(a.content || '');
+    const missing = rows
+      .filter((o) => o.id !== a.id)
+      .map((o) => String(o.title || '').trim())
+      .filter((t) => t && !content.includes(`[[${t}]]`));
+    if (!missing.length) continue;
+    const lines = missing.map((t) => `- [[${t}]]`);
+    let next;
+    const at = content.split('\n').findIndex((l) => l.trim() === BACKLINK_SECTION);
+    if (at >= 0) {
+      // 已有小节：插到小节头下面（跟既有条目并存；缺哪些补哪些，重复跑不会越滚越长）
+      const ls = content.split('\n');
+      ls.splice(at + 1, 0, ...lines);
+      next = ls.join('\n');
+    } else {
+      const head = content && !content.endsWith('\n') ? content + '\n' : content;
+      next = `${head}\n${BACKLINK_SECTION}\n${lines.join('\n')}\n`;
+    }
+    upd.run(next, extractWordCount(next), a.id);
+    syncNoteTags(tdb, a.id, next);   // 不传显式数组 → 沿用库里已有的手动标签
+    syncNoteLinks(tdb, a.id, next);
+    linksAdded += missing.length;
+    details.push({ id: a.id, title: a.title, added: missing.length, links: missing });
+  }
+  return { notes_total: rows.length, updated: details.length, links_added: linksAdded, details };
+}
+
 module.exports = {
   extractTitle, extractTags, extractInlineTags, extractWordCount,
   syncNoteTags, syncNoteLinks, resolveTitle, resolveUnresolvedFor,
   folderMap, folderSubtreeIds,
   createNote, deleteNote, decorateNote,
   fillTemplate, ensureDailyNote,
+  backlinkMutual, BACKLINK_SECTION,
   WIKI_RE, INLINE_TAG_RE, TITLE_MAX,
 };

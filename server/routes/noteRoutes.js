@@ -714,6 +714,17 @@ router.post('/notes/query', (req, res) => {
   res.json({ rows: withFolderPath(rows, folderMap(tdb)), count: rows.length, limit: q.limit, offset: q.offset });
 });
 
+// 【批量反链】（v1.10.24）：给一组笔记两两互加 [[标题]] 链接，落在每篇的「## 关联笔记」小节。
+// 幂等（已链过不重复加）、没有新链接的笔记不动；副作用与手动保存同口径（词数/标签/双链重算）。
+router.post('/notes/backlink-mutual', (req, res) => {
+  const ids = Array.isArray((req.body || {}).ids) ? req.body.ids : [];
+  try {
+    res.json(noteService.backlinkMutual(req.tdb, ids));
+  } catch (e) {
+    res.status(e.code === 400 || e.code === 404 ? e.code : 500).json({ error: e.message || '批量反链失败' });
+  }
+});
+
 // ============================================================
 // 五、图谱 / 统计 / 时间线 / 日历 / 每日笔记 / 设置
 // ============================================================

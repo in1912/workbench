@@ -14,6 +14,8 @@
         <!-- IM连接（v1.10.5，需求③）：以本人身份授权，把 IM 聊天记录归档成笔记。
              放在【新建】【切换】【面板】之后，右侧那个 ⇥ 是布局开关，留在最右边。 -->
         <button class="small" title="IM连接：授权飞书等 IM，把聊天记录归档成笔记" @click="imOpen = true">🔗 IM连接</button>
+        <!-- 批量反链（v1.10.24）：搜一批相关笔记，两两互加 [[双链]]，给知识网络连边 -->
+        <button class="small" title="批量反链：按关键词搜一批笔记，互相添加 [[双链]]" @click="blOpen = true">🕸 批量反链</button>
         <button class="small" :title="rightOpen ? '收起右栏' : '展开右栏'" @click="toggleRight()">{{ rightOpen ? '⇥' : '⇤' }}</button>
       </div>
     </div>
@@ -27,7 +29,7 @@
       <aside v-if="!narrow || leftOpen" class="ns-pane ns-left" :style="{ width: narrow ? '78vw' : leftW + 'px' }">
         <NotesSidebar
           :section="section" :tree="folderTree" :open-folders="openFolders" :notes-by-folder="notesByFolder"
-          :loading-notes="loadingNotes" :expanded-all="expandedAll" :list="list" :search-q="searchQ"
+          :loading-notes="loadingNotes" :any-open="anyFolderOpen" :list="list" :search-q="searchQ"
           :search-mode="searchMode" :search-active="searchRan" :tags="tags" :bookmarks="bookmarks"
           :templates="templates" :recs="recs" :active-note-id="activeNoteId" :label-of="labelOf"
           :stats="stats"
@@ -37,7 +39,7 @@
           @search="runSearch" @clear-search="clearSearch"
           @new-note="newNote()" @daily="openDaily()" @switcher="openSwitcher()" @palette="openPalette()"
           @open-note="openNoteTab" @toggle-folder="toggleFolder" @folder-menu="() => (folderModal = true)"
-          @new-folder="newFolder" @collapse-all="collapseAll"
+          @new-folder="newFolder" @toggle-folders="toggleFolders"
           @move-note="moveNote" @move-folder="moveFolder"
           @filter-tag="filterByTag" @open-bookmark="openBookmark" @del-bookmark="delBookmark"
           @new-template="editTemplate(null)" @use-template="useTemplate" @edit-template="editTemplate"
@@ -144,6 +146,8 @@
     <!-- IM连接（v1.10.5）：同步出来的笔记直接在这里打开页签，不用去文件树里找 -->
     <ImConnectModal v-if="imOpen" @close="imOpen = false"
                     @open-note="(id) => { imOpen = false; openNoteTab(id); }" />
+    <!-- 批量反链（v1.10.24）：互链改动的是别的笔记的正文，打开着的页签要跟着刷新 -->
+    <BatchBacklinkModal v-if="blOpen" @close="blOpen = false" @done="onBacklinked" />
 
     <!-- 属性定义管理 -->
     <div v-if="propsModal" class="modal-backdrop" @click.self="propsModal = false">
@@ -260,6 +264,7 @@ import Splitter from './Splitter.vue';
 import RecList from './RecList.vue';
 import CategoryManageModal from './CategoryManageModal.vue';
 import ImConnectModal from './ImConnectModal.vue';
+import BatchBacklinkModal from './BatchBacklinkModal.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -301,7 +306,14 @@ onBeforeUnmount(() => {
 const sections = ['files', 'search', 'tags', 'bookmarks', 'templates', 'recs'];
 const section = ref('files');
 const folderTree = ref([]);
-const openFolders = ref((() => { try { return JSON.parse(localStorage.getItem('notes.openFolders') || '{}'); } catch { return {}; } })());
+// 展开状态存档带版本号 v=2：无版本号的旧存档是「每次进页面强制展开全部顶层」时代的产物，
+// 不是用户的手动选择——升级后忽略一次，从「默认收起」重新开始（与 paneWidths 同一套办法）。
+const openFolders = ref((() => {
+  try {
+    const o = JSON.parse(localStorage.getItem('notes.openFolders') || '{}');
+    return Number(o && o.v) === 2 && o.open && typeof o.open === 'object' ? o.open : {};
+  } catch { return {}; }
+})());
 const notesByFolder = ref({});
 const loadingNotes = ref(false);
 const list = ref([]);
@@ -326,7 +338,7 @@ const flatFolders = computed(() => {
   walk(folderTree.value, 0);
   return out;
 });
-const expandedAll = computed(() => flatFolders.value.length > 0 && flatFolders.value.every((f) => openFolders.value[f.id]));
+const anyFolderOpen = computed(() => Object.values(openFolders.value).some(Boolean));   // 有任一文件夹开着 → 按钮显示「收起全部」
 const catLabel = (n) => (n === 'general' ? '未分类' : (n || ''));
 const labelOf = (n) => n.folder_path || catLabel(n.category) || '';
 
@@ -344,6 +356,7 @@ const manageOpen = ref(false);
 const folderModal = ref(false);
 const propsModal = ref(false);
 const imOpen = ref(false);   // IM连接（v1.10.5）
+const blOpen = ref(false);   // 批量反链（v1.10.24）
 const tplModal = ref(false);
 const tplForm = ref({ id: null, name: '', content: '' });
 const tplErr = ref('');
@@ -401,6 +414,27 @@ async function loadSide(key, id) {
   } catch { d.shareStats = { link_count: 0, view_total: 0 }; }
 }
 async function reloadShareStats() { if (activeTab.value?.noteId) loadSide(activeTab.value.key, activeTab.value.noteId); }
+
+// 批量反链（v1.10.24）改的是一批笔记的正文：打开着的页签就地刷新（不重置预览/编辑态），
+// 左栏列表/标签/统计跟上。**带未保存编辑的页签跳过**——别把用户正在写的东西冲掉。
+async function onBacklinked(r) {
+  const ids = new Set(((r && r.details) || []).map((d) => Number(d.id)).filter(Boolean));
+  if (!ids.size) return;
+  for (const t of tabs.value) {
+    if (t.kind !== 'note' || !ids.has(Number(t.noteId))) continue;
+    const d = getDoc(t.key);
+    if (!d || d.dirty) continue;
+    try {
+      const full = await api.get(`/notes/${t.noteId}`);
+      d.note.content = full.content;
+      d.note.word_count = full.word_count;
+      d.note.updated_at = full.updated_at;
+      d.base = { title: full.title || '', content: full.content || '', props: JSON.stringify(full.props || {}) };
+      loadSide(t.key, t.noteId);
+    } catch { /* 单篇刷新失败不挡其余 */ }
+  }
+  reloadOpenFolders(); loadTags(); loadStats();
+}
 
 // ---------- 保存 ----------
 let autoTimer = null;
@@ -509,7 +543,7 @@ async function reloadFolders(silent) {
   catch (e) { if (!silent) alert('读取文件夹失败：' + e.message); }
   if (silent) reloadOpenFolders();
 }
-function persistOpen() { try { localStorage.setItem('notes.openFolders', JSON.stringify(openFolders.value)); } catch { /* 忽略 */ } }
+function persistOpen() { try { localStorage.setItem('notes.openFolders', JSON.stringify({ v: 2, open: openFolders.value })); } catch { /* 忽略 */ } }
 async function toggleFolder(f) {
   openFolders.value[f.id] = !openFolders.value[f.id];
   persistOpen();
@@ -524,7 +558,17 @@ async function loadFolderNotes(fid) {
 function reloadOpenFolders() {
   for (const [id, on] of Object.entries(openFolders.value)) if (on) loadFolderNotes(Number(id));
 }
-function collapseAll() { openFolders.value = {}; persistOpen(); }
+// 收起/展开全部（v1.10.24）：按钮文案随状态切换。展开 = 全部顶层（子级保持各自存档的展开状态）。
+// 旧版「收起全部」常量 disabled：它要求**所有层级**（含每个子文件夹）都展开才可点，
+// 而自动展开只铺顶层——按钮于是从来没生效过。
+function toggleFolders() {
+  if (anyFolderOpen.value) {
+    openFolders.value = {};
+  } else {
+    for (const f of folderTree.value) { openFolders.value[f.id] = true; loadFolderNotes(f.id); }
+  }
+  persistOpen();
+}
 async function newFolder(parentId) {
   const name = prompt('新文件夹名称' + (parentId ? '（将建在选中的文件夹里）' : ''));
   if (!name || !name.trim()) return;
@@ -735,10 +779,16 @@ onMounted(async () => {
   await Promise.all([reloadFolders(true), loadTitles(), loadTags(), loadBookmarks(), loadTemplates(), loadProps(), loadStats(), loadRecs()]);
   external.value = await loadExternalBase();
   try { list.value = await api.get('/notes?lean=1&limit=200'); } catch { list.value = []; }
-  // 默认展开全部顶层文件夹（第一屏就能看到内容，而不是一列收起的空壳）
-  for (const f of folderTree.value) { openFolders.value[f.id] = true; }
+  // v1.10.24：默认**收起**，只把「最近编辑的那篇」所在的文件夹链路（含所有上级）展开 ——
+  // 刚写的东西在树上找得到，其余目录不再每次进页面全部铺开（老版是强制展开全部顶层，
+  // 用户收起过的状态也会被盖掉，「收起全部」按完下次进来又全开）。
+  const byId = new Map(flatFolders.value.map((f) => [f.id, f]));
+  const last = (list.value || [])[0];
+  for (let f = last && last.folder_id != null ? byId.get(Number(last.folder_id)) : null, guard = 0;
+       f && guard++ < 64; f = f.parent_id == null ? null : byId.get(Number(f.parent_id))) {
+    if (!openFolders.value[f.id]) { openFolders.value[f.id] = true; loadFolderNotes(f.id); }
+  }
   persistOpen();
-  for (const f of folderTree.value) loadFolderNotes(f.id);
   await handleQuery();
   if (!activeTab.value) {
     // 打开最近修改的那一篇：list 是 /notes 的返回，服务端已按 updated_at DESC 排序，取第一条即可。

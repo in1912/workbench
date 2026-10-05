@@ -169,7 +169,7 @@ async function dwsSelfIdentity(connectorId) {
   const res = await runDws(connectorId, ['contact', 'user', 'get-self', '--format', 'json'], { timeoutMs: 30000 });
   try {
     const j = unwrapEnvelope(res);
-    const d = j.data || {};
+    const d = j.data || j;   // 裸 ledger 顶层直出，别再读 j.data（会话列表那次就是这么读空的）
     const inner = d.result || d.user || d;
     return {
       open_dingtalk_id: String(inner.openDingTalkId || inner.openDingtalkId || inner.unionId || ''),
@@ -289,23 +289,35 @@ async function dwsLogout(connectorId) {
  * 列当前账号的全部会话（单聊 + 群聊）。对齐飞书 listAllChats 的返回形状：
  * { items: [{ chat_id, name, chat_mode: 'p2p'|'group' }], p2pNote }。
  * conversationType 下层给 'direct'/'group'，这里归一成飞书口径。
+ *
+ * 真实 CLI 契约（2026-10-06 用随包 win 版 --help/--mock 实测钉死，别再凭感觉改）：
+ *  · 枚举命令是 +chat-list，**默认只回群聊**，必须 --types group,p2p 才含单聊。
+ *  · 业务输出是**裸 ledger 顶层直出**（{ chats:[...], complete, ... }），没有 {ok,outcome,data} 信封——
+ *    之前按信封读 j.data 永远是空对象，生产上 CLI 明明返回了会话也被解析成「0 个会话」还静默成功
+ *    （2026-10-06 两条连接器同步全空就是这么来的；错误输出是裸 {error:{...}} 且 exit 0，靠 unwrapEnvelope 认）。
+ *  · 会话条目：openConversationId / conversationName（+chat-list 投影）或 name（recent-conversations 投影）。
  */
 async function dwsListChatsFor(connectorId, maxChats = 200) {
-  const res = await runDws(connectorId, ['chat', '+conversation-list', '--page-all', '--limit', '100', '--page-delay', '200', '--format', 'json'], { timeoutMs: 120000 });
+  const res = await runDws(connectorId, ['chat', '+chat-list', '--types', 'group,p2p', '--page-all', '--limit', '100', '--page-delay', '200', '--format', 'json'], { timeoutMs: 120000 });
   const j = unwrapEnvelope(res);
-  const d = j.data || {};
-  const convs = Array.isArray(d.conversations) ? d.conversations : [];
+  const d = j.data || j;
+  const convs = d.chats || d.conversations;
+  // 形状不对就大声失败：宁可让同步报错，也不要再出现「解析不出来 = 0 个会话 = 成功」的静默假象
+  if (!Array.isArray(convs)) {
+    throw new Error(`钉钉会话列表返回了无法识别的形状（顶层字段：${Object.keys(d).slice(0, 10).join('、') || '（空）'}）`);
+  }
   const items = convs
     .filter((c) => c && c.openConversationId)
     .slice(0, maxChats)
     .map((c) => ({
       chat_id: String(c.openConversationId),
-      name: String(c.conversationName || ''),
+      name: String(c.conversationName || c.name || c.chatName || ''),
       chat_mode: String(c.conversationType) === 'direct' ? 'p2p' : 'group',
     }));
-  const partialNote = (d.partial || (d.stopReason && !['source_complete', 'single_page', 'result_limit'].includes(String(d.stopReason))))
-    ? `会话列表未拉全（${d.stopReason}${d.hasMore ? '，还有下一页' : ''}），下次同步会接着登记`
-    : '';
+  // 「未拉全」的判据认 ledger 自己的完整性字段（partial / hasMore / complete），
+  // stopReason 的白名单在不同捷径间不通用（+chat-list 就有 legacy_short_page 这种「正常短页」）
+  const partial = d.partial === true || d.hasMore === true || d.complete === false;
+  const partialNote = partial ? `会话列表未拉全（${d.stopReason || '原因未知'}），下次同步会接着登记` : '';
   return { items, p2pNote: partialNote };
 }
 
@@ -319,15 +331,20 @@ async function dwsListChatsFor(connectorId, maxChats = 200) {
  * 「群聊或单聊均可」，代价是依赖「消息搜索」权限（个别组织没开通时单聊会同步失败并如实报错）。
  */
 async function dwsPullMessages(connectorId, chat, { startSec, endSec, maxMsgs = 2000, pageLimit = 60 }) {
-  const startIso = new Date(Number(startSec) * 1000).toISOString();
-  const endIso = new Date(Number(endSec) * 1000 - 1).toISOString();
+  // 时间参数统一整秒（recent-conversations 明说拒绝非零小数秒，其它子命令也别赌）；
+  // 范围语义都是 [start, end)，直接给边界整秒，不做「-1ms」这种小动作
+  const iso = (sec) => new Date(Number(sec) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const startIso = iso(startSec);
+  const endIso = iso(endSec);
   const isP2p = String(chat.chat_mode || '') === 'p2p';
+  // 群聊 --start 与 --direction 互斥（真实 CLI 校验：兼容模式的 direction 只配 --time），
+  // 范围模式只传 --start（end 缺省=当前时间），结果顺序 CLI 自排、这里 normalizeDwsMessages 反正会重排
   const args = isP2p
     ? ['chat', 'message', 'search-advanced', '--conversation-ids', String(chat.chat_id), '--start', startIso, '--end', endIso, '--page-all', '--page-delay', '200', '--format', 'json']
-    : ['chat', '+chat-messages', '--group', String(chat.chat_id), '--start', startIso, '--direction', 'newer', '--page-all', '--page-limit', String(pageLimit), '--max-items', String(maxMsgs), '--page-delay', '200', '--no-reactions', '--format', 'json'];
+    : ['chat', '+chat-messages', '--group', String(chat.chat_id), '--start', startIso, '--page-all', '--page-limit', String(pageLimit), '--max-items', String(maxMsgs), '--page-delay', '200', '--no-reactions', '--format', 'json'];
   const res = await runDws(connectorId, args, { timeoutMs: 300000 });
   const j = unwrapEnvelope(res);
-  return normalizeDwsMessages(j.data, maxMsgs);
+  return normalizeDwsMessages(j.data || j, maxMsgs);
 }
 
 /** CLI 的两种消息视图（列表投影 / 搜索视图）→ 飞书形状。容错取行：messages、

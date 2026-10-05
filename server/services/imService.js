@@ -1006,17 +1006,19 @@ function unlockSync(id) { syncLocks.delete(Number(id)); }
 
 // ---------- 同步 ----------
 /**
- * IM 归档笔记的标题 = **对方姓名-日期时间-会话 ID**。
- *  · 对方姓名：单聊是对方的显示名、群聊是群名（都来自会话列表的 name 字段）；列表没给名字时
+ * IM 归档笔记的标题 = **对方名称-日期时间-连接器备注名**（2026-10-06 用户定的新规则）。
+ *  · 对方名称：单聊是对方的显示名、群聊是群名（都来自会话列表的 name 字段）；列表没给名字时
  *    退回会话 ID —— 绝不能因为少一个字段就拼出 `-2026-10-05 11:53-` 这种半截标题。
  *  · 日期时间：该会话本轮**最后一条消息**的时间（一条都没有时取当前时间），精确到分钟。
- *  · 会话 ID：chat_id，同时是这篇笔记的稳定身份 —— 换连接器、改授权企业都不会变。
- *    （原来这一位放的是「授权企业识别码」；企业信息在笔记正文抬头里一行没少。）
+ *  · 备注名：连接器 label（「IM 连接」里用户自己起的名）；空则退回授权企业识别码，再空退回
+ *    会话 ID。会话的稳定身份（chat_id）仍在笔记正文抬头的「- 会话 ID：」一行里，一个不少。
+ *    （历史上第三段放过「授权企业识别码」「会话 ID」，这次按用户口径统一成备注名。）
  */
-function chatTitle(chat, lastMs) {
+function chatTitle(conn, chat, lastMs) {
   const id = String(chat.chat_id || '').trim();
   const who = String(chat.chat_name || '').trim() || id || '未知会话';
-  return `${who}-${fmtTime(lastMs) || fmtTime(nowMs())}-${id}`;
+  const tag = String((conn && conn.label) || '').trim() || String((conn && conn.tenant_key) || '').trim() || id || '未命名连接器';
+  return `${who}-${fmtTime(lastMs) || fmtTime(nowMs())}-${tag}`;
 }
 
 /**
@@ -1151,7 +1153,7 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
 
       const noteId = upsertImNote(tdb, {
         noteId: chat.note_id ? Number(chat.note_id) : null,
-        folderId, title: chatTitle(chat, lastMs), block, headerBlock: header,
+        folderId, title: chatTitle(conn, chat, lastMs), block, headerBlock: header,
         desc, tag,
       });
       if (chat.note_id == null) stat.notes++;

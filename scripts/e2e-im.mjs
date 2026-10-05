@@ -267,14 +267,21 @@ const dbm = require(path.join(ROOT, 'server', 'db.js'));
 const im = require(path.join(ROOT, 'server', 'services', 'imService.js'));
 const d = dbm.db;
 
-// ---- ① 标题规则 ----
+// ---- ① 标题规则（对方名称-日期时间-连接器备注名） ----
+// ⚠️ 这里的连接器声明别叫 conn —— 下面时点算法那段已经有 const conn = function (o)…，撞名直接 SyntaxError
+const connT = { label: '字留地', tenant_key: '企业识别码X' };
 const cases = [
   ['单聊取对方姓名', { chat_id: 'oc_abc123', chat_name: '张三', chat_mode: 'p2p' }, Date.parse('2026-10-05T11:53:07')],
   ['群聊取群名', { chat_id: 'oc_grp999', chat_name: '研发一组', chat_mode: 'group' }, Date.parse('2026-10-05T09:05:00')],
   ['没名字退回会话 ID', { chat_id: 'oc_noname', chat_name: '', chat_mode: 'p2p' }, Date.parse('2026-10-05T08:00:00')],
   ['时间戳非法时取当前时间', { chat_id: 'oc_badts', chat_name: '李四' }, NaN],
 ];
-console.log('__TITLE__' + JSON.stringify(cases.map(function (c) { return { name: c[0], title: im.chatTitle(c[1], c[2]) }; })));
+console.log('__TITLE__' + JSON.stringify(cases.map(function (c) { return { name: c[0], title: im.chatTitle(connT, c[1], c[2]) }; })));
+// 备注名缺失时的兜底链：企业识别码 → 会话 ID（别拼出空尾巴）
+console.log('__TITLE2__' + JSON.stringify([
+  im.chatTitle({ label: '', tenant_key: 'tk_777' }, { chat_id: 'oc_1', chat_name: '王五' }, Date.parse('2026-10-05T10:00:00')),
+  im.chatTitle({ label: '', tenant_key: '' }, { chat_id: 'oc_2', chat_name: '赵六' }, Date.parse('2026-10-05T10:00:00')),
+]));
 
 // ---- ② 分轮规则 ----
 const RND = '2026-10-05 12:00:00';
@@ -493,15 +500,18 @@ console.log('__TAGS__' + JSON.stringify({
     };
     const rows = pick('__TITLE__');
     const byName = Object.fromEntries(rows.map((x) => [x.name, x.title]));
-    s.ck('标题 = 对方姓名-日期时间-会话 ID（单聊）',
-      byName['单聊取对方姓名'] === '张三-2026-10-05 11:53-oc_abc123', JSON.stringify(byName));
+    s.ck('标题 = 对方姓名-日期时间-连接器备注名（单聊）',
+      byName['单聊取对方姓名'] === '张三-2026-10-05 11:53-字留地', JSON.stringify(byName));
     s.ck('群聊的「对方姓名」位取群名',
-      byName['群聊取群名'] === '研发一组-2026-10-05 09:05-oc_grp999', byName['群聊取群名']);
+      byName['群聊取群名'] === '研发一组-2026-10-05 09:05-字留地', byName['群聊取群名']);
     s.ck('会话没有名字时退回会话 ID（绝不拼出 `-时间-` 这种半截标题）',
-      byName['没名字退回会话 ID'] === 'oc_noname-2026-10-05 08:00-oc_noname', byName['没名字退回会话 ID']);
+      byName['没名字退回会话 ID'] === 'oc_noname-2026-10-05 08:00-字留地', byName['没名字退回会话 ID']);
     s.ck('时间戳非法时用当前时间兜底，标题依然成三段',
-      /^李四-\d{4}-\d{2}-\d{2} \d{2}:\d{2}-oc_badts$/.test(byName['时间戳非法时取当前时间'] || ''),
+      /^李四-\d{4}-\d{2}-\d{2} \d{2}:\d{2}-字留地$/.test(byName['时间戳非法时取当前时间'] || ''),
       byName['时间戳非法时取当前时间']);
+    const t2 = pick('__TITLE2__');
+    s.ck('备注名缺失时兜到企业识别码、再兜到会话 ID',
+      t2[0] === '王五-2026-10-05 10:00-tk_777' && t2[1] === '赵六-2026-10-05 10:00-oc_2', JSON.stringify(t2));
     s.ck('★ 标题里不再出现平台名（旧规则是「飞书-时间-企业识别码」）',
       rows.every((x) => !String(x.title).startsWith('飞书-')), JSON.stringify(rows));
 

@@ -7,11 +7,15 @@
 //   服务器本体没有 DWS_CONFIG_DIR，加载了也直接 return，零影响。
 //   Windows 上 spawn .cmd 会 EINVAL、.js 会 ENOENT —— 不引入真二进制时这是唯一可替换的路子。
 //
-// 认的输出口径全部从真 CLI（v1.0.63）源码钉来，别凭感觉改：
-//   · 业务命令 = 信封 {ok,outcome,data,meta}；auth 那组是自有一层 {success,authenticated,...}
+// 认的输出口径全部从真 CLI（v1.0.6x）实测钉来（2026-10-06 用随包 win 版 --help/--mock 校准），别凭感觉改：
+//   · 业务命令 = **裸 ledger 顶层直出**（会话列表 {chats:[...],complete,...}、群消息 {messages:[...]}、
+//     搜索 {conversationMessagesList:[...]}）—— 没有 {ok,outcome,data} 信封；服务器侧统一按 j.data||j 读。
+//     （v1.10.22~23 的替身自造了一层信封，把「读错层 → 0 个会话静默成功」这个真缺陷完美掩护过去了。）
+//   · 错误 = 裸 {error:{category,message,...}} 且 **exit 0** —— unwrapEnvelope 靠 j.error 认失败。
+//   · auth 那组是自有一层 {success,authenticated,...}
 //   · 设备流登录的人话输出在 **stderr**：验证链接 + 「授权码: XXXX-XXXX」（extractLoginBits 认这个）
-//   · 会话列表 data.conversations[{openConversationId,conversationName,conversationType:'group'|'direct'}]
-//   · 群消息 data.messages[...]（列表投影）；搜索 data.conversationMessagesList[].messages（按会话分组）
+//   · 会话枚举 = chat +chat-list --types group,p2p（默认只回群聊）；条目 {openConversationId,conversationName,conversationType:'group'|'direct'}
+//   · 群消息 +chat-messages（--start 不能配 --direction：真实 CLI 参数校验互斥）
 //   · 消息行 {messageId,messageType,text,createTime(ms),senderId|sender,quotedMessage,resourceRefs}
 if (!process.env.DWS_CONFIG_DIR) return;   // 服务器本体 / 其它 node 子进程：原样放行
 
@@ -38,8 +42,9 @@ const ANCHOR = path.join(cfg, 'anchor.json');
 const SELF_ID = 'D-e2e-self-0001';                // 与 get-self 返回的一致 → 服务器据此把发送者识别成「我」
 
 const out = (o) => { process.stdout.write(JSON.stringify(o) + '\n'); };
-const env = (data, meta) => out({ ok: true, outcome: 'success', data, meta: meta || {} });
-const fail = (type, message) => out({ ok: false, outcome: 'failure', error: { type, message } });
+// 真 CLI 没有 {ok,outcome,data} 信封：成功=裸 ledger 顶层直出，失败=裸 {error:{...}}（都 exit 0）
+const env = (data) => out(Object.assign({}, data));
+const fail = (category, message) => out({ error: { category, message, code: 3, origin: 'client' } });
 
 // 消息时间的锚点：第一次调用钉死，之后每次进程都读同一个值 —— 时间戳跨调用稳定，
 // 「第二轮同步只取新消息」才不会因为 now 相对漂移把老消息又算成新的。
@@ -118,18 +123,29 @@ if (args[0] === 'contact' && args[1] === 'user' && args[2] === 'get-self') {
 }
 
 // ---------- 会话列表 ----------
-if (args[0] === 'chat' && args[1] === '+conversation-list') {
+if (args[0] === 'chat' && args[1] === '+chat-list') {
+  // fail-list 标记：真实 CLI 对认不出的捷径/被拒的参数回 裸 {error:{...}} + exit 0 ——
+  // 服务器必须把它当失败抛出来，而不是「解析不出 = 0 个会话 = 同步成功」（2026-10-06 生产缺陷的回归钉）
+  if (fs.existsSync(path.join(cfg, 'fail-list'))) {
+    fail('validation', 'stub: 模拟未知捷径 / 参数被拒');
+    process.exit(0);
+  }
   // 故意慢一点：给「两发并发同步、后到那发吃 409」留出窗口。
   // 必须是**同步**等待（Atomics.wait）—— 不能 setTimeout：preload 一返回 node 就去加载
   // 主脚本（chat）并当场 MODULE_NOT_FOUND 退出，定时器永远等不到。
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1200);
+  // --types 不带 p2p 时只回群聊（真实 CLI 的默认行为；e2e 靠记账断言我们真的带了 --types group,p2p）
+  const types = flag('--types') || 'group';
+  const rows = [
+    { openConversationId: 'cidE2EGROUP0000000001', conversationName: '钉钉测试群', conversationType: 'group' },
+    ...(types.includes('p2p')
+      ? [{ openConversationId: 'cidE2EP2P00000000002', conversationName: '王五', conversationType: 'direct' }]
+      : []),
+  ];
   env({
-    count: 2, complete: true, hasMore: false, stopReason: 'source_complete', partial: false,
-    conversations: [
-      { openConversationId: 'cidE2EGROUP0000000001', conversationName: '钉钉测试群', conversationType: 'group' },
-      { openConversationId: 'cidE2EP2P00000000002', conversationName: '王五', conversationType: 'direct' },
-    ],
-  }, { count: 2, operation: 'conversation_list', pagination: { hasMore: false } });
+    chats: rows, count: rows.length, complete: true, hasMore: false,
+    stopReason: 'source_complete', partial: false, requestedTypes: types.split(','),
+  });
   process.exit(0);
 }
 
@@ -152,9 +168,14 @@ const p2pMsgs = (n) => [
 if (args[0] === 'chat' && args[1] === '+chat-messages') {
   const cid = flag('--group');
   if (!fs.existsSync(TOKEN)) { fail('auth', '未登录'); process.exit(0); }
+  // 真实 CLI 参数校验（2026-10-06 实测原文）：--direction 与 --start 互斥 —— 防「范围模式混兼容模式旗标」回归
+  if (args.includes('--direction') && (args.includes('--start') || args.includes('--start-time'))) {
+    fail('validation', '参数 --direction、--start、--start-time 互斥，只能指定其一');
+    process.exit(0);
+  }
   if (cid.startsWith('cidE2ECRASH')) { process.stdout.write('stub: 这不是 JSON\n'); process.exit(1); }   // 单会话失败隔离用
   const rows = groupMsgs(pullCount(cid));
-  env({ messages: rows, count: rows.length, complete: true }, { count: rows.length, operation: 'chat_messages' });
+  env({ messages: rows, count: rows.length, complete: true });
   process.exit(0);
 }
 if (args[0] === 'chat' && args[1] === 'message' && args[2] === 'search-advanced') {

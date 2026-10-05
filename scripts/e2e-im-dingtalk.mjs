@@ -102,10 +102,13 @@ try {
 
   // 拉取路由：群走 +chat-messages、单聊走 search-advanced —— 最容易悄悄退化的分叉，按调用记账钉死
   const calls1 = callsLog();
-  const listCall = calls1.find((c) => c.args.includes('+conversation-list'));
-  s.ck('会话列表用的 +conversation-list --page-all', !!listCall && listCall.args.includes('--page-all'), JSON.stringify(listCall && listCall.args));
+  const listCall = calls1.find((c) => c.args.includes('+chat-list'));
+  s.ck('会话列表用的 +chat-list，且 --types group,p2p（真实 CLI 默认只回群聊，漏了 p2p 单聊全丢）',
+    !!listCall && listCall.args.includes('--page-all') && listCall.args.includes('--types') && listCall.args[listCall.args.indexOf('--types') + 1] === 'group,p2p',
+    JSON.stringify(listCall && listCall.args));
   const gCall = calls1.find((c) => c.args.includes('+chat-messages') && c.args.includes('cidE2EGROUP0000000001'));
-  s.ck('群聊拉取走 chat +chat-messages --group <cid>', !!gCall && gCall.args.includes('--group'), JSON.stringify(gCall && gCall.args));
+  s.ck('群聊拉取走 chat +chat-messages --group <cid>，范围模式不带 --direction（真实 CLI 互斥校验）',
+    !!gCall && gCall.args.includes('--group') && gCall.args.includes('--start') && !gCall.args.includes('--direction'), JSON.stringify(gCall && gCall.args));
   const pCall = calls1.find((c) => c.args.includes('search-advanced') && c.args.includes('cidE2EP2P00000000002'));
   s.ck('单聊拉取走 chat message search-advanced --conversation-ids', !!pCall && pCall.args.includes('--conversation-ids'), JSON.stringify(pCall && pCall.args));
   s.ck('所有 CLI 调用都发生在本连接器自己的 DWS_CONFIG_DIR 里（多账号不互踩）',
@@ -148,13 +151,30 @@ try {
   r = await A.del(`/im/connectors/${idNo}`);
   s.ck('删掉失败路径的临时连接器', r.status === 200, JSON.stringify(r.body));
 
+  // ---------- ⑦c CLI 回错误信封（裸 {error} + exit 0）：必须当失败抛，不许「0 个会话 = 成功」 ----------
+  // 2026-10-06 生产缺陷的回归钉：真实 CLI 对认不出的捷径/被拒的参数回 裸 {error:{...}} 且 exit 0，
+  // 旧代码只认 j.data → 解析成空列表 → 同步「成功」且 0 会话（两条连接器全空就是这么来的）。
+  r = await A.post('/im/connectors', { provider: 'dingtalk', label: '信封错的公司' });
+  const idErr = r.body.id;
+  r = await A.post(`/im/connectors/${idErr}/dingtalk-login`, {});
+  await sleep(400);   // 替身当场写 device-flow 标记；随后的 auth status 轮询把它升成令牌
+  fs.writeFileSync(path.join(DATA, 'dws-config', String(idErr), 'fail-list'), '1');
+  r = await A.post(`/im/connectors/${idErr}/sync`, { since_days: 7 });
+  s.ck('CLI 错误信封 → 同步明确失败（不再静默成功 0 会话）',
+    r.status >= 400 && /模拟未知捷径/.test(r.body.error || ''), JSON.stringify(r.body).slice(0, 240));
+  r = await A.get('/im/connectors');
+  s.ck('错误信封的原因留在卡片 last_error 上', /模拟未知捷径/.test((((r.body || []).find((c) => c.id === idErr)) || {}).last_error || ''),
+    String((((r.body || []).find((c) => c.id === idErr)) || {}).last_error || '').slice(0, 200));
+  r = await A.del(`/im/connectors/${idErr}`);
+  s.ck('删掉错误信封路径的临时连接器', r.status === 200, JSON.stringify(r.body));
+
   // ---------- ⑧ 笔记本体：目录 / 标题 / 标签 / 抬头 / 排版 / 我-识别 / 消息类型 ----------
   const gn = await noteOf(gRow.note_id);
   const pn = await noteOf(pRow.note_id);
   s.ck('群笔记落在 IM连接/钉钉/<备注名>', gn.folder_path === 'IM连接/钉钉/公司钉钉', gn.folder_path);
   s.ck('单聊笔记也在同一个连接器目录', pn.folder_path === 'IM连接/钉钉/公司钉钉', pn.folder_path);
-  s.ck('标题规则：对方姓名-日期时间-会话 ID（群）', /^钉钉测试群-\d{4}-\d{2}-\d{2} \d{2}:\d{2}-cidE2EGROUP0000000001$/.test(gn.title || ''), gn.title);
-  s.ck('标题规则（单聊，姓名=会话列表里的对方名）', /^王五-\d{4}-\d{2}-\d{2} \d{2}:\d{2}-cidE2EP2P00000000002$/.test(pn.title || ''), pn.title);
+  s.ck('标题规则：对方姓名-日期时间-连接器备注名（群）', /^钉钉测试群-\d{4}-\d{2}-\d{2} \d{2}:\d{2}-公司钉钉$/.test(gn.title || ''), gn.title);
+  s.ck('标题规则（单聊，姓名=会话列表里的对方名）', /^王五-\d{4}-\d{2}-\d{2} \d{2}:\d{2}-公司钉钉$/.test(pn.title || ''), pn.title);
   s.ck('平台标签挂在 manual 档（不吃正文重算）', (gn.tags || []).includes('钉钉') && (pn.tags || []).includes('钉钉'), JSON.stringify([gn.tags, pn.tags]));
   s.ck('抬头：来源=钉钉（测试用户）、授权企业、会话 ID、标签行',
     gn.content.includes('- 来源：钉钉（测试用户）') && gn.content.includes('- 授权企业：测试企业')
