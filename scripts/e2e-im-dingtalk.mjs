@@ -109,6 +109,9 @@ try {
   s.ck('单聊拉取走 chat message search-advanced --conversation-ids', !!pCall && pCall.args.includes('--conversation-ids'), JSON.stringify(pCall && pCall.args));
   s.ck('所有 CLI 调用都发生在本连接器自己的 DWS_CONFIG_DIR 里（多账号不互踩）',
     calls1.length > 0 && calls1.every((c) => c.cfg === cfgDir(id)), JSON.stringify([...new Set(calls1.map((c) => c.cfg))]));
+  const caExpect = path.join(ROOT, 'server', 'dws', 'ca-bundle.crt');
+  s.ck('每次 CLI 调用都带上了随包根证书（SSL_CERT_FILE；容器缺系统 CA 会 x509 unknown authority）',
+    calls1.length > 0 && calls1.every((c) => c.ca === caExpect), JSON.stringify([...new Set(calls1.map((c) => c.ca))]));
 
   r = await A.get(`/im/connectors/${id}/chats`);
   const gRow = (r.body || []).find((c) => c.chat_id === 'cidE2EGROUP0000000001');

@@ -33,6 +33,19 @@ const BIN_NAME = process.platform === 'win32' ? 'dws.exe' : 'dws';
 const DATA_BIN = path.join(dataDir, 'dws', 'bin', BIN_NAME);
 const SHIPPED_BIN = path.join(PROJECT_DWS, `${PLAT_DIR}-${process.arch}`, BIN_NAME);
 
+// 生产容器（精简镜像）常见**没有系统 CA 根**：Go 的 crypto/x509 不像 Node 自带 Mozilla 根集合，
+// 系统池为空时连 mcp.dingtalk.com 都过不了 —— x509: certificate signed by unknown authority。
+// 升级包随带一份 Mozilla 根证书（server/dws/ca-bundle.crt，含钉钉链的 GlobalSign Root R46），
+// 通过 SSL_CERT_FILE 喂给 CLI（Go 在 Linux 认这个环境变量）；用户自己设了的不覆盖。
+const CA_BUNDLE = path.join(PROJECT_DWS, 'ca-bundle.crt');
+
+/** CLI 子进程的环境：每连接器独立配置目录 + （需要时）随包根证书 */
+function childEnv(connectorId) {
+  const env = { ...process.env, DWS_CONFIG_DIR: configDirFor(connectorId) };
+  if (!env.SSL_CERT_FILE && fs.existsSync(CA_BUNDLE)) env.SSL_CERT_FILE = CA_BUNDLE;
+  return env;
+}
+
 // 随包/手放的二进制在 linux 上常常没有可执行位（升级落盘与上传都是 0644），
 // 解析到就顺手补一次 0o755（只在非 Windows 做；chmod 失败不拦解析，spawn 失败自然报错）。
 const chmodDone = new Set();
@@ -72,7 +85,7 @@ const configDirFor = (connectorId) => path.join(dataDir, 'dws-config', String(Nu
  */
 function runDws(connectorId, args, { timeoutMs = 120000 } = {}) {
   const bin = dwsBinary();
-  const env = { ...process.env, DWS_CONFIG_DIR: configDirFor(connectorId) };
+  const env = childEnv(connectorId);
   return new Promise((resolve) => {
     let child;
     try {
@@ -175,7 +188,7 @@ function dwsStartLogin(connectorId) {
   const cur = logins.get(key);
   if (cur && cur.exitCode == null) return { started: false, already: true };
   const bin = dwsBinary();
-  const env = { ...process.env, DWS_CONFIG_DIR: configDirFor(connectorId) };
+  const env = childEnv(connectorId);
   fs.mkdirSync(path.dirname(configDirFor(connectorId)), { recursive: true });
   let child;
   try {

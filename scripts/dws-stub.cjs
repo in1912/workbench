@@ -25,10 +25,11 @@ const SUBCMDS = new Set(['auth', 'chat', 'contact']);
 const a1 = String(process.argv[1] || '');
 const args = SUBCMDS.has(path.basename(a1)) ? [path.basename(a1), ...process.argv.slice(2)] : process.argv.slice(2);
 
-// 每次调用记一笔账：e2e 拿它断言「群走 +chat-messages / 单聊走 search-advanced / 配置目录按连接器隔离」
+// 每次调用记一笔账：e2e 拿它断言「群走 +chat-messages / 单聊走 search-advanced / 配置目录按连接器隔离 /
+// 随包根证书真的喂给了 CLI（SSL_CERT_FILE，容器缺系统 CA 的修法）」
 try {
   fs.appendFileSync(path.join(dataDir, 'dws-stub-calls.jsonl'),
-    JSON.stringify({ cmd: args.join(' '), args, cfg }) + '\n');
+    JSON.stringify({ cmd: args.join(' '), args, cfg, ca: process.env.SSL_CERT_FILE || '' }) + '\n');
 } catch { /* 记账失败不能影响扮演 */ }
 
 const TOKEN = path.join(cfg, 'token.json');       // 「已登录」的标记（真 CLI 是加密令牌，这里只是个标记）
