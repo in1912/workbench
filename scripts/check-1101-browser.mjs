@@ -119,6 +119,33 @@ ck('点图里的格子能跳到对应页签', true);
 await page.screenshot({ path: path.join(ROOT, 'Logs/shots/v1101-guide-jump.png'), fullPage: true });
 console.log('  截图：Logs/shots/v1101-guide.png（流程图）、Logs/shots/v1101-guide-jump.png（点格子跳页后）');
 
+console.log('\n== ④ 新建 KR 的默认值：分子 0 / 分母 100（走真界面点「＋ 加一条」）==');
+const goal = await A('POST', '/api/life/goals', { title: 'E2E-默认值目标', level: 'year' });
+ck('建了一个目标', Number.isFinite(goal.id), JSON.stringify(goal));
+await page.goto(`${B}/#/life?tab=goals`, { waitUntil: 'domcontentloaded' });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.locator('.tree-row', { hasText: 'E2E-默认值目标' }).first().waitFor({ state: 'visible', timeout: 15000 });
+await page.locator('.tree-row', { hasText: 'E2E-默认值目标' }).first().click();
+await page.locator('button', { hasText: '加一条' }).first().waitFor({ state: 'visible', timeout: 8000 });
+await page.locator('button', { hasText: '加一条' }).first().click();
+await page.locator('.kr-row').first().waitFor({ state: 'visible', timeout: 10000 });
+
+const nums = await page.locator('.kr-row').first().locator('input[type=number]').evaluateAll((els) => els.map((e) => e.value));
+ck('两个数值框是 0（分子）/ 100（分母）', nums[0] === '0' && nums[1] === '100', JSON.stringify(nums));
+const krApi = await A('GET', `/api/life/goals/${goal.id}`);
+ck('库里也落成 target=100 / current=0', !!(krApi.krs && krApi.krs[0]) && Number(krApi.krs[0].target) === 100 && Number(krApi.krs[0].current) === 0, JSON.stringify(krApi.krs));
+const pct0 = (await page.locator('.kr-row').first().locator('.krpct').innerText()).trim();
+ck('进度是 0% 而不是「—」（分母 100 真的生效了）', pct0 === '0%', pct0);
+// 分子填 40 → 应当立刻是 40%，证明分母就是那个 100，而且改得动
+const curInput = page.locator('.kr-row').first().locator('input[type=number]').first();
+await curInput.fill('40');
+await curInput.blur();
+await page.waitForTimeout(1200);
+const pct40 = (await page.locator('.kr-row').first().locator('.krpct').innerText()).trim();
+ck('分子填 40 → 40%', pct40 === '40%', pct40);
+await page.screenshot({ path: path.join(ROOT, 'Logs/shots/v1101-kr-default.png'), fullPage: true });
+console.log('  截图：Logs/shots/v1101-kr-default.png');
+
 console.log('\n浏览器错误：' + (errs.length ? '\n  ' + errs.join('\n  ') : '无'));
 await browser.close();
 stop();

@@ -75,13 +75,16 @@
           <button class="small" @click="addKr">＋ 加一条</button>
         </h3>
         <div v-if="!current.krs.length" class="empty" style="padding:12px 0">
-          没有量化指标的目标无法衡量。<span class="muted">加一条「目标值 / 当前值」，进度就会自动算出来。</span>
+          没有量化指标的目标无法衡量。<span class="muted">加一条「当前值 / 目标值」，进度就会自动算出来；
+          新加的一条默认是 <b>0 / 100</b>（按百分比衡量），100 只是默认，随时改成你要的分母。</span>
         </div>
         <div v-for="k in current.krs" :key="k.id" class="kr-row">
           <input v-model="k.title" class="grow" @change="saveKr(k)" />
-          <input v-model.number="k.current" type="number" step="any" style="width:78px" @change="saveKr(k)" />
+          <input v-model.number="k.current" type="number" step="any" style="width:78px"
+                 title="分子：当前达成值（新加的一条默认 0）" @change="saveKr(k)" />
           <span class="muted">/</span>
-          <input v-model.number="k.target" type="number" step="any" style="width:78px" @change="saveKr(k)" />
+          <input v-model.number="k.target" type="number" step="any" style="width:78px"
+                 title="分母：目标值（新加的一条默认 100，不合适随时改）" @change="saveKr(k)" />
           <input v-model="k.unit" placeholder="单位" style="width:56px" @change="saveKr(k)" />
           <span class="krpct" :style="{ color: krColor(k) }">{{ krPct(k) }}</span>
           <button class="small danger" @click="removeKr(k)">删</button>
@@ -236,7 +239,8 @@ async function doCreate() {
 
 async function addKr() {
   try {
-    await api.post(`/life/goals/${current.value.id}/krs`, { title: '新 KR', target: 0, current: 0 });
+    // 只给标题：目标值/当前值的默认值（100 / 0）由服务端 createKr 一处说了算，见 lifeService.js 的注释
+    await api.post(`/life/goals/${current.value.id}/krs`, { title: '新 KR' });
     await select(current.value.id);
     await loadTree();
   } catch (e) { emit('toast', e.message, 'err'); }

@@ -233,9 +233,13 @@ function deleteGoal(tdb, id) {
 // ---------- KR ----------
 function createKr(tdb, goalId, b) {
   if (!goalRow(tdb, goalId)) return null;
+  // 默认值（v1.10.1）：只给「没传」的调用方补，显式传 0 仍然是 0（e2e 用它测「目标值为 0 的 KR 跳过」）。
+  // 目标值就是进度的分母（当前值/目标值），默认 100、当前值默认 0 —— 也就是「按百分比衡量」的默认姿势，
+  // 用户觉得 100 不合适随时改；忘了填也不会得到一条 0/0 的哑 KR（旧默认 target=0 会让进度算不出来）。
+  const target = b.target === undefined ? 100 : Number(b.target) || 0;
   const r = tdb.prepare(
     `INSERT INTO life_key_results(goal_id,title,target,current,unit,weight,sort_order) VALUES(?,?,?,?,?,?,?)`
-  ).run(Number(goalId), String(b.title || '').trim() || '未命名 KR', Number(b.target) || 0,
+  ).run(Number(goalId), String(b.title || '').trim() || '未命名 KR', target,
     Number(b.current) || 0, b.unit || '', Number(b.weight) || 1, Number(b.sort_order) || 0);
   const id = Number(r.lastInsertRowid);
   link.link(tdb, 'kr', id, 'goal', Number(goalId), 'belongs');
