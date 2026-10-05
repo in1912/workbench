@@ -51,12 +51,23 @@ router.delete('/im/connectors/:id', ok((req, res) => {
   if (!r) return res.status(404).json({ error: '连接器不存在' });
   res.json({ ok: true, ...r });
 }));
-// 解除授权：只丢令牌，配置与已导出的笔记都留着
-router.post('/im/connectors/:id/revoke', ok((req, res) => {
-  const c = svc.revokeConnector(req.tdb, int(req.params.id));
+// 解除授权：只丢令牌，配置与已导出的笔记都留着（钉钉侧会先让 CLI 退出登录并删掉它的凭证目录）
+router.post('/im/connectors/:id/revoke', ok(async (req, res) => {
+  const c = await svc.revokeConnector(req.tdb, int(req.params.id));
   if (!c) return res.status(404).json({ error: '连接器不存在' });
   res.json(c);
 }));
+
+// ---------- 钉钉设备流登录（扫码） ----------
+// 登录进程挂在服务进程内存里：POST 发起（一条连接器同时只允许一个），GET 轮询进度 ——
+// 返回的 output 里带着官方验证链接和授权码，前端直接展示给用户去手机上确认；
+// 登录成功的瞬间（authenticated 翻 true）由 GET 这条路把身份落库并回传最新连接器。
+router.post('/im/connectors/:id/dingtalk-login', ok((req, res) =>
+  res.json(svc.dingtalkLoginStart(req.tdb, int(req.params.id)))));
+router.get('/im/connectors/:id/dingtalk-login', ok(async (req, res) =>
+  res.json(await svc.dingtalkLoginProgress(req.tdb, int(req.params.id)))));
+router.post('/im/connectors/:id/dingtalk-login/cancel', ok((req, res) =>
+  res.json(svc.dingtalkLoginCancel(req.tdb, int(req.params.id)))));
 
 // ---------- 授权 / 同步 ----------
 router.post('/im/connectors/:id/authorize', ok((req, res) =>

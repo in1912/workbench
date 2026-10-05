@@ -58,3 +58,5 @@ desktop.ini
 # ========== 临时文件 ==========
 *.tmp
 *.bak
+# dws CLI（钉钉）：linux 版随升级包分发入库；windows 版仅本地开发用，不入库
+server/dws/win-x64/

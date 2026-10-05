@@ -4,8 +4,8 @@
       <h3>IM连接</h3>
       <div class="muted" style="font-size:12.5px; margin-bottom:12px">
         以<b>你本人的身份</b>授权（不是群机器人），把你自己在 IM 里的聊天记录归档成笔记，
-        落到笔记树的<b>「IM连接 / 平台 / 连接器备注名」</b>里（每家企业的飞书各占一个自己的子目录，
-        互不混在一起）。<b>只走各平台官方开放平台的授权接口</b>——
+        落到笔记树的<b>「IM连接 / 平台 / 连接器备注名」</b>里（每条连接器各占一个自己的子目录，
+        互不混在一起）。<b>只走各平台官方通道</b>（飞书=开放平台 OAuth，钉钉=官方 CLI 设备流）——
         不抓包、不模拟客户端、不爬取。随时可以在这里解除授权。
         <br>同一个平台可以授权多次（比如两家不同企业的飞书，就建两条连接器）。
         每条连接器都能单独设一个<b>定时同步</b>（每天/每周、几点、拉多大范围）。
@@ -16,7 +16,7 @@
       <div v-if="err" class="msg err">{{ err }}</div>
       <div v-if="msg" class="msg ok">{{ msg }}</div>
 
-      <!-- 新建 -->
+      <!-- 新建（钉钉走官方 CLI 设备流，没有应用凭证三件套 —— 表单按平台分叉） -->
       <div class="card" style="background:var(--bg3); border:none; margin-bottom:12px">
         <div class="row" style="gap:6px; flex-wrap:wrap; align-items:center">
           <select v-model="form.provider" style="width:130px">
@@ -24,18 +24,23 @@
               {{ p.name }}{{ p.ready ? '' : '（暂未实现）' }}
             </option>
           </select>
-          <input v-model="form.label" placeholder="备注名，如「公司飞书」" style="width:180px" />
-          <input v-model="form.app_id" placeholder="App ID（cli_ 开头）" style="width:210px" />
-          <input v-model="form.app_secret" type="password" placeholder="App Secret" style="width:200px" />
+          <input v-model="form.label" :placeholder="isDeviceAuth ? '备注名，如「公司钉钉」' : '备注名，如「公司飞书」'" style="width:180px" />
+          <template v-if="!isDeviceAuth">
+            <input v-model="form.app_id" placeholder="App ID（cli_ 开头）" style="width:210px" />
+            <input v-model="form.app_secret" type="password" placeholder="App Secret" style="width:200px" />
+          </template>
           <button class="primary" @click="create">＋ 添加连接器</button>
         </div>
-        <div class="row" style="gap:6px; margin-top:8px; align-items:center">
+        <div v-if="!isDeviceAuth" class="row" style="gap:6px; margin-top:8px; align-items:center">
           <span class="muted" style="font-size:12px; white-space:nowrap">回调地址</span>
           <input v-model="form.redirect_uri" style="flex:1; font-size:12px" />
           <button class="small" @click="form.redirect_uri = defaultRedirect">用默认</button>
         </div>
         <div v-if="curProvider && !curProvider.ready" class="muted" style="font-size:12px; margin-top:8px">
           {{ curProvider.hint }}
+        </div>
+        <div v-else-if="isDeviceAuth" class="muted" style="font-size:12px; margin-top:8px">
+          {{ curProvider && curProvider.hint }}
         </div>
       </div>
 
@@ -54,7 +59,11 @@
         <div v-if="c.last_error" class="msg err" style="margin:6px 0 0; font-size:12px">{{ c.last_error }}</div>
 
         <div class="row" style="gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center">
-          <button class="small primary" @click="authorize(c)">{{ c.authorized ? '重新授权' : '去授权' }}</button>
+          <!-- 授权入口按平台分叉：飞书开浏览器走 OAuth 授权码；钉钉在本面板里走设备流扫码 -->
+          <button v-if="c.provider === 'dingtalk'" class="small primary" @click="startLogin(c)">
+            {{ c.authorized ? '重新扫码登录' : '扫码登录钉钉' }}
+          </button>
+          <button v-else class="small primary" @click="authorize(c)">{{ c.authorized ? '重新授权' : '去授权' }}</button>
           <select v-model.number="sinceDays" style="width:120px" title="首次同步拉多久以内的历史">
             <option v-for="d in DAY_RANGES" :key="d.v" :value="d.v">{{ d.label }}</option>
           </select>
@@ -68,8 +77,34 @@
           <button class="small danger" @click="del(c)">删除</button>
         </div>
         <div class="muted" style="font-size:11.5px; margin-top:6px">
-          App ID {{ c.app_id }} · 回调 {{ c.redirect_uri }}
-          <span v-if="c.expires_at_ms"> · 令牌有效到 {{ fmtMs(c.expires_at_ms) }}</span>
+          <template v-if="c.provider === 'dingtalk'">
+            官方 dws CLI 通道（设备流扫码，令牌由 CLI 加密保存，不进本系统数据库）
+            <span v-if="c.status === 'authorized'"> · 已登录</span>
+          </template>
+          <template v-else>
+            App ID {{ c.app_id }} · 回调 {{ c.redirect_uri }}
+            <span v-if="c.expires_at_ms"> · 令牌有效到 {{ fmtMs(c.expires_at_ms) }}</span>
+          </template>
+        </div>
+
+        <!-- 钉钉设备流登录面板：官方验证链接 + 授权码直接摆出来（链接点开就是钉钉的确认页），
+             后端每 2 秒被轮询一次，登录成功的瞬间自动收起并刷新卡片状态。 -->
+        <div v-if="loginPanel[c.id]" class="loginbox">
+          <template v-if="loginPanel[c.id].running">
+            <div style="font-size:13px">在浏览器打开下面的链接、用钉钉确认授权（授权码 <b>{{ loginPanel[c.id].code || '…' }}</b>，15 分钟内有效）：</div>
+            <a v-if="loginPanel[c.id].url" :href="loginPanel[c.id].url" target="_blank" rel="noopener"
+               style="font-size:12px; word-break:break-all">{{ loginPanel[c.id].url }}</a>
+            <div v-else class="muted" style="font-size:12px">正在向钉钉申请授权码…</div>
+            <pre class="loginlog">{{ loginPanel[c.id].output }}</pre>
+            <div class="row" style="justify-content:flex-end">
+              <button class="small" @click="cancelLogin(c)">取消登录</button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="muted" style="font-size:12.5px">
+              {{ loginPanel[c.id].authenticated ? '✅ 登录成功，身份已记住。' : '登录没有完成（超时或被取消），可以重新点「扫码登录钉钉」。' }}
+            </div>
+          </template>
         </div>
 
         <!-- 归档正文的排版方向（v1.10.18）：IM 笔记是「一会话一篇、越同步越长」，
@@ -120,7 +155,7 @@
         <!-- 会话列表 -->
         <div v-if="open[c.id] === 'chats'" style="margin-top:10px">
           <div class="row" style="gap:6px; align-items:center">
-            <input v-model="chatAdd[c.id]" placeholder="手动添加会话 ID（oc_ 开头；单聊列不出来时可从这里补）" style="flex:1; font-size:12px" />
+            <input v-model="chatAdd[c.id]" :placeholder="c.provider === 'dingtalk' ? '手动添加会话 ID（cid 开头；单聊列不出来时可从这里补）' : '手动添加会话 ID（oc_ 开头；单聊列不出来时可从这里补）'" style="flex:1; font-size:12px" />
             <button class="small" @click="addChat(c)">添加</button>
           </div>
           <div v-if="!(chatList[c.id] || []).length" class="muted" style="font-size:12px; margin-top:6px">
@@ -149,7 +184,7 @@
       </div>
 
       <div v-if="!connectors.length" class="muted" style="font-size:12.5px; margin-bottom:10px">
-        还没有连接器。上面填一个飞书自建应用的 App ID / App Secret 就能开始。
+        还没有连接器。飞书填自建应用的 App ID / App Secret；钉钉选「钉钉」、起个备注名就行（下一步扫码）。
       </div>
 
       <details style="margin-bottom:10px">
@@ -181,6 +216,27 @@
           读群消息<b>不要求</b>把机器人拉进群（那是应用身份那条路的旧限制）；
           报 <code>232025</code> 就是「机器人」能力没开或加了没发版本。<br>
           归档出来的笔记标题是 <b>对方姓名-日期时间-会话 ID</b>。
+        </div>
+      </details>
+
+      <details style="margin-bottom:10px">
+        <summary style="cursor:pointer; font-size:13px">钉钉怎么准备？（第一次做的话看这里）</summary>
+        <ol class="muted" style="font-size:12.5px; line-height:1.9; padding-left:20px">
+          <li><b>企业管理员</b>去钉钉管理后台（oa.dingtalk.com）→ 安全管理 / 权限相关设置里，
+            开启<b>「允许成员通过钉钉 CLI 访问个人数据」</b>（不开的话成员扫码也会被拒）。</li>
+          <li>服务器上要有钉钉官方 <b>dws CLI</b>（npm 包 <code>dingtalk-workspace-cli</code>，或从官方
+            GitHub Releases 下载对应平台的二进制）。本应用升级包已随附 linux 版，放在数据目录
+            <code>dws/bin/</code> 也可以；没有 CLI 时点「扫码登录钉钉」会明确提示。</li>
+          <li>这里选「钉钉」→ 起个备注名 → 添加连接器 → 点<b>「扫码登录钉钉」</b>，
+            打开面板里给的官方链接、用钉钉 App 确认授权（授权码 15 分钟内有效）。</li>
+          <li>授权范围是<b>你自己的会话</b>（单聊 + 你所在的群），由钉钉官方 OAuth 设备流发放、
+            令牌存在服务器上 CLI 自己的加密目录里；解除授权会删掉它。</li>
+        </ol>
+        <div class="muted" style="font-size:12px; line-height:1.8">
+          已知边界：单聊的历史消息走钉钉官方「消息搜索」通道，个别组织没开通该权限时<b>单聊</b>会同步失败
+          （群聊不受影响），失败原因会写在「会话」列表里那一条上；CLI 处于共创阶段，命令口径可能随版本变化
+          （本应用锁定随包版本）。
+          <br>归档出来的笔记标题同样是 <b>对方姓名-日期时间-会话 ID</b>。
         </div>
       </details>
 
@@ -222,7 +278,14 @@
             </div>
           </div>
 
-          <div class="muted" style="font-size:12px; line-height:1.8; margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
+          <div v-if="confirming.c.provider === 'dingtalk'" class="muted" style="font-size:12px; line-height:1.8; margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
+            钉钉这条走官方 dws CLI 的 MCP 网关（共创阶段，官方未公布频控数字）。
+            本工具是<b>串行</b>拉的、每页之间固定等 {{ confirming.p.pace_ms }}ms，尽量不碰上限；
+            真被限流时该会话会带着「稍后再试」的提示落进失败列表，不会丢数据。
+            <br><b>进度是按会话逐个记的</b>，被限流或中途关掉都不会丢，
+            已经拉完的下次直接跳过、没拉完的从上次的位置接着拉，既不会重头再来，也不会重复落库。
+          </div>
+          <div v-else class="muted" style="font-size:12px; line-height:1.8; margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
             飞书官方给这几个接口的上限是 <b>1000 次/分钟 且 50 次/秒</b>（读会话列表、读会话历史消息、
             换令牌都是这个数），维度是<b>每个接口 × 每个应用 × 每个租户</b>。
             本工具是<b>串行</b>拉的、每页之间固定等 {{ confirming.p.pace_ms }}ms，也就是约 <b>4.5 次/秒</b>，
@@ -254,7 +317,7 @@
 <script setup>
 // IM 连接器设置页（v1.10.5，需求③）：从笔记页右上角「IM连接」按钮打开。
 // 这里只管「配置 + 触发授权 + 触发同步 + 看会话/日志」，真正的活儿全在服务端 imService.js。
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api, prefixUrl } from '../../api';
 
 const emit = defineEmits(['close', 'open-note']); // eslint-disable-line no-unused-vars
@@ -275,6 +338,62 @@ const confirming = ref(null); // { c, loading, error, p } —— 同步前预检
 const defaultRedirect = location.origin + prefixUrl('/api/im/callback');
 const form = ref({ provider: 'feishu', label: '', app_id: '', app_secret: '', redirect_uri: defaultRedirect });
 const curProvider = computed(() => providers.value.find((p) => p.key === form.value.provider));
+// 钉钉走官方 CLI 设备流（扫码），新建表单里不出现应用凭证三件套
+const isDeviceAuth = computed(() => (curProvider.value || {}).auth === 'device');
+
+// ---------- 钉钉设备流登录（v1.10.22） ----------
+// 面板状态 loginPanel[id] = { running, url, code, output, authenticated }；timer 每 2 秒打一次
+// GET dingtalk-login（后端在「登录成功被看见」的那一刻把身份落库并回传最新连接器）。
+const loginPanel = ref({});
+const loginTimers = {};
+function stopLoginTimer(id) {
+  if (loginTimers[id]) { clearInterval(loginTimers[id]); delete loginTimers[id]; }
+}
+async function startLogin(c) {
+  err.value = ''; msg.value = '';
+  try {
+    const r = await api.post(`/im/connectors/${c.id}/dingtalk-login`, {});
+    if (!r.started && !r.already) { err.value = '登录没发起成功'; return; }
+    loginPanel.value = { ...loginPanel.value, [c.id]: { running: true, url: '', code: '', output: '', authenticated: false } };
+    stopLoginTimer(c.id);
+    loginTimers[c.id] = setInterval(() => pollLogin(c), 2000);
+    pollLogin(c);   // 立刻打一次，别让面板空转两秒才出链接
+  } catch (e) { fail(e); }
+}
+async function pollLogin(c) {
+  try {
+    const p = await api.get(`/im/connectors/${c.id}/dingtalk-login`);
+    loginPanel.value = { ...loginPanel.value, [c.id]: {
+      running: p.running,
+      url: p.url || (loginPanel.value[c.id] || {}).url || '',
+      code: p.code || (loginPanel.value[c.id] || {}).code || '',
+      output: p.output || '',
+      authenticated: !!p.authenticated,
+    } };
+    if (!p.running) {
+      stopLoginTimer(c.id);
+      // 登录进程结束（成功/超时/取消）：面板停在结果态，3 秒后收起；成功则刷新整张卡
+      if (p.authenticated) {
+        msg.value = '钉钉登录成功，可以点「同步」开始归档了';
+        await load();
+      }
+      setTimeout(() => {
+        const cur = loginPanel.value[c.id];
+        if (cur && !cur.running) loginPanel.value = { ...loginPanel.value, [c.id]: null };
+      }, 3000);
+    }
+  } catch (e) {
+    stopLoginTimer(c.id);
+    loginPanel.value = { ...loginPanel.value, [c.id]: { running: false, url: '', code: '', output: '', authenticated: false } };
+    fail(e);
+  }
+}
+async function cancelLogin(c) {
+  stopLoginTimer(c.id);
+  try { await api.post(`/im/connectors/${c.id}/dingtalk-login/cancel`, {}); } catch { /* 进程可能已退 */ }
+  loginPanel.value = { ...loginPanel.value, [c.id]: null };
+}
+onUnmounted(() => { for (const k of Object.keys(loginTimers)) stopLoginTimer(k); });
 
 // 定时同步（v1.10.14）用到的两张表：周几的中文名 + 可选的拉取范围。
 // 范围的口径要说清楚：**只对还没有游标的会话生效**（首次同步按这个天数回溯），
@@ -324,11 +443,19 @@ onMounted(load);
 async function create() {
   err.value = ''; msg.value = '';
   const f = form.value;
-  if (!f.app_id || !f.app_secret) { err.value = 'App ID 和 App Secret 都要填'; return; }
+  // 钉钉：设备流扫码，不需要应用凭证；飞书：三件套齐了才让建
+  if ((curProvider.value || {}).auth === 'device') {
+    if (!f.label.trim()) { err.value = '给这条钉钉连接器起个备注名（也是归档目录名）'; return; }
+  } else if (!f.app_id || !f.app_secret) {
+    err.value = 'App ID 和 App Secret 都要填';
+    return;
+  }
   try {
     await api.post('/im/connectors', { ...f });
     form.value = { ...form.value, label: '', app_id: '', app_secret: '' };
-    msg.value = '连接器已添加，点「去授权」完成授权';
+    msg.value = (curProvider.value || {}).auth === 'device'
+      ? '连接器已添加，点「扫码登录钉钉」完成授权'
+      : '连接器已添加，点「去授权」完成授权';
     await load();
   } catch (e) { fail(e); }
 }
@@ -454,4 +581,16 @@ async function del(c) {
   cursor: pointer;
 }
 .ord .chk input { width: auto; padding: 0; }
+/* 钉钉设备流登录面板：浅底一块，CLI 的进度原文用等宽小字滚着看 */
+.loginbox {
+  margin-top: 8px; padding: 10px; border-radius: 8px;
+  background: var(--bg2, rgba(0,0,0,.04)); border: 1px dashed var(--border);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.loginbox a { color: var(--blue, #3370ff); }
+.loginlog {
+  margin: 0; max-height: 110px; overflow-y: auto; font-size: 11px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-all; color: var(--muted, #888);
+  font-family: ui-monospace, Consolas, monospace;
+}
 </style>

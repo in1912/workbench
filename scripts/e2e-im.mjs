@@ -19,7 +19,8 @@ try {
   // ---------- ① 平台清单 ----------
   let r = await A.get('/im/providers');
   s.ck('GET /im/providers 返回三家', r.status === 200 && r.body.length === 3, JSON.stringify(r.body).map ? '' : String(r.status));
-  s.ck('只有飞书 ready', r.body.filter((p) => p.ready).map((p) => p.key).join(',') === 'feishu',
+  // v1.10.22 起钉钉也 ready（官方 dws CLI 通道）；企业微信仍然没有个人通道
+  s.ck('飞书与钉钉都 ready（企业微信还没有）', r.body.filter((p) => p.ready).map((p) => p.key).join(',') === 'feishu,dingtalk',
     JSON.stringify(r.body.map((p) => [p.key, p.ready])));
   s.ck('未实现的平台带「为什么」', r.body.filter((p) => !p.ready).every((p) => (p.hint || '').length > 10));
 
@@ -33,7 +34,8 @@ try {
   r = await A.post('/im/connectors', { ...good, provider: 'wecom' });
   s.ck('企微（暂未实现）→ 400 并说明原因', r.status === 400 && /会话内容存档|会员|成员/.test(r.body.error || ''), JSON.stringify(r.body));
   r = await A.post('/im/connectors', { ...good, provider: 'dingtalk' });
-  s.ck('钉钉（暂未实现）→ 400', r.status === 400, String(r.status));
+  s.ck('钉钉建连接器不需要应用凭证（顺手塞的也不存）→ 200', r.status === 200 && r.body.app_id === '', JSON.stringify(r.body));
+  if (r.status === 200) await A.del('/im/connectors/' + r.body.id);   // 立刻删掉，别污染后面的「两条」计数
 
   r = await A.post('/im/connectors', good);
   const id = r.body.id;
