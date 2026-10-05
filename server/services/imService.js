@@ -28,6 +28,15 @@
 //   同步流程（目录/排版/标签/增量游标/分轮预算）与飞书共用同一套代码，
 //   钉钉消息先映射成飞书形状（dingtalkDws.projectToFeishuShape）再进同一条管线。
 //
+// ============ 企业微信走的也是官方 CLI 通道（v1.10.25） ============
+//   与钉钉同构：官方 wecom-cli（npm @wecom/cli，Rust 二进制）+ 智能机器人凭证（Bot ID + Secret），
+//   机器人代授权人读其会话。传输层在 server/services/wecomCli.js；凭证由 CLI 自己加密存在
+//   dataDir/wecom-config/<连接器id>/（目录自包含，整目录可迁移），im_connectors 里只存
+//   Bot ID / Secret（复用 app_id / app_secret 两列，publicConnector 照样擦掉）。
+//   官方两条硬边界（详见 wecomCli.js 文件头）：>10 人的组织整个 chat 服务被拒（853006）；
+//   回溯窗只有 7 天（850016）—— 增量归档没问题，补不了老历史。群聊自动发现，单聊官方没有
+//   枚举接口，靠「添加单聊」+ contact users search 按联系人登记。
+//
 // ============ 数据与凭证放哪 ============
 //   im_connectors / im_chats / im_sync_logs 都在**租户库**（每个用户一个私有 sqlite），
 //   所以 app_secret / access_token / refresh_token 存租户库 = 存在用户自己的库里；
@@ -38,6 +47,7 @@ const crypto = require('node:crypto');
 const db = require('../db');
 const noteService = require('./noteService');
 const dws = require('./dingtalkDws');
+const wecom = require('./wecomCli');
 
 const FEISHU_API = 'https://open.feishu.cn/open-apis';
 // 授权入口在 **accounts** 域名下，且参数名是 client_id（值才是 App ID）。
@@ -59,11 +69,11 @@ const FEISHU_SCOPES = [
   'offline_access',
 ].join(' ');
 
-// 平台清单。ready=false 的（企业微信）**不是**漏做，是官方通道现阶段拿不到个人聊天记录，
-// 界面上要说清楚原因，不能让用户以为是没开发完。
-// tag 是归档笔记自动挂上的平台标签（#飞书 / #钉钉 / #企业微信），**单独一个字段**而不是复用 name：
-// 标签是写进库里的事实，name 只是界面文案 —— 哪天想把 name 改成「飞书（Lark）」，标签不该跟着变。
-// auth 是授权形态：feishu=应用凭证 + OAuth 授权码回跳；dingtalk=官方 CLI 设备流扫码（无应用凭证）。
+// 平台清单。tag 是归档笔记自动挂上的平台标签（#飞书 / #钉钉 / #企业微信），**单独一个字段**
+// 而不是复用 name：标签是写进库里的事实，name 只是界面文案 —— 哪天想把 name 改成「飞书（Lark）」，
+// 标签不该跟着变。
+// auth 是授权形态：feishu=应用凭证 + OAuth 授权码回跳；dingtalk=官方 CLI 设备流扫码（无应用凭证）；
+// wecom=智能机器人凭证（Bot ID + Secret，服务端 PTY 桥代填，无回调地址）。
 const PROVIDERS = {
   feishu: {
     key: 'feishu', name: '飞书', folder: '飞书', tag: '飞书', ready: true, auth: 'oauth',
@@ -74,8 +84,8 @@ const PROVIDERS = {
     hint: '官方 dws CLI 通道：扫码授权（OAuth 设备流），不用自建应用。需要企业管理员在钉钉开放平台开启「允许成员通过 CLI 访问个人数据」。已知边界：单聊历史走官方消息搜索通道，个别组织没开通「消息搜索」权限时单聊会同步失败（群聊不受影响），报错会写进该会话的失败原因里。',
   },
   wecom: {
-    key: 'wecom', name: '企业微信', folder: '企业微信', tag: '企业微信', ready: false,
-    hint: '暂未实现。企业微信成员身份只能发不能读；读全量必须走企业级「会话内容存档」（要企业认证 + 管理员开通 + 成员告知 + 按账号付费），不属于个人授权范畴。',
+    key: 'wecom', name: '企业微信', folder: '企业微信', tag: '企业微信', ready: true, auth: 'credentials',
+    hint: '官方 wecom-cli 通道：智能机器人凭证（Bot ID + Secret），点「验证授权」即可，不用回调地址。官方两条硬边界：① 聊天记录拉取只对 10 人及以下的组织开放（大组织会被官方拒绝）；② 只能拉最近 7 天的消息，老历史补不了。群聊自动发现；单聊官方没有列表接口，用「添加单聊」按联系人登记。',
   },
 };
 
@@ -122,9 +132,9 @@ function publicConnector(c) {
     ...rest, id: Number(c.id),
     provider_name: p.name,
     folder_id: c.folder_id == null ? null : Number(c.folder_id),
-    // 钉钉的令牌在 CLI 自己的加密目录里（im_connectors 不存），所以只认 status；
+    // 钉钉/企业微信的令牌在 CLI 自己的加密目录里（im_connectors 不存），所以只认 status；
     // 飞书还是老口径：授权过且手里有 access_token。
-    authorized: c.status === 'authorized' && (c.provider === 'dingtalk' || !!c.access_token),
+    authorized: c.status === 'authorized' && (c.provider === 'dingtalk' || c.provider === 'wecom' || !!c.access_token),
     has_secret: !!app_secret,
     expires_at_ms: Number(c.expires_at) || 0,
   };
@@ -146,6 +156,17 @@ function createConnector(tdb, b = {}) {
       .run(provider, String(b.label || '').trim());
     return publicConnector(getConnector(tdb, Number(r.lastInsertRowid)));
   }
+  // 企业微信：智能机器人凭证两件套（Bot ID + Secret），复用 app_id / app_secret 两列存，
+  // 没有回调地址；建完是「待验证」，点「验证授权」走 PTY 桥把凭证灌给 CLI。
+  if (provider === 'wecom') {
+    const botId = String(b.app_id || '').trim();
+    if (!botId) throw bad('请填智能机器人的 Bot ID');
+    const secret = String(b.app_secret || '').trim();
+    if (!secret) throw bad('请填智能机器人的 Secret');
+    const r = tdb.prepare("INSERT INTO im_connectors(provider,label,app_id,app_secret,status) VALUES(?,?,?,?,'new')")
+      .run(provider, String(b.label || '').trim(), botId, secret);
+    return publicConnector(getConnector(tdb, Number(r.lastInsertRowid)));
+  }
   const appId = String(b.app_id || '').trim();
   if (!appId) throw bad('请填自建应用的 App ID');
   const secret = String(b.app_secret || '').trim();
@@ -162,6 +183,7 @@ function updateConnector(tdb, id, b = {}) {
   const cur = getConnector(tdb, id);
   if (!cur) return null;
   const isDing = cur.provider === 'dingtalk';   // 钉钉没有应用凭证三件套，那些校验与重置都跳过
+  const isWecom = cur.provider === 'wecom';     // 企业微信有 Bot ID/Secret（存 app_id/app_secret），但没有回调地址
   const label = b.label === undefined ? cur.label : String(b.label || '').trim();
   const appId = b.app_id === undefined ? cur.app_id : String(b.app_id || '').trim();
   // 前端拿到的 app_secret 永远是空的；只有真的传了新串才覆盖（避免「保存一下就清空」）
@@ -169,8 +191,9 @@ function updateConnector(tdb, id, b = {}) {
     ? cur.app_secret : String(b.app_secret).trim();
   const redirect = b.redirect_uri === undefined ? cur.redirect_uri : String(b.redirect_uri || '').trim();
   if (redirect && !/^https?:\/\//.test(redirect)) throw bad('回调地址要是一个完整 URL');
-  if (!isDing && !appId) throw bad('App ID 不能为空');
-  // 换了 app_id / secret → 旧令牌作废，必须重新授权（钉钉无应用凭证，恒为 false）
+  if (!isDing && !appId) throw bad(isWecom ? 'Bot ID 不能为空' : 'App ID 不能为空');
+  // 换了 app_id / secret → 旧令牌作废，必须重新授权（钉钉无应用凭证，恒为 false；
+  // 企业微信换 Bot ID/Secret 同样要重新点「验证授权」，wecomInitAuth 会先清掉 CLI 旧凭证）
   const changedApp = !isDing && (appId !== cur.app_id || secret !== cur.app_secret);
 
   // 定时同步（v1.10.14，需求③）：每条连接器各设各的。校验放在这里而不是路由，
@@ -217,8 +240,9 @@ function updateConnector(tdb, id, b = {}) {
 function deleteConnector(tdb, id) {
   const cur = getConnector(tdb, id);
   if (!cur) return null;
-  // 钉钉：连接器没了，CLI 那份凭证目录也一并清掉（异步清，不挡删除本身）
+  // 钉钉/企业微信：连接器没了，CLI 那份凭证目录也一并清掉（异步清，不挡删除本身）
   if (cur.provider === 'dingtalk') dws.dwsLogout(cur.id).catch(() => {});
+  if (cur.provider === 'wecom') wecom.wecomLogout(cur.id).catch(() => {});
   tdb.prepare('DELETE FROM im_chats WHERE connector_id=?').run(Number(id));
   tdb.prepare('DELETE FROM im_sync_logs WHERE connector_id=?').run(Number(id));
   tdb.prepare('DELETE FROM im_connectors WHERE id=?').run(Number(id));
@@ -229,10 +253,11 @@ function deleteConnector(tdb, id) {
 async function revokeConnector(tdb, id) {
   const cur = getConnector(tdb, id);
   if (!cur) return null;
-  if (cur.provider === 'dingtalk') {
-    // 钉钉的令牌在 CLI 的加密目录里：让 CLI 退出登录，再把整个目录删掉（身份字段也清空，
+  if (cur.provider === 'dingtalk' || cur.provider === 'wecom') {
+    // 钉钉/企业微信的令牌在 CLI 的加密目录里：让 CLI 退出登录，再把整个目录删掉（身份字段也清空，
     // 因为目录没了、下次登录会重新写）。飞书侧保持老口径：只清令牌，身份识别码留着。
-    await dws.dwsLogout(cur.id);
+    if (cur.provider === 'dingtalk') await dws.dwsLogout(cur.id);
+    else await wecom.wecomLogout(cur.id);
     tdb.prepare("UPDATE im_connectors SET access_token='',refresh_token='',expires_at='',status='new',tenant_key='',user_open_id='',user_name='',last_error='' WHERE id=?").run(Number(id));
   } else {
     tdb.prepare("UPDATE im_connectors SET access_token='',refresh_token='',expires_at='',status='new',last_error='' WHERE id=?").run(Number(id));
@@ -274,10 +299,59 @@ function dingtalkLoginCancel(tdb, id) {
   return dws.dwsCancelLogin(c.id);
 }
 
+/**
+ * 企业微信：验证授权。用表单里存的 Bot ID + Secret 走一次 PTY 授权桥（auth init --manual），
+ * 成功后把授权人身份（userid + 姓名，从响应信封解析）落库 —— 「我」的识别全靠它。
+ * 最后再探一次会话枚举：>10 人的组织**授权本身能成功**、但 chat 服务会被拒（853006），
+ * 这个矛盾不在验证时点破，用户就会在「明明授权了」和「同步被拒」之间打转 ——
+ * 探测结果走 warning 返回给前端显示，状态仍是 authorized（授权确实是好的）。
+ */
+async function wecomVerify(tdb, id) {
+  const c = getConnector(tdb, id);
+  if (!c) throw bad('连接器不存在', 404);
+  if (c.provider !== 'wecom') throw bad('这条连接器不是企业微信');
+  if (!wecom.wecomReady()) throw bad('服务器上没找到 wecom CLI。请安装 @wecom/cli，或把对应平台的 wecom-cli 二进制放到数据目录 wecom/bin/（升级包已随附 linux 版）');
+  if (!c.app_id || !c.app_secret) throw bad('先填好机器人的 Bot ID 和 Secret 再验证');
+  const r = await wecom.wecomInitAuth(c.id, c.app_id, c.app_secret);
+  const st = await wecom.wecomAuthStatus(c.id);
+  if (!st.authenticated) {
+    // CLI 的报错在 PTY 输出里，取最后一个非空行当原因（前面的都是提示词回显；
+    // 先剥掉 dialoguer 的 ANSI 转义，否则遮罩行会混进「最后一个非空行」里）
+    const detail = String(r.output || '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n').map((s) => s.trim()).filter(Boolean).pop() || '';
+    const msg = ('企业微信授权失败' + (detail ? '：' + detail : '')).slice(0, 300);
+    tdb.prepare("UPDATE im_connectors SET status='error',last_error=? WHERE id=?").run(msg, c.id);
+    log(tdb, c.id, 'error', msg);
+    throw bad(msg, 400);
+  }
+  const ident = await wecom.wecomSelfIdentity(c.id) || {};
+  tdb.prepare("UPDATE im_connectors SET status='authorized',user_open_id=?,user_name=?,last_error='' WHERE id=?")
+    .run(String(ident.user_id || ''), String(ident.user_name || ''), c.id);
+  let warning = '';
+  try {
+    await wecom.wecomListChatsFor(c.id, 1);
+  } catch (e) {
+    warning = String(e.message || e).slice(0, 300);
+    tdb.prepare('UPDATE im_connectors SET last_error=? WHERE id=?').run(warning, c.id);
+  }
+  log(tdb, c.id, 'info', `企业微信授权成功${ident.user_name ? '：' + ident.user_name : ''}${warning ? '；⚠ ' + warning : ''}`);
+  return { connector: publicConnector(getConnector(tdb, c.id)), warning };
+}
+
+/** 企业微信：按姓名搜组织成员（「添加单聊」的选择器用）。只读。 */
+async function wecomSearchContacts(tdb, id, keywords) {
+  const c = getConnector(tdb, id);
+  if (!c) throw bad('连接器不存在', 404);
+  if (c.provider !== 'wecom') throw bad('这条连接器不是企业微信');
+  const st = await wecom.wecomAuthStatus(c.id);
+  if (!st.authenticated) throw bad('企业微信还没验证授权，先点「验证授权」');
+  return wecom.wecomContactSearch(c.id, keywords);
+}
+
 function authorizeUrl(tdb, uid, id) {
   const c = getConnector(tdb, id);
   if (!c) throw bad('连接器不存在', 404);
   if ((PROVIDERS[c.provider] || {}).auth === 'device') throw bad('钉钉不用应用凭证授权，点「扫码登录钉钉」走设备流');
+  if ((PROVIDERS[c.provider] || {}).auth === 'credentials') throw bad('企业微信不用回调授权，点「验证授权」把机器人凭证灌给官方 CLI');
   if (!c.app_id || !c.app_secret) throw bad('先填好 App ID / App Secret 再授权');
   if (!c.redirect_uri) throw bad('先填好回调地址再授权');
   const state = newState(uid, c.id);
@@ -908,6 +982,31 @@ function syncPreview(tdb, connectorId, { sinceDays = 30 } = {}) {
       already_synced: chats.filter((c) => c.last_sync_at).length,
     };
   }
+  // 企业微信单独一支：页间隔 150ms（wecomCli 翻页 sleep，跟实跑一致）；since_days 上限 7
+  //（官方只让拉最近 7 天，填更多也只会被裁掉 —— 预检里就说破，别让用户以为能补老历史）。
+  if (conn.provider === 'wecom') {
+    const chats = listChats(tdb, conn.id);
+    const incremental = chats.filter((c) => c.last_msg_time).length;
+    const initial = chats.length - incremental;
+    const reqMin = 1 + chats.length;
+    const reqMax = 1 + incremental + initial * 60;
+    const sec = (n) => Math.round((n * 150) / 1000);
+    return {
+      provider: conn.provider,
+      authorized: conn.status === 'authorized',
+      since_days: Math.min(days, 7),
+      chats: chats.length,
+      incremental, initial,
+      max_msgs_per_chat: SYNC_MAX_MSGS_PER_CHAT,
+      pace_ms: 150,
+      est_requests_min: reqMin,
+      est_requests_max: reqMax,
+      est_seconds_min: sec(reqMin),
+      est_seconds_max: sec(reqMax),
+      resume: '同步进度按会话逐个记录。企业微信官方只允许拉最近 7 天的消息（老历史补不了）；群聊自动发现，单聊要用「添加单聊」按联系人登记。',
+      already_synced: chats.filter((c) => c.last_sync_at).length,
+    };
+  }
   const chats = listChats(tdb, conn.id);
   // 有游标 = 只取比游标新的消息（正常一次请求就完事）；没游标 = 首次同步，要拉最近 days 天的历史
   const incremental = chats.filter((c) => c.last_msg_time).length;
@@ -1047,11 +1146,12 @@ function chatsForRound(chats, rnd) {
 async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200, maxMsgsPerChat = 2000, budgetMs = 45000, round = '' } = {}) {
   const conn = getConnector(tdb, connectorId);
   if (!conn) throw bad('连接器不存在', 404);
-  if (conn.provider !== 'feishu' && conn.provider !== 'dingtalk') throw bad('这个平台还没实现同步');
+  if (conn.provider !== 'feishu' && conn.provider !== 'dingtalk' && conn.provider !== 'wecom') throw bad('这个平台还没实现同步');
   const isDing = conn.provider === 'dingtalk';
+  const isWecom = conn.provider === 'wecom';
   const t0 = Date.now();
-  // 钉钉不在这里换令牌：CLI 自己管刷新（令牌在它的加密目录里）。同步前先做一次只读登录态检查。
-  const token = isDing ? null : await ensureToken(tdb, conn);
+  // 钉钉/企业微信不在这里换令牌：CLI 自己管刷新（令牌在它的加密目录里）。同步前先做一次只读登录态检查。
+  const token = (isDing || isWecom) ? null : await ensureToken(tdb, conn);
   // 续跑（前端把上一轮返回的 round 带回来）时，这一轮就是同一个 round。
   // **这个时间戳一律由 SQLite 生成**，不自己用 JS 拼：它要跟 last_sync_at（同一列、
   // 同样是 datetime('now','localtime') 写的）做字符串比较，两边出自同一个时钟才不会有
@@ -1077,8 +1177,20 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
           const why = dws.dwsLastLoginError(conn.id);
           throw bad('钉钉登录已失效，请到「IM 连接」里重新扫码登录' + (why ? `：${why}` : ''));
         }
+      } else if (isWecom) {
+        // 同款预检：凭证失效（853004 一族）趁列表阶段就把状态写回、给出去向，
+        // 而不是让每个会话都失败一遍。
+        const st = await wecom.wecomAuthStatus(conn.id);
+        if (!st.authenticated) {
+          tdb.prepare("UPDATE im_connectors SET status='expired' WHERE id=?").run(conn.id);
+          throw bad('企业微信授权已失效，请到「IM 连接」里重新点「验证授权」');
+        }
       }
-      const got = isDing ? await dws.dwsListChatsFor(conn.id, maxChats) : await listAllChats(token, maxChats);
+      const got = isDing
+        ? await dws.dwsListChatsFor(conn.id, maxChats)
+        : isWecom
+          ? await wecom.wecomListChatsFor(conn.id, maxChats)
+          : await listAllChats(token, maxChats);
       remote = got.items;
       if (got.p2pNote) log(tdb, conn.id, 'warn', got.p2pNote);
       const p2p = remote.filter((c) => String(c.chat_mode || '') === 'p2p').length;
@@ -1127,7 +1239,9 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
         : Math.floor((nowMs() - Math.max(1, sinceDays) * 86400000) / 1000);
       const items = isDing
         ? await dws.dwsPullMessages(conn.id, chat, { startSec: since, endSec, maxMsgs: maxMsgsPerChat })
-        : await pullMessages(token, chat.chat_id, { startSec: since, endSec, maxMsgs: maxMsgsPerChat });
+        : isWecom
+          ? await wecom.wecomPullMessages(conn.id, chat, { startMs: since * 1000, endMs: endSec * 1000, maxMsgs: maxMsgsPerChat })
+          : await pullMessages(token, chat.chat_id, { startSec: since, endSec, maxMsgs: maxMsgsPerChat });
       const fresh = items.filter((m) => isCountable(m) && Number(m.create_time) > Number(chat.last_msg_time || 0));
       if (!fresh.length) {
         stat.skipped++;
@@ -1136,12 +1250,12 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
       }
       const lastMs = Number(fresh[fresh.length - 1].create_time);
       const lines = fresh.map((m) => {
-        // 钉钉的消息带发送者昵称（群里有名字比「群成员_xx9f27」可读得多）；飞书没有，维持短 ID。
+        // 钉钉/企业微信的消息带发送者姓名（群里有名字比「群成员_xx9f27」可读得多）；飞书没有，维持短 ID。
         const who = (conn.user_open_id && m.sender && m.sender.id === conn.user_open_id)
           ? '我'
           : (chat.chat_mode === 'p2p'
             ? '对方'
-            : (isDing && m.sender && m.sender.name ? String(m.sender.name) : '群成员_' + shortId(m.sender && m.sender.id)));
+            : ((isDing || isWecom) && m.sender && m.sender.name ? String(m.sender.name) : '群成员_' + shortId(m.sender && m.sender.id)));
         return `- **${fmtTime(m.create_time)}｜${who}**：${msgText(m)}`;
       }).join('\n');
       const block = `## ${fmtTime(lastMs)} 同步（新增 ${fresh.length} 条）\n\n${lines}`;
@@ -1269,6 +1383,7 @@ module.exports = {
   listConnectors, createConnector, updateConnector, deleteConnector, revokeConnector,
   authorizeUrl, handleCallback, ensureToken,
   dingtalkLoginStart, dingtalkLoginProgress, dingtalkLoginCancel,
+  wecomVerify, wecomSearchContacts,
   listChats, addChat, delChat, listLogs, syncConnector, syncPreview, chatsForRound,
   publicConnector, chatTitle,
   connectorFolderId, folderNameFor, migrateImFolders, moveConnectorNotes, normalizeImNotes,

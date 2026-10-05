@@ -69,6 +69,15 @@ router.get('/im/connectors/:id/dingtalk-login', ok(async (req, res) =>
 router.post('/im/connectors/:id/dingtalk-login/cancel', ok((req, res) =>
   res.json(svc.dingtalkLoginCancel(req.tdb, int(req.params.id)))));
 
+// ---------- 企业微信：验证授权 + 联系人搜索 ----------
+// 验证 = 用表单里存的 Bot ID + Secret 在服务端跑一次 PTY 授权桥（wecomCli.wecomInitAuth），
+// 成功后身份落库；响应里的 warning 是「授权是好的、但官方限制不让拉」这类提前点破的话
+//（>10 人组织 853006）。联系人搜索给「添加单聊」用（企业微信单聊没有列表接口，只能按人登记）。
+router.post('/im/connectors/:id/wecom-verify', ok(async (req, res) =>
+  res.json(await svc.wecomVerify(req.tdb, int(req.params.id)))));
+router.get('/im/connectors/:id/wecom-contacts', ok(async (req, res) =>
+  res.json(await svc.wecomSearchContacts(req.tdb, int(req.params.id), req.query.q || ''))));
+
 // ---------- 授权 / 同步 ----------
 router.post('/im/connectors/:id/authorize', ok((req, res) =>
   res.json({ url: svc.authorizeUrl(req.tdb, req.user.id, int(req.params.id)) })));

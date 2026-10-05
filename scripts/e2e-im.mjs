@@ -20,7 +20,7 @@ try {
   let r = await A.get('/im/providers');
   s.ck('GET /im/providers 返回三家', r.status === 200 && r.body.length === 3, JSON.stringify(r.body).map ? '' : String(r.status));
   // v1.10.22 起钉钉也 ready（官方 dws CLI 通道）；企业微信仍然没有个人通道
-  s.ck('飞书与钉钉都 ready（企业微信还没有）', r.body.filter((p) => p.ready).map((p) => p.key).join(',') === 'feishu,dingtalk',
+  s.ck('三个平台都 ready（企业微信 v1.10.25 起接入）', r.body.filter((p) => p.ready).map((p) => p.key).join(',') === 'feishu,dingtalk,wecom',
     JSON.stringify(r.body.map((p) => [p.key, p.ready])));
   s.ck('未实现的平台带「为什么」', r.body.filter((p) => !p.ready).every((p) => (p.hint || '').length > 10));
 
@@ -32,7 +32,11 @@ try {
   r = await A.post('/im/connectors', { ...good, redirect_uri: 'not-a-url' });
   s.ck('回调地址不是 URL → 400', r.status === 400, String(r.status));
   r = await A.post('/im/connectors', { ...good, provider: 'wecom' });
-  s.ck('企微（暂未实现）→ 400 并说明原因', r.status === 400 && /会话内容存档|会员|成员/.test(r.body.error || ''), JSON.stringify(r.body));
+  // v1.10.25 起企微接入（官方 wecom-cli + 机器人凭证）：塞进来的 App ID/Secret 被 Bot ID/Secret
+  // 校验放行（App ID 非空即算 Bot ID）；建出来是 new 状态，立刻删掉别污染后面的计数。
+  // 企微自己的完整链路（验证授权/同步/笔记）在 e2e-im-wecom.mjs 里单独跑。
+  s.ck('企微建连接器走 Bot ID/Secret 口径（详测见 e2e-im-wecom）', r.status === 200 && r.body.status === 'new', JSON.stringify(r.body));
+  if (r.status === 200) await A.del('/im/connectors/' + r.body.id);
   r = await A.post('/im/connectors', { ...good, provider: 'dingtalk' });
   s.ck('钉钉建连接器不需要应用凭证（顺手塞的也不存）→ 200', r.status === 200 && r.body.app_id === '', JSON.stringify(r.body));
   if (r.status === 200) await A.del('/im/connectors/' + r.body.id);   // 立刻删掉，别污染后面的「两条」计数

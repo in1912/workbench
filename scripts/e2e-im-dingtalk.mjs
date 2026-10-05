@@ -40,7 +40,7 @@ try {
   s.ck('钉钉在平台清单里且 ready', r.status === 200 && dt.ready === true, JSON.stringify(r.body.map((p) => [p.key, p.ready])));
   s.ck('钉钉标注为设备流授权（前端表单按它分叉）', dt.auth === 'device', String(dt.auth));
   s.ck('钉钉的 hint 讲的是 CLI 通道与边界（界面「怎么准备」靠它）', /CLI/.test(dt.hint || ''), String(dt.hint || '').slice(0, 80));
-  s.ck('企业微信仍然不是 ready（官方没有个人通道）', ((r.body || []).find((p) => p.key === 'wecom') || {}).ready === false);
+  s.ck('企业微信在平台清单里且 ready（v1.10.25 起走官方 wecom-cli 通道）', ((r.body || []).find((p) => p.key === 'wecom') || {}).ready === true);
 
   // ---------- ② 建连接器：不需要任何应用凭证 ----------
   r = await A.post('/im/connectors', { provider: 'dingtalk', label: '公司钉钉', app_id: 'cli_不该被存', app_secret: 'x' });

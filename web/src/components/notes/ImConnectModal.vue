@@ -5,7 +5,8 @@
       <div class="muted" style="font-size:12.5px; margin-bottom:12px">
         以<b>你本人的身份</b>授权（不是群机器人），把你自己在 IM 里的聊天记录归档成笔记，
         落到笔记树的<b>「IM连接 / 平台 / 连接器备注名」</b>里（每条连接器各占一个自己的子目录，
-        互不混在一起）。<b>只走各平台官方通道</b>（飞书=开放平台 OAuth，钉钉=官方 CLI 设备流）——
+        互不混在一起）。<b>只走各平台官方通道</b>（飞书=开放平台 OAuth，钉钉=官方 CLI 设备流，
+        企业微信=官方 CLI + 智能机器人凭证）——
         不抓包、不模拟客户端、不爬取。随时可以在这里解除授权。
         <br>同一个平台可以授权多次（比如两家不同企业的飞书，就建两条连接器）。
         每条连接器都能单独设一个<b>定时同步</b>（每天/每周、几点、拉多大范围）。
@@ -24,14 +25,20 @@
               {{ p.name }}{{ p.ready ? '' : '（暂未实现）' }}
             </option>
           </select>
-          <input v-model="form.label" :placeholder="isDeviceAuth ? '备注名，如「公司钉钉」' : '备注名，如「公司飞书」'" style="width:180px" />
-          <template v-if="!isDeviceAuth">
+          <input v-model="form.label" :placeholder="labelPlaceholder" style="width:180px" />
+          <!-- 凭证输入按授权形态分叉：飞书=App ID/Secret+回调；企业微信=机器人 Bot ID/Secret（无回调）；
+               钉钉=设备流扫码（啥凭证都不要） -->
+          <template v-if="isCredAuth">
+            <input v-model="form.app_id" placeholder="Bot ID（aib 开头）" style="width:210px" />
+            <input v-model="form.app_secret" type="password" placeholder="机器人 Secret" style="width:200px" />
+          </template>
+          <template v-else-if="!isDeviceAuth">
             <input v-model="form.app_id" placeholder="App ID（cli_ 开头）" style="width:210px" />
             <input v-model="form.app_secret" type="password" placeholder="App Secret" style="width:200px" />
           </template>
           <button class="primary" @click="create">＋ 添加连接器</button>
         </div>
-        <div v-if="!isDeviceAuth" class="row" style="gap:6px; margin-top:8px; align-items:center">
+        <div v-if="!isDeviceAuth && !isCredAuth" class="row" style="gap:6px; margin-top:8px; align-items:center">
           <span class="muted" style="font-size:12px; white-space:nowrap">回调地址</span>
           <input v-model="form.redirect_uri" style="flex:1; font-size:12px" />
           <button class="small" @click="form.redirect_uri = defaultRedirect">用默认</button>
@@ -39,7 +46,7 @@
         <div v-if="curProvider && !curProvider.ready" class="muted" style="font-size:12px; margin-top:8px">
           {{ curProvider.hint }}
         </div>
-        <div v-else-if="isDeviceAuth" class="muted" style="font-size:12px; margin-top:8px">
+        <div v-else-if="isDeviceAuth || isCredAuth" class="muted" style="font-size:12px; margin-top:8px">
           {{ curProvider && curProvider.hint }}
         </div>
       </div>
@@ -59,9 +66,13 @@
         <div v-if="c.last_error" class="msg err" style="margin:6px 0 0; font-size:12px">{{ c.last_error }}</div>
 
         <div class="row" style="gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center">
-          <!-- 授权入口按平台分叉：飞书开浏览器走 OAuth 授权码；钉钉在本面板里走设备流扫码 -->
+          <!-- 授权入口按平台分叉：飞书开浏览器走 OAuth 授权码；钉钉在本面板里走设备流扫码；
+               企业微信在本面板里用表单存的机器人凭证跑一次官方 CLI 授权（要几十秒） -->
           <button v-if="c.provider === 'dingtalk'" class="small primary" @click="startLogin(c)">
             {{ c.authorized ? '重新扫码登录' : '扫码登录钉钉' }}
+          </button>
+          <button v-else-if="c.provider === 'wecom'" class="small primary" :disabled="verifying === c.id" @click="verifyWecom(c)">
+            {{ verifying === c.id ? '验证中…' : (c.authorized ? '重新验证授权' : '验证授权') }}
           </button>
           <button v-else class="small primary" @click="authorize(c)">{{ c.authorized ? '重新授权' : '去授权' }}</button>
           <select v-model.number="sinceDays" style="width:120px" title="首次同步拉多久以内的历史">
@@ -80,6 +91,11 @@
           <template v-if="c.provider === 'dingtalk'">
             官方 dws CLI 通道（设备流扫码，令牌由 CLI 加密保存，不进本系统数据库）
             <span v-if="c.status === 'authorized'"> · 已登录</span>
+          </template>
+          <template v-else-if="c.provider === 'wecom'">
+            官方 wecom CLI 通道（机器人 Bot ID {{ c.app_id }}，令牌由 CLI 加密保存，不进本系统数据库）
+            <span v-if="c.status === 'authorized'"> · 已授权</span>
+            <span class="muted"> · 只能拉最近 7 天</span>
           </template>
           <template v-else>
             App ID {{ c.app_id }} · 回调 {{ c.redirect_uri }}
@@ -154,14 +170,32 @@
           <span v-if="c.auto_sync && c.auto_last_at">· 上次自动跑 {{ c.auto_last_at }}{{ c.auto_last_result ? `：${c.auto_last_result}` : '' }}</span>
         </div>
 
-        <!-- 会话列表 -->
+        <!-- 会话列表。企业微信的特殊性：官方只提供群聊的会话枚举，单聊没有列表接口 ——
+             这里给一个「按姓名搜组织成员 → 登记单聊」的选择器（contact users search，只读）。 -->
         <div v-if="open[c.id] === 'chats'" style="margin-top:10px">
-          <div class="row" style="gap:6px; align-items:center">
-            <input v-model="chatAdd[c.id]" :placeholder="c.provider === 'dingtalk' ? '手动添加会话 ID（cid 开头；单聊列不出来时可从这里补）' : '手动添加会话 ID（oc_ 开头；单聊列不出来时可从这里补）'" style="flex:1; font-size:12px" />
-            <button class="small" @click="addChat(c)">添加</button>
-          </div>
+          <template v-if="c.provider === 'wecom'">
+            <div class="row" style="gap:6px; align-items:center">
+              <input v-model="contactQ[c.id]" placeholder="按姓名搜组织成员，登记 ta 和你的单聊（回车或点搜索）" style="flex:1; font-size:12px" @keyup.enter="searchContacts(c)" />
+              <button class="small" :disabled="contactBusy === c.id" @click="searchContacts(c)">{{ contactBusy === c.id ? '搜索中…' : '搜联系人' }}</button>
+            </div>
+            <div v-for="u in contactRes[c.id] || []" :key="u.userid" class="row" style="gap:6px; align-items:center; margin-top:6px">
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">👤 {{ u.name }}<span class="muted" style="font-size:11px">（{{ u.alias || u.userid }}）</span></span>
+              <button class="small" @click="addContactChat(c, u)">登记单聊</button>
+            </div>
+            <div v-if="contactSearched[c.id] && !(contactRes[c.id] || []).length" class="muted" style="font-size:12px; margin-top:6px">
+              没搜到这个姓名的成员。
+            </div>
+          </template>
+          <template v-else>
+            <div class="row" style="gap:6px; align-items:center">
+              <input v-model="chatAdd[c.id]" :placeholder="c.provider === 'dingtalk' ? '手动添加会话 ID（cid 开头；单聊列不出来时可从这里补）' : '手动添加会话 ID（oc_ 开头；单聊列不出来时可从这里补）'" style="flex:1; font-size:12px" />
+              <button class="small" @click="addChat(c)">添加</button>
+            </div>
+          </template>
           <div v-if="!(chatList[c.id] || []).length" class="muted" style="font-size:12px; margin-top:6px">
-            还没有会话。点「同步」会先拉会话列表；若某个单聊没被列出来，手动填它的会话 ID。
+            {{ c.provider === 'wecom'
+              ? '还没有会话。点「同步」会自动发现有消息的群聊；单聊要在上面按姓名登记。'
+              : '还没有会话。点「同步」会先拉会话列表；若某个单聊没被列出来，手动填它的会话 ID。' }}
           </div>
           <div v-for="ch in chatList[c.id] || []" :key="ch.id" class="row" style="gap:6px; align-items:center; margin-top:6px">
             <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
@@ -245,6 +279,26 @@
         </div>
       </details>
 
+      <details style="margin-bottom:10px">
+        <summary style="cursor:pointer; font-size:13px">企业微信怎么准备？（第一次做的话看这里）</summary>
+        <ol class="muted" style="font-size:12.5px; line-height:1.9; padding-left:20px">
+          <li>企业微信官方文档（101750）：「智能机器人」能力在<b>企业微信管理后台 → 应用管理 → 机器人</b>里创建
+            （个人也能建小团队组织）。创建后拿到 <b>Bot ID</b>（aib 开头）和 <b>Secret</b>。</li>
+          <li>这里选「企业微信」→ 起个备注名 → 填 Bot ID 和 Secret → 添加连接器 → 点<b>「验证授权」</b>
+            （服务器会用官方 wecom CLI 把凭证灌进去，要几十秒）。</li>
+          <li>授权的是<b>机器人代你读取你自己的会话</b>（官方 CLI 通道），令牌由 CLI 加密存在服务器上，
+            不进本系统数据库；解除授权会删掉它。</li>
+        </ol>
+        <div class="muted" style="font-size:12px; line-height:1.8">
+          已知边界（都是官方硬限制，不是本工具的问题）：
+          ① <b>只对 10 人及以下的组织开放</b>——超过 10 人的企业整个聊天记录拉取能力会被官方拒绝
+          （授权本身能成功，点「验证授权」时会提前探到并提示；要归档就得在小团队组织里另建机器人）；
+          ② <b>只能拉最近 7 天</b>的消息——老历史补不了，定时同步（每天跑）可以完整积累新的；
+          ③ <b>单聊没有列表接口</b>——群聊点「同步」自动发现，单聊要在「会话」里按姓名搜联系人登记。
+          <br>归档出来的笔记标题同样是 <b>对方名称-日期时间-连接器备注名</b>（会话 ID 记在笔记抬头里）。
+        </div>
+      </details>
+
       <div class="row" style="justify-content:flex-end"><button @click="$emit('close')">关闭</button></div>
     </div>
 
@@ -288,7 +342,14 @@
             本工具是<b>串行</b>拉的、每页之间固定等 {{ confirming.p.pace_ms }}ms，尽量不碰上限；
             真被限流时该会话会带着「稍后再试」的提示落进失败列表，不会丢数据。
             <br><b>进度是按会话逐个记的</b>，被限流或中途关掉都不会丢，
-            已经拉完的下次直接跳过、没拉完的从上次的位置接着拉，既不会重头再来，也不会重复落库。
+            已经拉完的下次直接跳过、没跑完的从上次的位置接着拉，既不会重头再来，也不会重复落库。
+          </div>
+          <div v-else-if="confirming.c.provider === 'wecom'" class="muted" style="font-size:12px; line-height:1.8; margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
+            企业微信这条走官方 wecom CLI 的通道：<b>官方只允许拉最近 7 天</b>的消息
+            （上面选的范围超过 7 天也只会按 7 天拉，老历史补不了——要完整积累就开着定时同步）；
+            群聊这次会自动发现有消息的，单聊要提前在「会话」里按姓名登记。
+            <br><b>进度是按会话逐个记的</b>，中途关掉不会丢，
+            已经拉完的下次直接跳过、没跑完的从上次的位置接着拉，既不会重头再来，也不会重复落库。
           </div>
           <div v-else class="muted" style="font-size:12px; line-height:1.8; margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
             飞书官方给这几个接口的上限是 <b>1000 次/分钟 且 50 次/秒</b>（读会话列表、读会话历史消息、
@@ -345,6 +406,46 @@ const form = ref({ provider: 'feishu', label: '', app_id: '', app_secret: '', re
 const curProvider = computed(() => providers.value.find((p) => p.key === form.value.provider));
 // 钉钉走官方 CLI 设备流（扫码），新建表单里不出现应用凭证三件套
 const isDeviceAuth = computed(() => (curProvider.value || {}).auth === 'device');
+// 企业微信走官方 CLI + 智能机器人凭证（Bot ID + Secret，无回调地址）
+const isCredAuth = computed(() => (curProvider.value || {}).auth === 'credentials');
+const labelPlaceholder = computed(() => isDeviceAuth.value ? '备注名，如「公司钉钉」'
+  : (isCredAuth.value ? '备注名，如「公司企微」' : '备注名，如「公司飞书」'));
+
+// ---------- 企业微信：验证授权 + 联系人搜索（v1.10.25） ----------
+const verifying = ref(0);       // 正在跑「验证授权」的连接器 id
+const contactQ = ref({});       // id → 搜索关键词
+const contactRes = ref({});     // id → 搜索结果 [{userid,name,alias}]
+const contactSearched = ref({}); // id → 是否搜过（区分「没搜」和「搜了没结果」）
+const contactBusy = ref(0);
+async function verifyWecom(c) {
+  err.value = ''; msg.value = '';
+  verifying.value = c.id;
+  try {
+    const r = await api.postSlow(`/im/connectors/${c.id}/wecom-verify`, {});
+    msg.value = r.warning
+      ? `授权成功，但官方限制要注意：${r.warning}`
+      : '企业微信授权成功，可以点「同步」开始归档了';
+    await load();
+  } catch (e) { fail(e); } finally { verifying.value = 0; }
+}
+async function searchContacts(c) {
+  const q = (contactQ.value[c.id] || '').trim();
+  if (!q) return;
+  err.value = '';
+  contactBusy.value = c.id;
+  try {
+    contactRes.value = { ...contactRes.value, [c.id]: await api.get(`/im/connectors/${c.id}/wecom-contacts?q=${encodeURIComponent(q)}`) };
+    contactSearched.value = { ...contactSearched.value, [c.id]: true };
+  } catch (e) { fail(e); } finally { contactBusy.value = 0; }
+}
+async function addContactChat(c, u) {
+  err.value = '';
+  try {
+    chatList.value[c.id] = await api.post(`/im/connectors/${c.id}/chats`, { chat_id: u.userid, chat_name: u.name, chat_mode: 'p2p' });
+    chatCount.value[c.id] = chatList.value[c.id].length;
+    msg.value = `已登记与「${u.name}」的单聊，下次同步会拉它`;
+  } catch (e) { fail(e); }
+}
 
 // ---------- 钉钉设备流登录（v1.10.22） ----------
 // 面板状态 loginPanel[id] = { running, url, code, output, authenticated, errorText }；timer 每 2 秒打一次
@@ -450,9 +551,13 @@ onMounted(load);
 async function create() {
   err.value = ''; msg.value = '';
   const f = form.value;
-  // 钉钉：设备流扫码，不需要应用凭证；飞书：三件套齐了才让建
-  if ((curProvider.value || {}).auth === 'device') {
+  const auth = (curProvider.value || {}).auth;
+  // 钉钉：设备流扫码，不需要应用凭证；企业微信：机器人 Bot ID + Secret；飞书：三件套齐了才让建
+  if (auth === 'device') {
     if (!f.label.trim()) { err.value = '给这条钉钉连接器起个备注名（也是归档目录名）'; return; }
+  } else if (auth === 'credentials') {
+    if (!f.label.trim()) { err.value = '给这条企业微信连接器起个备注名（也是归档目录名）'; return; }
+    if (!f.app_id || !f.app_secret) { err.value = '机器人的 Bot ID 和 Secret 都要填'; return; }
   } else if (!f.app_id || !f.app_secret) {
     err.value = 'App ID 和 App Secret 都要填';
     return;
@@ -460,9 +565,11 @@ async function create() {
   try {
     await api.post('/im/connectors', { ...f });
     form.value = { ...form.value, label: '', app_id: '', app_secret: '' };
-    msg.value = (curProvider.value || {}).auth === 'device'
+    msg.value = auth === 'device'
       ? '连接器已添加，点「扫码登录钉钉」完成授权'
-      : '连接器已添加，点「去授权」完成授权';
+      : (auth === 'credentials'
+        ? '连接器已添加，点「验证授权」完成授权（要几十秒）'
+        : '连接器已添加，点「去授权」完成授权');
     await load();
   } catch (e) { fail(e); }
 }
