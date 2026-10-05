@@ -329,11 +329,14 @@ onImported(() => {
       const r = imService.migrateImFolders(d);
       if (r.moved || r.removed) console.log(`[im] 落地文件夹迁移(${username})：搬到连接器目录 ${r.moved} 篇，清掉空目录 ${r.removed} 个`);
     } catch (e) { console.warn(`[im] 落地文件夹迁移跳过(${username}):`, e.message); }
-    // 归档笔记规整（v1.10.18）：补平台标签（#飞书）+ 按各连接器的 note_order 把正文排成倒序。
-    // 同样幂等：规整过之后再跑，tagged / reordered 都是 0。
+    // 归档笔记规整（v1.10.18）：补平台标签（#飞书）+ 按各连接器的 note_order 把正文排成倒序
+    // + 把抬头换成当前口径（老抬头少了 `- 标签：#飞书`，末行说明还写着「追加在下面」）。
+    // 同样幂等：规整过之后再跑，tagged / reordered / headered 都是 0。
     try {
       const r = imService.normalizeImNotes(d);
-      if (r.tagged || r.reordered) console.log(`[im] 归档笔记规整(${username})：补标签 ${r.tagged} 篇，重排 ${r.reordered} 篇`);
+      if (r.tagged || r.reordered || r.headered) {
+        console.log(`[im] 归档笔记规整(${username})：补标签 ${r.tagged} 篇，重排 ${r.reordered} 篇，刷新抬头 ${r.headered} 篇`);
+      }
     } catch (e) { console.warn(`[im] 归档笔记规整跳过(${username}):`, e.message); }
   });
   scheduler.init();

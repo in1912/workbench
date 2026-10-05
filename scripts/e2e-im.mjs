@@ -431,12 +431,30 @@ d.prepare("INSERT INTO note_tags(note_id,tag,source) VALUES(?,'重要','manual')
 // 乙群那篇模拟「词频自动标签早就加过一个 飞书」的老状态：规整要把它**升级成手动标签**，
 // 否则它会被下一次正文改动整批换掉（自动标签是随正文重算的）。
 d.prepare("INSERT INTO note_tags(note_id,tag,source) VALUES(?,'飞书','auto')").run(nb);
+// 用户把某篇整个重写过：抬头第一行是标题、但**没有**「- 会话 ID：」那一行 →
+// 认不出是我们写的抬头，那就一个字节都不许动（规整只能碰我们自己写的块）。
+var nu = lastId(d.prepare('INSERT INTO notes(title,content,folder_id) VALUES(?,?,?)')
+  .run('用户重写的', '# 我的标题\\n\\n## 2026-10-04 09:00 同步（新增 1 条）\\n\\n- **2026-10-04 09:00｜对方**：a\\n', feishu));
+d.prepare('INSERT INTO im_chats(connector_id,chat_id,chat_name,note_id) VALUES(?,?,?,?)').run(ca, 'oc_u', '用户重写的', nu);
+var nuBefore = String(d.prepare('SELECT content FROM notes WHERE id=?').get(nu).content);
+// 另一篇：抬头是**我们写的**（有「- 会话 ID：」），但用户在标题底下自己插了一行行内标签
+// （井号后面没有空格，所以不算我们写的标题行）。刷抬头只能换我们那几行，这行必须原样留着。
+var nv = lastId(d.prepare('INSERT INTO notes(title,content,folder_id) VALUES(?,?,?)')
+  .run('带用户加的行', '# 戊群\\n#公司\\n\\n- 来源：飞书\\n- 会话 ID：\`oc_v\`\\n\\n'
+    + '> 本笔记由工作台「IM 连接」按官方授权自动归档，每次同步把新消息追加在下面。\\n\\n'
+    + '## 2026-10-04 09:00 同步（新增 1 条）\\n\\n- **2026-10-04 09:00｜对方**：a\\n', feishu));
+d.prepare('INSERT INTO im_chats(connector_id,chat_id,chat_name,note_id) VALUES(?,?,?,?)').run(ca, 'oc_v', '戊群', nv);
 var updBefore = d.prepare('SELECT updated_at FROM notes WHERE id=?').get(na).updated_at;
 var n1 = im.normalizeImNotes(d);
 var tagsOf = function (nid) {
   return d.prepare('SELECT tag FROM note_tags WHERE note_id=? ORDER BY tag').all(nid).map(function (r) { return r.tag; });
 };
 var naContent = String(d.prepare('SELECT content FROM notes WHERE id=?').get(na).content);
+// 只有段（不含抬头）参与比对：这次连抬头都要换，拿整篇比就分不清「该改的抬头」和「不该动的段」
+var secsOnly = function (s) {
+  return im.splitImSections(s).sections.map(function (x) { return x.join('\\n').replace(/\\s+$/, ''); });
+};
+var naWant = im.orderImNoteContent(HEAD + '\\n\\n' + B1 + '\\n\\n' + B2 + '\\n', true);
 var n2 = im.normalizeImNotes(d);
 console.log('__TAGS__' + JSON.stringify({
   first: n1,
@@ -445,10 +463,17 @@ console.log('__TAGS__' + JSON.stringify({
   nbTags: tagsOf(nb),
   nbSources: d.prepare('SELECT tag,source FROM note_tags WHERE note_id=? ORDER BY tag').all(nb),
   keptTags: tagsOf(keptNote),
+  nuTags: tagsOf(nu),
   naTop: (naContent.match(/^- \\*\\*(\\S+ \\S+)｜/m) || [])[1],
   naHead: naContent.split('\\n')[0],
-  naLossless: im.sameLineBag(naContent, HEAD + '\\n\\n' + B1 + '\\n\\n' + B2 + '\\n'),
+  naHeader: im.splitImSections(naContent).head.join('\\n').replace(/\\s+$/, ''),
+  naHeaderWant: im.imHeaderBlock(connRow(ca), { chat_id: 'oc_a', chat_name: '甲群', chat_mode: '' }, true, '飞书'),
+  naMsgs: (naContent.match(/^- \\*\\*/gm) || []).length,
+  naSecsKept: JSON.stringify(secsOnly(naContent)) === JSON.stringify(secsOnly(naWant)),
+  nvHead: im.splitImSections(String(d.prepare('SELECT content FROM notes WHERE id=?').get(nv).content)).head,
+  nvTags: tagsOf(nv),
   nbUntouched: String(d.prepare('SELECT content FROM notes WHERE id=?').get(nb).content) === 'body',
+  nuUntouched: String(d.prepare('SELECT content FROM notes WHERE id=?').get(nu).content) === nuBefore,
   keptUntouched: String(d.prepare('SELECT content FROM notes WHERE id=?').get(keptNote).content) === 'x',
   updKept: d.prepare('SELECT updated_at FROM notes WHERE id=?').get(na).updated_at === updBefore,
 }));
@@ -532,8 +557,8 @@ console.log('__TAGS__' + JSON.stringify({
 
     // ★ 标签 + 启动规整走真库（im_chats.note_id → 笔记）
     const tg = pick('__TAGS__');
-    s.ck('★ 规整给已归档的笔记补上 #飞书（两篇都补到）',
-      tg.first.tagged === 2, JSON.stringify(tg.first));
+    s.ck('★ 规整给已归档的笔记补上 #飞书（im_chats 认得的 4 篇都补到）',
+      tg.first.tagged === 4, JSON.stringify(tg.first));
     s.ck('★ 老笔记的正文被翻成倒序（只翻那篇要翻的）', tg.first.reordered === 1, JSON.stringify(tg.first));
     s.ck('★ 补标签**不会冲掉**用户自己打的标签（#重要 还在）',
       JSON.stringify(tg.naTags) === JSON.stringify(['重要', '飞书']), JSON.stringify(tg.naTags));
@@ -543,12 +568,31 @@ console.log('__TAGS__' + JSON.stringify({
     s.ck('★ 规整只碰 im_chats 认得的笔记：用户手放进目录的笔记一个标签都不加',
       tg.keptTags.length === 0 && tg.keptUntouched === true, JSON.stringify(tg.keptTags));
     s.ck('规整后那篇的正文是倒序的（第一条是 20:12）', tg.naTop === '2026-10-05 20:12', String(tg.naTop));
-    s.ck('规整后抬头还在最上面', tg.naHead === '# 张三', String(tg.naHead));
-    s.ck('规整只换顺序、内容一行不丢', tg.naLossless === true, String(tg.naLossless));
+    s.ck('★ 存量笔记的抬头被换成当前口径（标题回到会话名，不再是老标题）',
+      tg.naHead === '# 甲群', String(tg.naHead));
+    s.ck('★★ 抬头就是 `imHeaderBlock` 现在写的那份（同步新写 / 规整老笔记**共用同一个定义**）',
+      tg.naHeader === tg.naHeaderWant, `实际=${JSON.stringify(String(tg.naHeader).slice(0, 200))}`);
+    s.ck('★ 换过的抬头里有「- 标签：#飞书」，旧版那句「每次同步把新消息追加在下面」已消失',
+      /- 标签：#飞书/.test(tg.naHeader) && !/追加在下面/.test(tg.naHeader)
+      && /新消息排在最上面/.test(tg.naHeader), JSON.stringify(String(tg.naHeader).slice(-120)));
+    s.ck('★ 只刷抬头：同步段逐字没变、4 条消息一条不少',
+      tg.naSecsKept === true && tg.naMsgs === 4, `段相同=${tg.naSecsKept} 消息数=${tg.naMsgs}`);
+    s.ck('★ 抬头刷新只碰「我们写的」那几篇（na + nv 两篇）', tg.first.headered === 2, JSON.stringify(tg.first));
+    // 抬头里用户自己插的行（`#公司`，`#` 后没空格 → 不是我们写的标题）绝不能被整块重建冲掉。
+    // 冲掉的下场不只是少一行：标签会从「行内」掉成「词频自动」，下次改正文就被整批重算掉。
+    s.ck('★★ 抬头里用户自己加的行原样留着（`#公司` 还在，且仍挨着标题）',
+      tg.nvHead[1] === '#公司', JSON.stringify(tg.nvHead));
+    s.ck('★ 那篇的抬头也补上了标签行 / 换掉了旧说明',
+      tg.nvHead.includes('- 标签：#飞书') && tg.nvHead.some((l) => /新消息排在最上面/.test(l))
+      && !tg.nvHead.some((l) => /追加在下面/.test(l)), JSON.stringify(tg.nvHead));
+    s.ck('★ 用户整篇重写过的笔记（抬头里没有「- 会话 ID：」）正文一个字节都没动',
+      tg.nuUntouched === true, String(tg.nuUntouched));
+    s.ck('★ 但它的平台标签照样补上（标签看的是「这篇是哪个平台归档来的」，与正文归谁写无关）',
+      JSON.stringify(tg.nuTags) === JSON.stringify(['飞书']), JSON.stringify(tg.nuTags));
     s.ck('★ 规整**不碰 updated_at**（否则每次重启所有 IM 笔记都会涌到文件夹最前面）',
       tg.updKept === true, String(tg.updKept));
-    s.ck('★ 再规整一遍：0 补标签 0 重排（重启不会反复折腾）',
-      tg.second.tagged === 0 && tg.second.reordered === 0, JSON.stringify(tg.second));
+    s.ck('★ 再规整一遍：0 补标签 0 重排 0 刷抬头（重启不会反复折腾）',
+      tg.second.tagged === 0 && tg.second.reordered === 0 && tg.second.headered === 0, JSON.stringify(tg.second));
   } catch (e) {
     s.ck('纯函数 / 迁移用例未抛异常', false, String(e && e.message));
   } finally {

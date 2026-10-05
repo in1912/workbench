@@ -612,6 +612,12 @@ function joinImSections(head, sections) {
   return body ? `${h}\n\n${body}\n` : `${h}\n`;
 }
 
+/** 把段列表排成 desc（新在前）/ asc（新在后）。段之间比段标题那行，段内交给 sortSectionLines。 */
+function orderedSections(sections, desc) {
+  const asc = sections.slice().sort((a, b) => cmpStr(a[0], b[0]));
+  return (desc ? asc.slice().reverse() : asc).map((s) => sortSectionLines(s, desc));
+}
+
 /** 段内按时间戳排。认不出时间戳的行（理论上是段里我们自己写的说明行）保持原相对次序、沉到最后。 */
 function sortSectionLines(sec, desc) {
   const headLine = sec[0];
@@ -628,10 +634,66 @@ function orderImNoteContent(content, desc) {
   const text = String(content || '');
   const { head, sections } = splitImSections(text);
   if (!sections.length) return text;
-  const asc = sections.slice().sort((a, b) => cmpStr(a[0], b[0]));
-  const list = (desc ? asc.slice().reverse() : asc).map((s) => sortSectionLines(s, desc));
-  const out = joinImSections(head, list);
+  const out = joinImSections(head, orderedSections(sections, desc));
   return sameLineBag(text, out) ? out : text;
+}
+
+/**
+ * 归档笔记的抬头（唯一定义处）。**同步新写一篇**和**规整老笔记**必须用同一个 ——
+ * 否则两边各写一份，改了一处忘了另一处，老笔记的抬头就永远停在旧口径上
+ * （v1.10.15 那个「保存侧与读取侧两个正则」的教训是同一类）。
+ */
+function imHeaderBlock(conn, chat, desc, tag) {
+  const p = PROVIDERS[(conn && conn.provider) || ''] || {};
+  const t = String(tag || '').trim();
+  return [
+    `# ${chat.chat_name || chat.chat_id}`,
+    '',
+    `- 来源：${p.name || conn.provider}${conn.user_name ? '（' + conn.user_name + '）' : ''}`,
+    `- 授权企业：${conn.tenant_key || conn.label || '未知'}`,
+    `- 会话类型：${chat.chat_mode === 'p2p' ? '单聊' : (chat.chat_mode || '未知')}`,
+    `- 会话 ID：\`${chat.chat_id}\``,
+    ...(t ? [`- 标签：#${t}`] : []),
+    '',
+    desc
+      ? '> 本笔记由工作台「IM 连接」按官方授权自动归档，**新消息排在最上面**，越往下越早。'
+      : '> 本笔记由工作台「IM 连接」按官方授权自动归档，每次同步把新消息追加在下面。',
+  ].join('\n');
+}
+
+/** 抬头里「我们写的」那几种行：`# 标题`、`- 来源/授权企业/会话类型/会话 ID/标签：`、`> 说明`、空行。
+ *  注意 `# 标题` 要求 `#` 后有空格 —— 用户自己插的 `#公司` 这种行内标签**不算我们的**，得原样留着。 */
+function isOursHeadLine(line) {
+  const s = String(line || '').trim();
+  if (s === '') return true;
+  return /^#\s/.test(s) || /^-\s*(来源|授权企业|会话类型|会话 ID|标签)：/.test(s) || /^>/.test(s);
+}
+
+/**
+ * 换掉归档笔记的抬头（同步段原样保留）。
+ *
+ * 老笔记的抬头是旧版写的：少了 `- 标签：#飞书` 那一行，末行的说明还写着
+ * 「每次同步把新消息追加在下面」—— 改成倒序之后这句话就是错的了。
+ *
+ * 只动**我们自己写的那块抬头**：得先认出它（第一行是 `# 标题`、抬头里有 `- 会话 ID：`），
+ * 认不出来（用户把这篇整个重写过）就整篇不碰。段是**原样传进 joinImSections 的**，
+ * 所以不存在丢行的可能，不需要再比一次行集合。
+ *
+ * 抬头里**用户自己加的行**（例如紧跟标题的 `#公司` 行内标签）也原样留着 —— 只换我们那几行，
+ * 位置也保留（挨着标题那几行还在挨着标题）。重建抬头时整块丢掉是最容易犯的错：
+ * 那行 `#公司` 一丢，笔记的标签就从「行内」掉成「词频自动」，下次改动正文就被整批重算掉了。
+ */
+function refreshImHeader(content, headerText) {
+  const text = String(content || '');
+  const want = String(headerText || '').replace(/\s+$/, '');
+  const { head, sections } = splitImSections(text);
+  const ours = sections.length > 0 && !!want && head.length > 0
+    && /^#\s+\S/.test(head[0]) && head.some((l) => /^- 会话 ID：/.test(l));
+  if (!ours) return { content: text, changed: false, ours: false };
+  const extra = head.filter((l) => l.trim() !== '' && !isOursHeadLine(l));
+  const wantLines = want.split('\n');
+  const out = joinImSections([wantLines[0], ...extra, ...wantLines.slice(1)], sections);
+  return { content: out, changed: out !== text, ours: true };
 }
 
 /** 把一个新的同步段并进正文：desc 排在最上面，否则接在最下面。
@@ -687,6 +749,10 @@ function upsertImNote(tdb, { noteId, folderId, title, block, headerBlock, desc =
     if (cur) {
       let content = mergeImBlock(String(cur.content || ''), block, desc);
       content = orderImNoteContent(content, desc);   // 顺手把老段也规整成同一方向
+      // 抬头也顺手刷成当前口径（改方向、补平台标签都会让老抬头过时）。
+      // 认不出是我们写的抬头（用户整篇重写过）就一分不碰。
+      const rf = refreshImHeader(content, headerBlock);
+      if (rf.changed) content = rf.content;
       tdb.prepare(`UPDATE notes SET title=?,content=?,folder_id=?,word_count=?,updated_at=datetime('now','localtime') WHERE id=?`)
         .run(title, content, folderId, noteService.extractWordCount(content), Number(noteId));
       noteService.syncNoteLinks(tdb, Number(noteId), content);
@@ -971,19 +1037,7 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
       // 统一排 —— 段内和段外共用同一套规则，不会一处倒一处不倒。
       const desc = noteOrderDesc(conn);
       const tag = platformTagOf(conn);
-      const header = [
-        `# ${chat.chat_name || chat.chat_id}`,
-        '',
-        `- 来源：${(PROVIDERS[conn.provider] || {}).name || conn.provider}${conn.user_name ? '（' + conn.user_name + '）' : ''}`,
-        `- 授权企业：${conn.tenant_key || conn.label || '未知'}`,
-        `- 会话类型：${chat.chat_mode === 'p2p' ? '单聊' : (chat.chat_mode || '未知')}`,
-        `- 会话 ID：\`${chat.chat_id}\``,
-        `- 标签：#${tag}`,
-        '',
-        desc
-          ? '> 本笔记由工作台「IM 连接」按官方授权自动归档，**新消息排在最上面**，越往下越早。'
-          : '> 本笔记由工作台「IM 连接」按官方授权自动归档，每次同步把新消息追加在下面。',
-      ].join('\n');
+      const header = imHeaderBlock(conn, chat, desc, tag);
 
       const noteId = upsertImNote(tdb, {
         noteId: chat.note_id ? Number(chat.note_id) : null,
@@ -1060,14 +1114,16 @@ function migrateImFolders(tdb) {
  * 一次性规整（v1.10.18，**幂等**）：服务启动时逐租户跑一遍；某条连接器改了排版方向时也会单独调它。
  *
  *  ① 给已归档的笔记补上平台标签（#飞书 / #钉钉 / #企业微信）—— 老笔记建于这一版之前，标签要补；
- *  ② 按每条连接器的 note_order 把正文排成倒序（老笔记是「新消息追加在下面」，用户要反过来）。
+ *  ② 按每条连接器的 note_order 把正文排成倒序（老笔记是「新消息追加在下面」，用户要反过来）；
+ *  ③ 把抬头换成 `imHeaderBlock` 现在写的那份 —— 老抬头少了 `- 标签：#飞书`，末行的说明
+ *     还写着「每次同步把新消息追加在下面」，倒序之后这句话就是错的。
  *
  * 归属只认 `im_chats.note_id`（库里本来就有的权威关系），**不按目录扫** —— 连接器目录里可能有
- * 用户自己建的笔记，那不是该动的东西。重排**不碰 updated_at**：否则每重启一次，所有 IM 笔记
+ * 用户自己建的笔记，那不是该动的东西。规整**不碰 updated_at**：否则每重启一次，所有 IM 笔记
  * 都会一起涌到文件夹最前面，把「最近改过」这个信号毁掉。
  */
 function normalizeImNotes(tdb, onlyConnectorId = null) {
-  let tagged = 0, reordered = 0;
+  let tagged = 0, reordered = 0, headered = 0;
   const conns = onlyConnectorId == null
     ? tdb.prepare('SELECT * FROM im_connectors ORDER BY id').all()
     : tdb.prepare('SELECT * FROM im_connectors WHERE id=?').all(Number(onlyConnectorId));
@@ -1080,17 +1136,20 @@ function normalizeImNotes(tdb, onlyConnectorId = null) {
   for (const conn of conns) {
     const desc = noteOrderDesc(conn);
     const tag = platformTagOf(conn);
-    const rows = tdb.prepare('SELECT note_id FROM im_chats WHERE connector_id=? AND note_id IS NOT NULL').all(Number(conn.id));
+    const rows = tdb.prepare('SELECT id,note_id,chat_id,chat_name,chat_mode FROM im_chats WHERE connector_id=? AND note_id IS NOT NULL').all(Number(conn.id));
     for (const r of rows) {
       const n = tdb.prepare('SELECT id,content FROM notes WHERE id=?').get(Number(r.note_id));
       if (!n) continue;
       const before = String(n.content || '');
-      const after = orderImNoteContent(before, desc);
-      if (after !== before) { upd.run(after, noteService.extractWordCount(after), Number(n.id)); reordered++; }
+      let after = orderImNoteContent(before, desc);
+      if (after !== before) reordered++;
+      const rf = refreshImHeader(after, imHeaderBlock(conn, r, desc, tag));
+      if (rf.changed) { after = rf.content; headered++; }
+      if (after !== before) upd.run(after, noteService.extractWordCount(after), Number(n.id));
       if (tag && !hasTag.get(Number(n.id), tag)) { applyImTags(tdb, Number(n.id), after, tag); tagged++; }
     }
   }
-  return { tagged, reordered };
+  return { tagged, reordered, headered };
 }
 
 module.exports = {
@@ -1101,5 +1160,6 @@ module.exports = {
   publicConnector, chatTitle,
   connectorFolderId, folderNameFor, migrateImFolders, moveConnectorNotes, normalizeImNotes,
   platformTagOf, noteOrderDesc, splitImSections, orderImNoteContent, mergeImBlock, sameLineBag,
+  imHeaderBlock, refreshImHeader,
   autoSyncSlot, autoSyncDue, cstStamp, lockSync, unlockSync,
 };
