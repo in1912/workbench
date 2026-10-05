@@ -9,6 +9,9 @@
         不抓包、不模拟客户端、不爬取。随时可以在这里解除授权。
         <br>同一个平台可以授权多次（比如两家不同企业的飞书，就建两条连接器）。
         每条连接器都能单独设一个<b>定时同步</b>（每天/每周、几点、拉多大范围）。
+        <br>归档笔记里<b>新消息排在最上面</b>（越往下越早，不用翻到最底下去看新的），
+        并且自动带上所在平台的标签（飞书 → <code>#飞书</code>、钉钉 → <code>#钉钉</code>、
+        企业微信 → <code>#企业微信</code>）。排序方向下面每条连接器都能单独关掉。
       </div>
       <div v-if="err" class="msg err">{{ err }}</div>
       <div v-if="msg" class="msg ok">{{ msg }}</div>
@@ -67,6 +70,18 @@
         <div class="muted" style="font-size:11.5px; margin-top:6px">
           App ID {{ c.app_id }} · 回调 {{ c.redirect_uri }}
           <span v-if="c.expires_at_ms"> · 令牌有效到 {{ fmtMs(c.expires_at_ms) }}</span>
+        </div>
+
+        <!-- 归档正文的排版方向（v1.10.18）：IM 笔记是「一会话一篇、越同步越长」，
+             默认让新消息排在最上面，打开笔记第一眼就是最新的，不用滚到底。
+             改一下立刻把这批笔记重排一遍（服务端 updateConnector 里直接调 normalizeImNotes），
+             不用等下一次同步。 -->
+        <div class="ord">
+          <label class="chk">
+            <input type="checkbox" style="width:auto" :checked="c.note_order !== 'asc'"
+                   @change="save(c, { note_order: $event.target.checked ? 'desc' : 'asc' })" />
+            <span>笔记里新消息排在最上面（倒序；关掉就还是追加在下面）</span>
+          </label>
         </div>
 
         <!-- 定时同步（v1.10.14，需求③）：**每条连接器各设各的** —— 两家飞书的时点、
@@ -432,4 +447,11 @@ async function del(c) {
 .sched .chk input { width: auto; padding: 0; }
 /* 关着的时候只把控件稍微压暗，**不是藏起来** —— 用户要先看得见才能设 */
 .sched.off select, .sched.off input[type="time"] { opacity: .62; }
+/* 「新消息排在最上面」那一行（v1.10.18）。跟上面同一个坑：checkbox 必须写死 width:auto */
+.ord { margin-top: 8px; }
+.ord .chk {
+  display: flex; align-items: center; gap: 5px; font-size: 12.5px;
+  cursor: pointer;
+}
+.ord .chk input { width: auto; padding: 0; }
 </style>

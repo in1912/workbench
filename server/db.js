@@ -781,6 +781,9 @@ CREATE TABLE IF NOT EXISTS im_connectors (
   auto_days INTEGER DEFAULT 30,              -- 每次拉取的范围（天）；只对「还没有游标」的会话生效
   auto_last_at TEXT DEFAULT '',              -- 上次自动跑的时刻（北京时间）
   auto_last_result TEXT DEFAULT '',          -- 上次自动跑的结果（一句话，直接显示在界面上）
+  -- 归档笔记正文里的排序（v1.10.18）：desc = 新消息排在最上面（默认），asc = 老版的「追加在下面」。
+  -- 存的是**排版方向**不是「拉取方向」：消息永远是按时间正序从飞书拉回来的，只是落进笔记时怎么摆。
+  note_order TEXT DEFAULT 'desc',
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 -- 一次授权 → 一个会话 → 一篇笔记（增量追加）。会话级游标 last_msg_time 保证重复同步不重复落库。
@@ -850,6 +853,9 @@ function applyColumnMigrations(d) {
   addCol(d, 'im_connectors', 'auto_days', 'INTEGER DEFAULT 30');
   addCol(d, 'im_connectors', 'auto_last_at', "TEXT DEFAULT ''");
   addCol(d, 'im_connectors', 'auto_last_result', "TEXT DEFAULT ''");
+  // 归档正文排版（v1.10.18）：老库补列后一律落到 'desc'（新消息在最上面），
+  // 已经存在的笔记由 imService.normalizeImNotes 在启动时规整一次。
+  addCol(d, 'im_connectors', 'note_order', "TEXT DEFAULT 'desc'");
   addCol(d, 'business_systems', 'username', "TEXT DEFAULT ''");
   addCol(d, 'business_systems', 'password', "TEXT DEFAULT ''");
   addCol(d, 'emails', 'body', "TEXT DEFAULT ''");

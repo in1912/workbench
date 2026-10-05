@@ -51,17 +51,19 @@ const FEISHU_SCOPES = [
 
 // 平台清单。ready=false 的两家**不是**漏做，是官方通道现阶段拿不到个人聊天记录，
 // 界面上要说清楚原因，不能让用户以为是没开发完。
+// tag 是归档笔记自动挂上的平台标签（#飞书 / #钉钉 / #企业微信），**单独一个字段**而不是复用 name：
+// 标签是写进库里的事实，name 只是界面文案 —— 哪天想把 name 改成「飞书（Lark）」，标签不该跟着变。
 const PROVIDERS = {
   feishu: {
-    key: 'feishu', name: '飞书', folder: '飞书', ready: true,
+    key: 'feishu', name: '飞书', folder: '飞书', tag: '飞书', ready: true,
     hint: '自建应用 + 用户在浏览器里点一次授权。可授权多个企业（多家飞书各建一条连接器）。',
   },
   dingtalk: {
-    key: 'dingtalk', name: '钉钉', folder: '钉钉', ready: false,
+    key: 'dingtalk', name: '钉钉', folder: '钉钉', tag: '钉钉', ready: false,
     hint: '暂未实现。钉钉的 IM 接口只对「企业内部应用/第三方企业应用」开放，用户身份读消息目前只有官方 CLI（dws，共创阶段）且需主管理员在开放平台开启「CLI 访问个人数据」，不是一条稳定的公开通道。',
   },
   wecom: {
-    key: 'wecom', name: '企业微信', folder: '企业微信', ready: false,
+    key: 'wecom', name: '企业微信', folder: '企业微信', tag: '企业微信', ready: false,
     hint: '暂未实现。企业微信成员身份只能发不能读；读全量必须走企业级「会话内容存档」（要企业认证 + 管理员开通 + 成员告知 + 按账号付费），不属于个人授权范畴。',
   },
 };
@@ -168,13 +170,22 @@ function updateConnector(tdb, id, b = {}) {
   const autoDays = b.auto_days === undefined
     ? Math.min(3650, Math.max(1, Number(cur.auto_days) || 30))
     : Math.min(3650, Math.max(1, Number(b.auto_days) || 30));
+  // 归档正文排版（v1.10.18）。显式白名单：库里存了别的值（手改过库 / 老版本）一律当 desc 处理，
+  // 免得一个拼错的串被存进去之后，前端那个「新消息在最上面」的勾选框显示的和实际行为对不上。
+  const noteOrder = b.note_order === undefined
+    ? (String(cur.note_order || 'desc') === 'asc' ? 'asc' : 'desc')
+    : (String(b.note_order) === 'asc' ? 'asc' : 'desc');
 
   tdb.prepare(
     `UPDATE im_connectors SET label=?,app_id=?,app_secret=?,redirect_uri=?,
-       auto_sync=?,auto_freq=?,auto_time=?,auto_weekday=?,auto_days=?,
+       auto_sync=?,auto_freq=?,auto_time=?,auto_weekday=?,auto_days=?,note_order=?,
        ${changedApp ? "access_token='',refresh_token='',expires_at='',status='new',tenant_key='',user_open_id='',user_name=''," : ''}
        last_error='' WHERE id=?`
-  ).run(label, appId, secret, redirect, autoSync, autoFreq, autoTime, autoWeekday, autoDays, Number(id));
+  ).run(label, appId, secret, redirect, autoSync, autoFreq, autoTime, autoWeekday, autoDays, noteOrder, Number(id));
+  // 改了排版方向 → 立刻把这批笔记规整一遍，用户不用等下一次同步才看到效果
+  if (noteOrder !== String(cur.note_order || 'desc')) {
+    try { normalizeImNotes(tdb, Number(id)); } catch { /* 规整失败不影响保存 */ }
+  }
   const fresh = getConnector(tdb, id);
   // 备注名是目录名的来源 → 改名后目录跟着改名（只 UPDATE 名字，目录 id 不变，
   // 所以里面笔记的归属不受影响；还没建过目录的等首次同步时用新名字建）。
@@ -552,20 +563,141 @@ function syncConnectorFolderName(tdb, conn) {
   return name;
 }
 
-function upsertImNote(tdb, { noteId, folderId, title, appendBlock, headerBlock }) {
+// ---------- 归档正文的排版（v1.10.18）----------
+// 用户 2026-10-05 的原话：「希望拉取的内容时间按倒序显示，最新的内容在最上面，从上往下按时间线看
+// 更老的记录，这样才不用翻到最底下看新内容。」
+//
+// 正文结构 = **抬头**（我们自己生成的那几行）+ 若干**同步段**。每个同步段的标题长得像
+// `## 2026-10-05 20:12 同步（新增 2 条）`，段内每行长得像 `- **20:12｜我**：...`。
+// 两种行都带 `YYYY-MM-DD HH:MM` 前缀，而**这个前缀的字典序就是时间序**（定宽、零填充），
+// 所以「按时间排」= 直接比字符串，不用解析日期、也不用管时区。
+//
+// 为什么按时间戳重排、而不是「把数组反过来」：反过来只对一次有效 —— 同一篇笔记被规整两遍
+// 就会把顺序又倒回去。按时间戳排是**幂等**的，跑多少遍结果都一样，切换排序方向也只是换个方向排。
+//
+// 唯一的安全网：重排前后「非空行的多重集」必须一模一样（一行不多、一行不少）。
+// 对不上就把原文原样返回 —— 聊天正文里万一有一行恰好长成段标题的样子，最坏也只是这篇不重排。
+const SYNC_HEAD_RE = /^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) 同步（新增 \d+ 条）$/;
+const MSG_LINE_RE = /^- \*\*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})｜/;
+const TS_OF = (line) => {
+  const m = MSG_LINE_RE.exec(line);
+  return m ? m[1] : '';
+};
+const cmpStr = (a, b) => (a < b ? -1 : (a > b ? 1 : 0));
+
+/** 拆成 { head: 抬头行[], sections: 同步段[][] }（每段含它自己的标题行）。 */
+function splitImSections(content) {
+  const lines = String(content || '').split('\n');
+  const marks = [];
+  for (let i = 0; i < lines.length; i++) if (SYNC_HEAD_RE.test(lines[i])) marks.push(i);
+  if (!marks.length) return { head: lines, sections: [] };
+  const head = lines.slice(0, marks[0]);
+  const sections = marks.map((start, k) => lines.slice(start, k + 1 < marks.length ? marks[k + 1] : lines.length));
+  return { head, sections };
+}
+
+/** 非空行的多重集（去空白、排序）。用来证明重排没丢行、没造行。 */
+function lineBag(s) {
+  return String(s || '').split('\n').map((x) => x.trim()).filter(Boolean).sort();
+}
+function sameLineBag(a, b) {
+  const x = lineBag(a), y = lineBag(b);
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+/** 抬头 + 各段拼回正文（段间空一行，末尾补一个换行）。 */
+function joinImSections(head, sections) {
+  const h = head.join('\n').replace(/\s+$/, '');
+  const body = sections.map((s) => s.join('\n').replace(/\s+$/, '')).filter(Boolean).join('\n\n');
+  return body ? `${h}\n\n${body}\n` : `${h}\n`;
+}
+
+/** 段内按时间戳排。认不出时间戳的行（理论上是段里我们自己写的说明行）保持原相对次序、沉到最后。 */
+function sortSectionLines(sec, desc) {
+  const headLine = sec[0];
+  const bullets = sec.slice(1).filter((l) => l.trim() !== '');
+  const stamped = bullets.filter((l) => MSG_LINE_RE.test(l));
+  const other = bullets.filter((l) => !MSG_LINE_RE.test(l));
+  stamped.sort((a, b) => cmpStr(TS_OF(a), TS_OF(b)));   // 同分钟靠 Array.sort 的稳定性保持原有先后
+  if (desc) stamped.reverse();
+  return [headLine, '', ...stamped, ...other];
+}
+
+/** 把整篇正文规整成 desc（新在上）/ asc（新在下）。没有同步段就原样返回；自检不过也原样返回。 */
+function orderImNoteContent(content, desc) {
+  const text = String(content || '');
+  const { head, sections } = splitImSections(text);
+  if (!sections.length) return text;
+  const asc = sections.slice().sort((a, b) => cmpStr(a[0], b[0]));
+  const list = (desc ? asc.slice().reverse() : asc).map((s) => sortSectionLines(s, desc));
+  const out = joinImSections(head, list);
+  return sameLineBag(text, out) ? out : text;
+}
+
+/** 把一个新的同步段并进正文：desc 排在最上面，否则接在最下面。
+ *  自检拿「老实追加」（老正文 + 新段）当基准 —— 它是这次操作的**全集**，比对它就等于
+ *  「新段进了正文，且老正文一行没动」。对不上就退回老实追加，绝不冒丢正文的险。 */
+function mergeImBlock(content, block, desc) {
+  const text = String(content || '');
+  const sec = String(block || '').trim();
+  if (!sec) return text;
+  const plainAppend = `${text.replace(/\s+$/, '')}\n\n${sec}\n`;
+  try {
+    const { head, sections } = splitImSections(text);
+    const list = desc ? [sec.split('\n'), ...sections] : [...sections, sec.split('\n')];
+    const out = joinImSections(head, list);
+    return sameLineBag(out, plainAppend) ? out : plainAppend;
+  } catch {
+    return plainAppend;
+  }
+}
+
+/** 归档笔记自动挂的平台标签（#飞书 / #钉钉 / #企业微信）。 */
+function platformTagOf(conn) {
+  const p = PROVIDERS[(conn && conn.provider) || ''] || {};
+  return String(p.tag || p.name || '').trim();
+}
+
+/** 这条连接器的正文排版方向：**只有显式存了 'asc' 才正序**，其余（含老库补列后的空值）一律倒序。 */
+function noteOrderDesc(conn) {
+  return String((conn && conn.note_order) || 'desc') !== 'asc';
+}
+
+/**
+ * 把平台标签钉在归档笔记上。
+ *
+ * 走 **manual** 那一档（不是把 `#飞书` 写进正文当行内标签）有两个原因：
+ *  ① 正文是用户的聊天记录，不该被我们塞进一行我们的标记；
+ *  ② manual 标签在 syncNoteTags 里是「先来的占住」，不会被正文重算冲掉。
+ * 关键是**先读回库里已有的 manual 标签再并上平台标签** —— 直接传 [tag] 会把用户
+ * 自己在这篇笔记上打的标签全冲掉（syncNoteTags 收到显式数组就等于「手动标签就这些」）。
+ */
+function applyImTags(tdb, noteId, content, tag) {
+  const t = String(tag || '').trim();
+  if (!t) return;
+  const id = Number(noteId);
+  const manual = tdb.prepare("SELECT tag FROM note_tags WHERE note_id=? AND source='manual'").all(id).map((r) => r.tag);
+  if (!manual.includes(t)) manual.push(t);
+  noteService.syncNoteTags(tdb, id, content, manual);
+}
+
+function upsertImNote(tdb, { noteId, folderId, title, block, headerBlock, desc = true, tag = '' }) {
   if (noteId) {
     const cur = tdb.prepare('SELECT * FROM notes WHERE id=?').get(Number(noteId));
     if (cur) {
-      const content = String(cur.content || '') + appendBlock;
+      let content = mergeImBlock(String(cur.content || ''), block, desc);
+      content = orderImNoteContent(content, desc);   // 顺手把老段也规整成同一方向
       tdb.prepare(`UPDATE notes SET title=?,content=?,folder_id=?,word_count=?,updated_at=datetime('now','localtime') WHERE id=?`)
         .run(title, content, folderId, noteService.extractWordCount(content), Number(noteId));
       noteService.syncNoteLinks(tdb, Number(noteId), content);
-      noteService.syncNoteTags(tdb, Number(noteId), content, undefined);
+      applyImTags(tdb, Number(noteId), content, tag);
       return Number(noteId);
     }
   }
-  const content = headerBlock + appendBlock;
-  return noteService.createNote(tdb, { title, content, folder_id: folderId });
+  const content = orderImNoteContent(`${headerBlock}\n\n${String(block || '').trim()}\n`, desc);
+  const id = noteService.createNote(tdb, { title, content, folder_id: folderId });
+  applyImTags(tdb, id, content, tag);
+  return id;
 }
 
 function log(tdb, connectorId, level, message) {
@@ -834,7 +966,11 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
           : (chat.chat_mode === 'p2p' ? '对方' : '群成员_' + shortId(m.sender && m.sender.id));
         return `- **${fmtTime(m.create_time)}｜${who}**：${msgText(m)}`;
       }).join('\n');
-      const block = `\n\n## ${fmtTime(lastMs)} 同步（新增 ${fresh.length} 条）\n\n${lines}\n`;
+      const block = `## ${fmtTime(lastMs)} 同步（新增 ${fresh.length} 条）\n\n${lines}`;
+      // 段内先按时间正序拼（拉回来本来就是正序），落库方向交给 orderImNoteContent 按每行自带的时间戳
+      // 统一排 —— 段内和段外共用同一套规则，不会一处倒一处不倒。
+      const desc = noteOrderDesc(conn);
+      const tag = platformTagOf(conn);
       const header = [
         `# ${chat.chat_name || chat.chat_id}`,
         '',
@@ -842,13 +978,17 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
         `- 授权企业：${conn.tenant_key || conn.label || '未知'}`,
         `- 会话类型：${chat.chat_mode === 'p2p' ? '单聊' : (chat.chat_mode || '未知')}`,
         `- 会话 ID：\`${chat.chat_id}\``,
+        `- 标签：#${tag}`,
         '',
-        '> 本笔记由工作台「IM 连接」按官方授权自动归档，每次同步把新消息追加在下面。',
+        desc
+          ? '> 本笔记由工作台「IM 连接」按官方授权自动归档，**新消息排在最上面**，越往下越早。'
+          : '> 本笔记由工作台「IM 连接」按官方授权自动归档，每次同步把新消息追加在下面。',
       ].join('\n');
 
       const noteId = upsertImNote(tdb, {
         noteId: chat.note_id ? Number(chat.note_id) : null,
-        folderId, title: chatTitle(chat, lastMs), appendBlock: block, headerBlock: header,
+        folderId, title: chatTitle(chat, lastMs), block, headerBlock: header,
+        desc, tag,
       });
       if (chat.note_id == null) stat.notes++;
       tdb.prepare(`UPDATE im_chats SET note_id=?,last_msg_time=?,msg_count=msg_count+?,last_sync_at=datetime('now','localtime'),last_error='' WHERE id=?`)
@@ -916,12 +1056,50 @@ function migrateImFolders(tdb) {
   return { moved, removed };
 }
 
+/**
+ * 一次性规整（v1.10.18，**幂等**）：服务启动时逐租户跑一遍；某条连接器改了排版方向时也会单独调它。
+ *
+ *  ① 给已归档的笔记补上平台标签（#飞书 / #钉钉 / #企业微信）—— 老笔记建于这一版之前，标签要补；
+ *  ② 按每条连接器的 note_order 把正文排成倒序（老笔记是「新消息追加在下面」，用户要反过来）。
+ *
+ * 归属只认 `im_chats.note_id`（库里本来就有的权威关系），**不按目录扫** —— 连接器目录里可能有
+ * 用户自己建的笔记，那不是该动的东西。重排**不碰 updated_at**：否则每重启一次，所有 IM 笔记
+ * 都会一起涌到文件夹最前面，把「最近改过」这个信号毁掉。
+ */
+function normalizeImNotes(tdb, onlyConnectorId = null) {
+  let tagged = 0, reordered = 0;
+  const conns = onlyConnectorId == null
+    ? tdb.prepare('SELECT * FROM im_connectors ORDER BY id').all()
+    : tdb.prepare('SELECT * FROM im_connectors WHERE id=?').all(Number(onlyConnectorId));
+  const upd = tdb.prepare('UPDATE notes SET content=?,word_count=? WHERE id=?');
+  // 认的是**手动**那一档：老笔记里可能早就因为词频被「自动标签」加过一个 `飞书`，
+  // 但自动标签是随正文重算的（用户一旦打上任何手动/行内标签就会被整批换掉）。
+  // 所以这里要把它**升级成手动标签**，这样平台标签才经得起之后的正文改动 ——
+  // 升级过一次之后再跑就查到 manual 了，仍然是幂等的。
+  const hasTag = tdb.prepare("SELECT 1 FROM note_tags WHERE note_id=? AND tag=? AND source='manual'");
+  for (const conn of conns) {
+    const desc = noteOrderDesc(conn);
+    const tag = platformTagOf(conn);
+    const rows = tdb.prepare('SELECT note_id FROM im_chats WHERE connector_id=? AND note_id IS NOT NULL').all(Number(conn.id));
+    for (const r of rows) {
+      const n = tdb.prepare('SELECT id,content FROM notes WHERE id=?').get(Number(r.note_id));
+      if (!n) continue;
+      const before = String(n.content || '');
+      const after = orderImNoteContent(before, desc);
+      if (after !== before) { upd.run(after, noteService.extractWordCount(after), Number(n.id)); reordered++; }
+      if (tag && !hasTag.get(Number(n.id), tag)) { applyImTags(tdb, Number(n.id), after, tag); tagged++; }
+    }
+  }
+  return { tagged, reordered };
+}
+
 module.exports = {
   PROVIDERS, FEISHU_SCOPES, WEEKDAY_CN,
   listConnectors, createConnector, updateConnector, deleteConnector, revokeConnector,
   authorizeUrl, handleCallback, ensureToken,
   listChats, addChat, delChat, listLogs, syncConnector, syncPreview, chatsForRound,
   publicConnector, chatTitle,
-  connectorFolderId, folderNameFor, migrateImFolders, moveConnectorNotes,
+  connectorFolderId, folderNameFor, migrateImFolders, moveConnectorNotes, normalizeImNotes,
+  platformTagOf, noteOrderDesc, splitImSections, orderImNoteContent, mergeImBlock, sameLineBag,
   autoSyncSlot, autoSyncDue, cstStamp, lockSync, unlockSync,
 };

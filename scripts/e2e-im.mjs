@@ -60,6 +60,17 @@ try {
   r = await A.put(`/im/connectors/${id}`, { label: '公司飞书' });
   s.ck('没传 app_secret 时不会把密钥清掉', r.body.has_secret === true);
 
+  // 归档正文的排版方向（v1.10.18）：默认倒序、能切、坏值进不去
+  s.ck('新建的连接器默认「新消息排在最上面」（note_order=desc）', r.body.note_order === 'desc', String(r.body.note_order));
+  r = await A.put(`/im/connectors/${id}`, { note_order: 'asc' });
+  s.ck('能把排版方向切成 asc（新消息追加在下面）', r.status === 200 && r.body.note_order === 'asc', String(r.body.note_order));
+  r = await A.put(`/im/connectors/${id}`, { note_order: 'desc' });
+  s.ck('能切回 desc', r.status === 200 && r.body.note_order === 'desc', String(r.body.note_order));
+  r = await A.put(`/im/connectors/${id}`, { note_order: 'DROP TABLE notes' });
+  s.ck('★ 坏值不会被存进去（白名单，落回 desc）', r.status === 200 && r.body.note_order === 'desc', String(r.body.note_order));
+  s.ck('列表接口也带 note_order 字段',
+    (await A.get('/im/connectors')).body.every((c) => c.note_order === 'desc' || c.note_order === 'asc'));
+
   // ---------- ④ 授权 URL ----------
   r = await A.post(`/im/connectors/${id}/authorize`, {});
   const url = r.body.url || '';
@@ -358,6 +369,89 @@ console.log('__FOLDERS__' + JSON.stringify({
   dupPath: fpath(im.connectorFolderId(d, connRow(dup))),
   stable: Number(im.connectorFolderId(d, connRow(ca))) === Number(connRow(ca).folder_id),
 }));
+
+// ---- ⑤ 归档正文的排版（v1.10.18）：新消息排在最上面 + 平台标签 ----
+// 正文 = 抬头 + 若干「## <时间> 同步（新增 N 条）」段，段内每行是「- **<时间>｜谁**：…」。
+// ⚠️ 段标题写的是**该段最新一条**的时间，所以只能「按段」判单调 —— 把它和段内行拼成一条
+// 全局序列再断言递减，会永远失败（第一版断言就是这么写错的）。
+var HEAD = ['# 张三', '', '- 来源：飞书（我）', '- 会话 ID：\`oc_x\`', '- 标签：#飞书', '',
+  '> 本笔记由工作台「IM 连接」按官方授权自动归档，**新消息排在最上面**，越往下越早。'].join('\\n');
+var blk = function (stamp, msgs) {
+  return '## ' + stamp + ' 同步（新增 ' + msgs.length + ' 条）\\n\\n'
+    + msgs.map(function (m) { return '- **' + m[0] + '｜' + m[1] + '**：' + m[2]; }).join('\\n');
+};
+var B1 = blk('2026-10-04 09:00', [['2026-10-04 09:00', '对方', 'a'], ['2026-10-04 09:02', '我', 'b']]);
+var B2 = blk('2026-10-05 20:12', [['2026-10-05 20:11', '对方', 'x'], ['2026-10-05 20:12', '我', 'y']]);
+var B3 = blk('2026-10-06 08:00', [['2026-10-06 08:00', '对方', 'z']]);
+// 走**真实路径**：merge 之后每次都要 orderImNoteContent（upsertImNote 就是这么写的）
+var body = HEAD + '\\n';
+[B1, B2, B3].forEach(function (B) { body = im.orderImNoteContent(im.mergeImBlock(body, B, true), true); });
+var secsOf = function (s) {
+  return im.splitImSections(s).sections.map(function (sec) {
+    return {
+      head: (sec[0].match(/^## (\\S+ \\S+) 同步/) || [])[1],
+      msgs: sec.slice(1).filter(function (l) { return l.trim(); })
+        .map(function (l) { return (l.match(/^- \\*\\*(\\S+ \\S+)｜/) || [])[1]; }),
+    };
+  });
+};
+var descOk = function (arr) { return arr.every(function (t, i) { return i === 0 || arr[i - 1] >= t; }); };
+var upOk = function (arr) { return arr.every(function (t, i) { return i === 0 || arr[i - 1] <= t; }); };
+var SD = secsOf(body);
+var ascBody = im.orderImNoteContent(body, false);
+var SA = secsOf(ascBody);
+// 老笔记：旧版是「新消息一路追加在下面」，规整后要翻过来
+var legacy = HEAD + '\\n\\n' + B1 + '\\n\\n' + B2 + '\\n';
+var legacyFixed = im.orderImNoteContent(legacy, true);
+// 兜底：正文里混进一行「像段标题」的东西时，新段不能丢
+var trap = HEAD + '\\n\\n- **2026-10-04 09:00｜对方**：夹着一行\\n## 2026-10-04 09:01 同步（新增 1 条）\\n- **2026-10-04 09:02｜我**：b\\n';
+var trapped = im.mergeImBlock(trap, B2, true);
+console.log('__ORDER__' + JSON.stringify({
+  descHeads: SD.map(function (x) { return x.head; }),
+  descOk: SD.length === 3 && descOk(SD.map(function (x) { return x.head; }))
+    && SD.every(function (x) { return x.msgs.length > 0 && descOk(x.msgs); }),
+  topIsNewest: SD[0] && SD[0].msgs[0],
+  headFirst: body.split('\\n')[0],
+  idempotent: im.orderImNoteContent(body, true) === body,
+  ascOk: SA.length === 3 && upOk(SA.map(function (x) { return x.head; }))
+    && SA.every(function (x) { return upOk(x.msgs); }),
+  lossless: im.sameLineBag(body, ascBody) && im.sameLineBag(ascBody, im.orderImNoteContent(ascBody, true)),
+  legacyTop: (legacyFixed.match(/^- \\*\\*(\\S+ \\S+)｜/m) || [])[1],
+  legacyLossless: im.sameLineBag(legacy, legacyFixed),
+  trapKept: im.sameLineBag(trapped, trap.replace(/\\s+$/, '') + '\\n\\n' + B2 + '\\n'),
+  tags: ['feishu', 'dingtalk', 'wecom', 'nope'].map(function (p) { return im.platformTagOf({ provider: p }); }),
+  orderDefaults: [im.noteOrderDesc({}), im.noteOrderDesc({ note_order: 'asc' }), im.noteOrderDesc({ note_order: 'xx' })],
+}));
+
+// ---- ⑥ 平台标签 + 启动规整（走**真库**：im_chats.note_id → 笔记）----
+// 甲群那篇先改回「老版的顺序」（早的在最上），并让用户自己打过 #重要 标签：
+// 规整必须①把它翻成倒序 ②把 #飞书 并上去而**不冲掉** #重要。
+d.prepare('UPDATE notes SET content=?, tags=? WHERE id=?').run(HEAD + '\\n\\n' + B1 + '\\n\\n' + B2 + '\\n', '重要', na);
+d.prepare("INSERT INTO note_tags(note_id,tag,source) VALUES(?,'重要','manual')").run(na);
+// 乙群那篇模拟「词频自动标签早就加过一个 飞书」的老状态：规整要把它**升级成手动标签**，
+// 否则它会被下一次正文改动整批换掉（自动标签是随正文重算的）。
+d.prepare("INSERT INTO note_tags(note_id,tag,source) VALUES(?,'飞书','auto')").run(nb);
+var updBefore = d.prepare('SELECT updated_at FROM notes WHERE id=?').get(na).updated_at;
+var n1 = im.normalizeImNotes(d);
+var tagsOf = function (nid) {
+  return d.prepare('SELECT tag FROM note_tags WHERE note_id=? ORDER BY tag').all(nid).map(function (r) { return r.tag; });
+};
+var naContent = String(d.prepare('SELECT content FROM notes WHERE id=?').get(na).content);
+var n2 = im.normalizeImNotes(d);
+console.log('__TAGS__' + JSON.stringify({
+  first: n1,
+  second: n2,
+  naTags: tagsOf(na),
+  nbTags: tagsOf(nb),
+  nbSources: d.prepare('SELECT tag,source FROM note_tags WHERE note_id=? ORDER BY tag').all(nb),
+  keptTags: tagsOf(keptNote),
+  naTop: (naContent.match(/^- \\*\\*(\\S+ \\S+)｜/m) || [])[1],
+  naHead: naContent.split('\\n')[0],
+  naLossless: im.sameLineBag(naContent, HEAD + '\\n\\n' + B1 + '\\n\\n' + B2 + '\\n'),
+  nbUntouched: String(d.prepare('SELECT content FROM notes WHERE id=?').get(nb).content) === 'body',
+  keptUntouched: String(d.prepare('SELECT content FROM notes WHERE id=?').get(keptNote).content) === 'x',
+  updKept: d.prepare('SELECT updated_at FROM notes WHERE id=?').get(na).updated_at === updBefore,
+}));
 `;
   try {
     const res = spawnSync(process.execPath, ['--no-warnings', '-e', CHILD],
@@ -413,6 +507,48 @@ console.log('__FOLDERS__' + JSON.stringify({
     s.ck('★ 两条连接器备注名撞车时也不合进一个目录（自动加「（2）」）',
       fd.dupPath === '飞书/公司飞书（2）', String(fd.dupPath));
     s.ck('反复算目录不会新建重复目录（返回的还是原来那个 id）', fd.stable === true, String(fd.stable));
+
+    // ★ 归档正文的排版（v1.10.18）：用户要「最新的排在最上面」，不用翻到底下看新消息
+    const od = pick('__ORDER__');
+    s.ck('★ 段按时间从新到旧（最新的同步在最上面）',
+      od.descOk === true, `段序列=${JSON.stringify(od.descHeads)}`);
+    s.ck('★ 整篇第一条消息就是全局最新的那条（打开就能看到新内容）',
+      od.topIsNewest === '2026-10-06 08:00', String(od.topIsNewest));
+    s.ck('抬头的 `# 标题` 仍在最上面（只动消息顺序，不动抬头）',
+      od.headFirst === '# 张三', String(od.headFirst));
+    s.ck('★ 重复规整结果一模一样（幂等，重启多少次都不会漂）', od.idempotent === true, String(od.idempotent));
+    s.ck('★ 换成正序（关掉开关）时段与段内都从旧到新（退回老样子）', od.ascOk === true, String(od.ascOk));
+    s.ck('★ 换方向只改顺序、一行内容都不丢',
+      od.lossless === true, String(od.lossless));
+    s.ck('★ 老笔记（新消息本来是追加在下面）规整后被翻过来',
+      od.legacyTop === '2026-10-05 20:12', String(od.legacyTop));
+    s.ck('老笔记规整后一行不丢', od.legacyLossless === true, String(od.legacyLossless));
+    s.ck('★ 正文里出现「像段标题」的行时，新同步段照样不会丢（自检兜底）',
+      od.trapKept === true, String(od.trapKept));
+    s.ck('平台 → 标签：飞书/钉钉/企业微信，不认识的平台不硬塞',
+      JSON.stringify(od.tags) === JSON.stringify(['飞书', '钉钉', '企业微信', '']), JSON.stringify(od.tags));
+    s.ck('只有显式存了 asc 才是正序，空值/坏值一律倒序',
+      JSON.stringify(od.orderDefaults) === JSON.stringify([true, false, true]), JSON.stringify(od.orderDefaults));
+
+    // ★ 标签 + 启动规整走真库（im_chats.note_id → 笔记）
+    const tg = pick('__TAGS__');
+    s.ck('★ 规整给已归档的笔记补上 #飞书（两篇都补到）',
+      tg.first.tagged === 2, JSON.stringify(tg.first));
+    s.ck('★ 老笔记的正文被翻成倒序（只翻那篇要翻的）', tg.first.reordered === 1, JSON.stringify(tg.first));
+    s.ck('★ 补标签**不会冲掉**用户自己打的标签（#重要 还在）',
+      JSON.stringify(tg.naTags) === JSON.stringify(['重要', '飞书']), JSON.stringify(tg.naTags));
+    s.ck('另一篇也带上了 #飞书', JSON.stringify(tg.nbTags) === JSON.stringify(['飞书']), JSON.stringify(tg.nbTags));
+    s.ck('★ 老笔记里「词频自动加的 #飞书」被升级成手动标签（否则下次改正文就被整批换掉）',
+      JSON.stringify(tg.nbSources) === JSON.stringify([{ tag: '飞书', source: 'manual' }]), JSON.stringify(tg.nbSources));
+    s.ck('★ 规整只碰 im_chats 认得的笔记：用户手放进目录的笔记一个标签都不加',
+      tg.keptTags.length === 0 && tg.keptUntouched === true, JSON.stringify(tg.keptTags));
+    s.ck('规整后那篇的正文是倒序的（第一条是 20:12）', tg.naTop === '2026-10-05 20:12', String(tg.naTop));
+    s.ck('规整后抬头还在最上面', tg.naHead === '# 张三', String(tg.naHead));
+    s.ck('规整只换顺序、内容一行不丢', tg.naLossless === true, String(tg.naLossless));
+    s.ck('★ 规整**不碰 updated_at**（否则每次重启所有 IM 笔记都会涌到文件夹最前面）',
+      tg.updKept === true, String(tg.updKept));
+    s.ck('★ 再规整一遍：0 补标签 0 重排（重启不会反复折腾）',
+      tg.second.tagged === 0 && tg.second.reordered === 0, JSON.stringify(tg.second));
   } catch (e) {
     s.ck('纯函数 / 迁移用例未抛异常', false, String(e && e.message));
   } finally {
