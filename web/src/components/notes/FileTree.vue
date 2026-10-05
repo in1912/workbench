@@ -15,7 +15,7 @@
         <span class="ico">📁</span>
         <span class="nm" :title="f.path || f.name">{{ f.name === 'general' ? '未分类' : f.name }}</span>
         <span v-if="f.intake_token" class="tag ok tiny" title="该文件夹已开对外写入通道">写</span>
-        <span class="cnt muted">{{ f.note_count || 0 }}</span>
+        <span class="cnt muted" :title="cntTitle(f)">{{ f.note_count_total ?? (f.note_count || 0) }}</span>
       </div>
 
       <div v-if="isOpen(f.id)" class="fbody">
@@ -65,9 +65,15 @@ const isOpen = (id) => !!props.open[id];
 // **只显示本层的笔记**。要来的列表是 `GET /notes?folder_id=<id>`，而这个接口默认**连子文件夹一起筛**
 // （图谱、数据库视图要"含后代"是对的），于是展开父目录时，子目录里的笔记会被原样铺在下面、
 // 展开子目录再出现一遍 —— 同一篇笔记在树里出现两次，看着像两条，删父层那条就把子目录里那条删了。
-// 树里一篇笔记只该出现在它真正所属的那一级；这也和外框那个只算直属的 note_count 对得上。
+// 树里一篇笔记只该出现在它真正所属的那一级（右侧的行数徽标自 v1.10.19 起是「含后代」的累计口径，见 cntTitle）。
 // 判空要宽容：folder_id 可能来自 JSON（数字或字符串）。
 const notesOf = (id) => (props.notes[id] || []).filter((n) => Number(n.folder_id) === Number(id));
+
+// 徽标显示**累计篇数**（本层 + 全部后代）：IM 归档的笔记都在孙层（IM连接/飞书/<连接器名>），
+// 只看直属会把上两级显示成 0。直属与累计不一致时悬停可看两个口径（文件管理器的惯例）。
+const cntTitle = (f) => (f.note_count_total > f.note_count
+  ? `本层 ${f.note_count || 0} 篇，含子文件夹共 ${f.note_count_total} 篇`
+  : `${f.note_count || 0} 篇`);
 
 function dragStart(e, kind, id) {
   e.dataTransfer.effectAllowed = 'move';

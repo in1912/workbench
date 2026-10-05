@@ -58,6 +58,22 @@ try {
   s.ck('列表补充 folder_path', r.body[0].folder_path === '工作/2026', r.body[0].folder_path);
   s.ck('老契约 category 缓存列同步为叶子名', r.body[0].category === '2026', r.body[0].category);
 
+  // ---------- ④b 两种行数口径：note_count 直属、note_count_total 含后代 ----------
+  // 期望值从「子树清单接口」独立推导（GET /notes?folder_id= 本来就是含后代的），不照实现抄一遍。
+  r = await A.get('/notes/folders');
+  const wNow = r.body.find((f) => f.id === work.id);
+  const kNow = wNow.children.find((c) => c.id === work2026);
+  const sub = (await A.get(`/notes?folder_id=${work.id}`)).body;
+  const directOf = sub.filter((n) => Number(n.folder_id) === Number(work.id)).length;
+  s.ck('note_count 仍是直属口径', wNow.note_count === directOf, `${wNow.note_count} vs ${directOf}`);
+  s.ck('note_count_total = 子树全部笔记（父级不再显示 0）', wNow.note_count_total === sub.length,
+    `${wNow.note_count_total} vs ${sub.length}`);
+  s.ck('叶子两级口径相等', kNow.note_count_total === kNow.note_count, `${kNow.note_count_total} vs ${kNow.note_count}`);
+  s.ck('全树每个节点 total = 自身直属性 + 子级 total', r.body.every(function eq(f) {
+    const kids = (f.children || []).reduce((a, c) => a + c.note_count_total, 0);
+    return f.note_count_total === f.note_count + kids && f.children.every(eq);
+  }), JSON.stringify(r.body.find((f) => f.name === '工作')).slice(0, 200));
+
   // ---------- ⑤ 移动笔记只改归属 ----------
   r = await A.put(`/notes/${n1}/move`, { folder_id: general.id });
   s.ck('PUT /notes/:id/move 改归属', r.status === 200 && r.body.folder_id === general.id, JSON.stringify(r.body));

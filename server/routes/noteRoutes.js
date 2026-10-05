@@ -343,12 +343,25 @@ router.get('/notes/folders', (req, res) => {
   const map = folderMap(tdb);
   const cnt = new Map(tdb.prepare('SELECT folder_id, COUNT(*) c FROM notes WHERE folder_id IS NOT NULL GROUP BY folder_id')
     .all().map((r) => [Number(r.folder_id), r.c]));
+  // 累计篇数（本层 + 全部后代）：左栏树的徽标用这个口径。IM 归档的笔记都在孙层
+  // （IM连接/飞书/<连接器名>），直属口径会把上两级显示成 0，看着像空目录。
+  // note_count 保持直属语义不动——删除 409 提示、分类管理弹窗这些消费方要的就是"本层有几篇"。
+  const total = new Map();
+  const sumOf = (f, depth) => {
+    const own = cnt.get(f.id) || 0;
+    if (depth > 64) return own; // 深度上限：防数据异常造成的死循环（与 folderMap 同款保险）
+    const t = own + f.children.reduce((acc, c) => acc + sumOf(c, depth + 1), 0);
+    total.set(f.id, t);
+    return t;
+  };
+  map.roots.forEach((f) => sumOf(f, 0));
   const mk = (f, depth) => {
     if (depth > 64) return null;
     return {
       id: f.id, name: f.name, parent_id: f.parent_id == null ? null : Number(f.parent_id),
       sort_order: f.sort_order, intake_token: f.intake_token || '', path: f.path, created_at: f.created_at,
       note_count: cnt.get(f.id) || 0,
+      note_count_total: total.get(f.id) || 0,
       children: f.children.map((c) => mk(c, depth + 1)).filter(Boolean),
     };
   };

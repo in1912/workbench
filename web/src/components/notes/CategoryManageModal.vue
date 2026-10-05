@@ -22,7 +22,7 @@
             <option value="">（顶层）</option>
             <option v-for="p in parentOptions(f)" :key="p.id" :value="p.id">{{ '　'.repeat(p.depth) }}{{ p.name }}</option>
           </select>
-          <span class="muted" style="font-size:12px">{{ f.note_count }} 篇</span>
+          <span class="muted" style="font-size:12px">直属 {{ f.note_count }} 篇<template v-if="(f.note_count_total ?? f.note_count) > f.note_count">（含子级 {{ f.note_count_total }}）</template></span>
           <span v-if="f.intake_token" class="tag ok" style="font-size:11px">已开写入令牌</span>
           <div class="row" style="margin-left:auto; gap:6px">
             <button class="small" @click="newName = ''; add(f.id)">＋ 子文件夹</button>
