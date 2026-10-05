@@ -85,7 +85,10 @@
 //    getBoundingClientRect 量出自己离视口顶部多远，再算 innerHeight - top；窗口缩放、
 //    父容器尺寸变化（比如上面弹出一条 toast）都会重量一次，所以不会被写死的偏移量坑到。
 // ⑫ 已达成（status='done'）排在该领域最后；超过 3 条折叠，点「＋ 展开其余 N 条」才展开。
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
+//
+// v1.10.20：整页全页自适应（.main 的 1200px 封顶对本页解除，见 inject('wbMainFull')），
+// 单张领域卡片宽度翻倍（.dom-col 的 basis/下限/上限三个值一起 ×2）。
+import { ref, onMounted, onBeforeUnmount, nextTick, inject } from 'vue';
 import { api } from '../../api';
 import { pct, pctColor, hasPct } from './lifeUtils';
 
@@ -110,6 +113,11 @@ const nameIn = ref(null);
 const expanded = ref({});
 let ro = null;
 
+// v1.10.20：本页全页自适应。App.vue 的 .main 默认 1200px 封顶，这里挂载时打开不限宽开关、
+// 卸载时关掉 —— 切到别的页签 / 离开 /life 时本面板必然卸载（Life.vue 是 v-else-if 链），
+// 所以不需要额外清理路径；inject 拿不到（理论上有别的宿主）就静默跳过，样式退回封顶。
+const mainFull = inject('wbMainFull', null);
+
 async function load() {
   const doms = await api.get('/life/domains');
   // 每个领域一次详情请求：领域只有个位数，不值得为它加一个聚合端点
@@ -117,6 +125,7 @@ async function load() {
 }
 
 onMounted(async () => {
+  if (mainFull) mainFull.value = true;   // 本页不限宽（见 inject 处注释）
   try { await load(); } catch (e) { emit('toast', e.message, 'err'); } finally { loading.value = false; }
   await nextTick();
   measure();
@@ -128,6 +137,7 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => {
+  if (mainFull) mainFull.value = false;
   window.removeEventListener('resize', measure);
   if (ro) { ro.disconnect(); ro = null; }
 });
@@ -217,10 +227,13 @@ async function delDomain(d) {
    剩下的全给列 —— 不这么写就得自己去减顶栏高度，减错一点列就冒到视口外面去。 */
 .dom-cols { flex: 1 1 auto; min-height: 0; display: flex; gap: 12px; align-items: stretch; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
 .dom-col {
-  /* 下限 168 是量出来的：默认 6 个领域要在 1500px 窗口（正文区实测约 1144px）里一屏排下
-     —— (1144 − 5×12) ÷ 6 ≈ 180 > 168，够；写 240 就会横着滚出去一条，默认 6 个领域永远看不全。
-     窄窗口（如 1366 笔记本）下会挤到 160 左右，徽章换行、标题省略号，仍可用。 */
-  flex: 1 1 250px; min-width: 168px; max-width: 420px;
+  /* v1.10.20：页面全页自适应（.main 不再封 1200px）+ 卡片宽度翻倍 —— 三个值一起翻：
+     basis 250→500、下限 168→336、上限 420→840。
+     宽屏（1920，正文区 ≈ 1674px）下 6 个领域 6×336+5×12=2076 > 1674，吃不满就横向滚动，
+     每卡 336 ≈ 旧版封顶容器（正文 1144px）里 ~180 的 1.9 倍；领域少于 6 个时自动长宽、
+     上限 840 防止单卡傻宽。窄窗口（1366 笔记本，正文 ≈ 1120px）下排不下 3 张 336 → 横向滚动，
+     不硬挤（卡片变窄会回到徽章换行、标题省略号的老问题，翻倍就没意义了）。 */
+  flex: 1 1 500px; min-width: 336px; max-width: 840px;
   display: flex; flex-direction: column; min-height: 0;
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); overflow: hidden;
 }

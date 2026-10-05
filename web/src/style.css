@@ -154,6 +154,9 @@ body {
 .sidebar .nav .ico { width: 22px; text-align: center; font-size: 18px; line-height: 1; flex-shrink: 0; }
 
 .main { flex: 1; padding: 22px 28px 60px; max-width: 1200px; min-width: 0; }
+/* lifeOS「领域」页专属（v1.10.20）：竖列看板全页自适应，不封 1200px。
+   App.vue 的 mainFull 开关只在领域面板挂着时为 true（挂载开 / 卸载关），其余页面照旧。 */
+.main.main-full { max-width: none; }
 
 .page-title { font-size: 19px; font-weight: 600; margin-bottom: 18px; }
 

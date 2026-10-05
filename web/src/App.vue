@@ -28,7 +28,7 @@
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main" :class="{ 'main-full': mainFull }">
       <div v-if="denied" class="msg err">当前账号无权访问该页面，请联系管理员授权</div>
       <router-view />
     </main>
@@ -74,7 +74,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, watch, provide } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { api } from './api';
 import { NAV_ITEMS, sortByOrder } from './nav';
@@ -90,6 +90,12 @@ const route = useRoute();
 // 公开页 = 路由 meta.public（登录页 + 笔记分享页 #/s/:token，v1.9.39）。这类页面渲染裸布局。
 const isBare = computed(() => !!route.meta.public);
 const menuOpen = ref(false);
+
+// 内容区不限宽开关（v1.10.20，lifeOS「领域」页专属）：.main 默认 1200px 封顶，
+// 领域竖列看板要吃满整屏。由领域面板自己通过 inject 置 true（挂载开 / 卸载关），
+// 切走页签或离开 /life 时面板随之卸载，开关自动回落 —— 不用在这里感知哪个 tab 活着。
+const mainFull = ref(false);
+provide('wbMainFull', mainFull);
 
 // 标签页标题跟随系统名称/路由即时更新（设置页改名后无需刷新；原 router.afterEach 的标题逻辑收拢到这里）
 watch([sysName, () => route.meta.title], () => {
