@@ -101,9 +101,11 @@
             </div>
           </template>
           <template v-else>
-            <div class="muted" style="font-size:12.5px">
-              {{ loginPanel[c.id].authenticated ? '✅ 登录成功，身份已记住。' : '登录没有完成（超时或被取消），可以重新点「扫码登录钉钉」。' }}
-            </div>
+            <!-- 失败分两档：CLI 给了原因的（如「组织未开启允许成员通过 CLI 访问个人数据」）红底亮出来，
+                 没给原因的（超时/被取消）才落到原来那句猜测式文案 —— 别让能照着办的事埋在原始日志里。 -->
+            <div v-if="loginPanel[c.id].authenticated" class="muted" style="font-size:12.5px">✅ 登录成功，身份已记住。</div>
+            <div v-else-if="loginPanel[c.id].errorText" class="loginerr">❌ 登录没有完成：{{ loginPanel[c.id].errorText }}</div>
+            <div v-else class="muted" style="font-size:12.5px">登录没有完成（超时或被取消），可以重新点「扫码登录钉钉」。</div>
           </template>
         </div>
 
@@ -342,7 +344,7 @@ const curProvider = computed(() => providers.value.find((p) => p.key === form.va
 const isDeviceAuth = computed(() => (curProvider.value || {}).auth === 'device');
 
 // ---------- 钉钉设备流登录（v1.10.22） ----------
-// 面板状态 loginPanel[id] = { running, url, code, output, authenticated }；timer 每 2 秒打一次
+// 面板状态 loginPanel[id] = { running, url, code, output, authenticated, errorText }；timer 每 2 秒打一次
 // GET dingtalk-login（后端在「登录成功被看见」的那一刻把身份落库并回传最新连接器）。
 const loginPanel = ref({});
 const loginTimers = {};
@@ -369,10 +371,12 @@ async function pollLogin(c) {
       code: p.code || (loginPanel.value[c.id] || {}).code || '',
       output: p.output || '',
       authenticated: !!p.authenticated,
+      errorText: p.errorText || '',
     } };
     if (!p.running) {
       stopLoginTimer(c.id);
-      // 登录进程结束（成功/超时/取消）：面板停在结果态，3 秒后收起；成功则刷新整张卡
+      // 登录进程结束（成功/超时/取消）：面板停在结果态；成功则刷新整张卡。
+      // 带原因的失败多停一会儿（15 秒）让人读完再收起，其余照旧 3 秒。
       if (p.authenticated) {
         msg.value = '钉钉登录成功，可以点「同步」开始归档了';
         await load();
@@ -380,7 +384,7 @@ async function pollLogin(c) {
       setTimeout(() => {
         const cur = loginPanel.value[c.id];
         if (cur && !cur.running) loginPanel.value = { ...loginPanel.value, [c.id]: null };
-      }, 3000);
+      }, (!p.authenticated && p.errorText) ? 15000 : 3000);
     }
   } catch (e) {
     stopLoginTimer(c.id);
@@ -592,5 +596,11 @@ async function del(c) {
   margin: 0; max-height: 110px; overflow-y: auto; font-size: 11px; line-height: 1.5;
   white-space: pre-wrap; word-break: break-all; color: var(--muted, #888);
   font-family: ui-monospace, Consolas, monospace;
+}
+/* 登录失败原因：红底亮出来（从 CLI 输出里挖的可执行原因，如「组织未开 CLI 访问权限」） */
+.loginerr {
+  font-size: 12.5px; line-height: 1.55; color: var(--red, #d93025);
+  background: rgba(217, 48, 37, .07); border: 1px solid rgba(217, 48, 37, .28);
+  border-radius: 6px; padding: 8px 10px; word-break: break-all; white-space: pre-wrap;
 }
 </style>

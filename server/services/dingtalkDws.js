@@ -224,6 +224,29 @@ function extractLoginBits(text) {
   return { url, code };
 }
 
+/** 登录失败时把「人能照着做」的原因从 CLI 输出里挖出来。生产实测（2026-10-06）：组织没开
+ *  「允许成员通过 CLI 访问个人数据」时，CLI 在 Step 4 拒绝并以 exit 2 退出 —— 输出里前面还
+ *  打着「授权成功!」（那只是 OAuth 那一步成了），不把真正的卡点挖出来，用户就会在
+ *  「明明授权成功了」和「登录已失效」之间打转。 */
+function extractLoginError(text) {
+  const t = String(text || '');
+  if (/未授权您通过 CLI 访问个人数据|暂无 CLI 数据访问权限/.test(t)) {
+    const admin = (t.match(/组织主管理员[：:]\s*(\S+)/) || [])[ 1 ] || '';
+    return `组织未开启「允许成员通过钉钉 CLI 访问个人数据」${admin ? `（主管理员：${admin}）` : ''}`
+      + `，请到钉钉开放平台「开发者设置」开启后重新扫码：https://open-dev.dingtalk.com/fe/old#/developerSettings`;
+  }
+  const i = t.lastIndexOf('{');   // 兜底一：结尾的 JSON error.message
+  if (i >= 0) {
+    try {
+      const j = JSON.parse(t.slice(i));
+      const msg = j && j.error && j.error.message;
+      if (msg) return String(msg).slice(0, 200);
+    } catch { /* 结尾不是 JSON 就落到下一档 */ }
+  }
+  const lastLine = t.split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';   // 兜底二：最后一行人话
+  return lastLine.slice(0, 200);
+}
+
 async function dwsLoginProgress(connectorId) {
   const key = String(Number(connectorId));
   const st = logins.get(key) || null;
@@ -231,6 +254,11 @@ async function dwsLoginProgress(connectorId) {
   // 进程结束 ≠ 登录成功（也可能超时/取消）；以 auth status 为准
   let status = null;
   if (!st || st.finished) status = await dwsAuthStatus(connectorId);
+  // CLI 自己报错退出（exit>0）= 登录在某一步被拒：把原因带给前端。原来面板只会说
+  // 「登录没有完成（超时或被取消）」，把「组织没开 CLI 数据访问权限」这种能照着办的事
+  // 埋在原始日志里 —— 2026-10-06 生产上用户就在这卡了一轮（看到了「授权成功!」字样）。
+  const errorText = st && st.finished && Number(st.exitCode) > 0 && !(status && status.authenticated)
+    ? extractLoginError(st.output) : '';
   return {
     running: !!st && !st.finished,
     url: bits.url, code: bits.code,
@@ -238,7 +266,14 @@ async function dwsLoginProgress(connectorId) {
     exitCode: st ? st.exitCode : null,
     authenticated: status ? status.authenticated : false,
     identity: status && status.authenticated ? status : null,
+    errorText,
   };
+}
+
+/** 最近一次「CLI 报错退出」的登录原因（同步预检失败时捎上，卡片上别只剩「登录已失效」一句） */
+function dwsLastLoginError(connectorId) {
+  const st = logins.get(String(Number(connectorId)));
+  return st && st.finished && Number(st.exitCode) > 0 ? extractLoginError(st.output) : '';
 }
 
 /** 退出登录并清空本地凭证目录（笔记不动 —— 与飞书侧解除授权的口径一致） */
@@ -370,7 +405,7 @@ function projectToFeishuShape(m) {
 module.exports = {
   dwsBinary, dwsReady, configDirFor,
   runDws, parseJsonOut, unwrapEnvelope, dwsErrText,
-  dwsAuthStatus, dwsSelfIdentity,
-  dwsStartLogin, dwsCancelLogin, dwsLoginProgress, dwsLogout,
+  dwsAuthStatus, dwsSelfIdentity, extractLoginError,
+  dwsStartLogin, dwsCancelLogin, dwsLoginProgress, dwsLogout, dwsLastLoginError,
   dwsListChatsFor, dwsPullMessages, normalizeDwsMessages,
 };

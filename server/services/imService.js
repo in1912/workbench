@@ -1069,7 +1069,11 @@ async function syncConnector(tdb, connectorId, { sinceDays = 30, maxChats = 200,
         const st = await dws.dwsAuthStatus(conn.id);
         if (!st.authenticated) {
           tdb.prepare("UPDATE im_connectors SET status='expired' WHERE id=?").run(conn.id);
-          throw bad('钉钉登录已失效，请到「IM 连接」里重新扫码登录');
+          // 捎上最近一次登录失败的真原因（如果有过）：比如「组织没开 CLI 数据访问权限」——
+          // 那种情况重新扫码也过不了，得先去钉钉后台开开关。只说「登录已失效」会把人困在
+          // 「明明授权成功了却一直报失效」里（2026-10-06 生产就这么卡过一轮）。
+          const why = dws.dwsLastLoginError(conn.id);
+          throw bad('钉钉登录已失效，请到「IM 连接」里重新扫码登录' + (why ? `：${why}` : ''));
         }
       }
       const got = isDing ? await dws.dwsListChatsFor(conn.id, maxChats) : await listAllChats(token, maxChats);

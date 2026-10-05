@@ -81,6 +81,22 @@ if (args[0] === 'auth' && args[1] === 'status') {
   process.exit(0);
 }
 if (args[0] === 'auth' && args[1] === 'login') {
+  // 失败路径（生产实测 2026-10-06，输出形状照抄生产日志）：组织没开「允许成员通过 CLI
+  // 访问个人数据」——OAuth 扫码那步先打出「授权成功!」，最后 Step 4 被拒、exit 2。
+  // e2e 在连接器配置目录里放一个 fail-login 标记文件就走上这条路。
+  if (fs.existsSync(path.join(cfg, 'fail-login'))) {
+    process.stderr.write([
+      '● Step 1: 请求设备授权码...', '',
+      '  授权码: E2E1-FAIL', '  授权码将在 900 秒后过期。', '',
+      '● Step 2: 等待用户授权...', '  ● [1] 轮询中... (5s) 授权成功!', '',
+      '● Step 3: 使用授权码换取 Access Token...', '● Step 4: 检查组织 CLI 授权状态...', '',
+      '⚠️  您暂无 CLI 数据访问权限', '   当前组织未授权您通过 CLI 访问个人数据。', '',
+      '   组织主管理员：温泉', '   请联系组织主管理员开启后重新登录。', '',
+      '   管理员操作入口：https://open-dev.dingtalk.com/fe/old#/developerSettings', '',
+      JSON.stringify({ error: { actions: ['dws doctor --json'], category: 'auth', code: 2, message: 'device authorization failed: 您暂无 CLI 数据访问权限，请联系管理员开启' } }, null, 2),
+    ].join('\n') + '\n');
+    process.exit(2);
+  }
   process.stderr.write('设备授权：在浏览器打开链接并用钉钉确认\n');
   process.stderr.write('https://login.dingtalk.com/oauth2/device/verify.htm?client_id=dws-e2e&user_code=E2E1-ABCD\n');
   process.stderr.write('授权码: E2E1-ABCD\n');

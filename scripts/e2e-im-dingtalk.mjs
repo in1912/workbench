@@ -5,6 +5,7 @@
 // 所以这里跑通的就是真传输层（spawn / DWS_CONFIG_DIR 隔离 / 信封拆包 / 设备流输出解析）。
 //
 // 覆盖：平台清单 / 免凭证建连接器 / 设备流登录与身份落库 / 未登录闸 /
+//       组织开关未开的失败路径（面板/同步预检/last_error 三处都带真原因）/
 //       会话发现登记 / 群聊与单聊的拉取路由（按调用记账断言）/
 //       同步→笔记（标题规则 / IM连接/钉钉/<备注名> 目录 / #钉钉 标签 / 倒序排版 /
 //       我-识别 / 消息类型渲染 / 同 ID 去重）/ 增量第二轮 / 排版方向切换 /
@@ -120,6 +121,32 @@ try {
   s.ck('两个会话都登记上并各挂了笔记', !!gRow && !!pRow && !!gRow.note_id && !!pRow.note_id, JSON.stringify((r.body || []).map((c) => [c.chat_id, c.note_id])));
   s.ck('会话计数：群 3 条、单聊 2 条', (gRow || {}).msg_count === 3 && (pRow || {}).msg_count === 2, JSON.stringify([gRow && gRow.msg_count, pRow && pRow.msg_count]));
   s.ck('坏会话留下失败原因，正常会话 last_error 为空', /JSON/.test((xRow || {}).last_error || '') && !((gRow || {}).last_error || ''), JSON.stringify((xRow || {}).last_error));
+
+  // ---------- ⑦b 组织没开「允许成员通过 CLI 访问个人数据」：失败原因要一路亮到用户脸上 ----------
+  // 生产实测（2026-10-06）：OAuth 扫码那步会先打出「授权成功!」，最后 Step 4 被组织开关拒掉、
+  // exit 2。原来面板只说「登录没有完成（超时或被取消）」，用户就在「授权成功」和「登录已失效」
+  // 之间打转。现在要求：登录面板、同步预检报错、卡片 last_error 三处都带上可执行的真原因。
+  // （放在 calls1 断言之后：这条连接器的登录调用会进替身记账，别污染上面的 cfg/ca 全称断言。）
+  r = await A.post('/im/connectors', { provider: 'dingtalk', label: '没开开关的公司' });
+  const idNo = r.body.id;
+  fs.mkdirSync(path.join(DATA, 'dws-config', String(idNo)), { recursive: true });
+  fs.writeFileSync(path.join(DATA, 'dws-config', String(idNo), 'fail-login'), '1');
+  r = await A.post(`/im/connectors/${idNo}/dingtalk-login`, {});
+  s.ck('组织开关没开：登录照样能发起（失败发生在扫码之后那一步）', r.status === 200 && r.body.started === true, JSON.stringify(r.body));
+  await sleep(400);   // 替身当场以 exit 2 退出
+  const lpF = (await A.get(`/im/connectors/${idNo}/dingtalk-login`)).body;
+  s.ck('登录面板亮出可执行原因（开管理员开关），不再猜「超时或被取消」',
+    lpF.authenticated === false && /允许成员通过钉钉 CLI 访问个人数据/.test(lpF.errorText || '') && /温泉/.test(lpF.errorText || ''),
+    String(lpF.errorText || '').slice(0, 220));
+  r = await A.post(`/im/connectors/${idNo}/sync`, { since_days: 7 });
+  s.ck('同步预检的报错捎上真原因（重新扫码也过不了的事，得把开关说清楚）',
+    r.status === 400 && /钉钉登录已失效/.test(r.body.error || '') && /允许成员通过钉钉 CLI 访问个人数据/.test(r.body.error || ''),
+    JSON.stringify(r.body).slice(0, 240));
+  r = await A.get('/im/connectors');
+  s.ck('卡片上的 last_error 也带原因', /允许成员通过钉钉 CLI 访问个人数据/.test((((r.body || []).find((c) => c.id === idNo)) || {}).last_error || ''),
+    String((((r.body || []).find((c) => c.id === idNo)) || {}).last_error || '').slice(0, 220));
+  r = await A.del(`/im/connectors/${idNo}`);
+  s.ck('删掉失败路径的临时连接器', r.status === 200, JSON.stringify(r.body));
 
   // ---------- ⑧ 笔记本体：目录 / 标题 / 标签 / 抬头 / 排版 / 我-识别 / 消息类型 ----------
   const gn = await noteOf(gRow.note_id);
