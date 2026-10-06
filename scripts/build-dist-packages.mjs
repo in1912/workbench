@@ -2,7 +2,7 @@
 // 产物落在仓库根目录（用户指定）：全能工作台-<版本>-windows.zip / -macos.zip / -docker.zip
 // 原则：只带「能跑起来的最小运行集」——data/ 一律空壳、Logs/ 不带、TTS 模型权重与合成语音缓存不带、
 //       fpk 安装包不带、web/dist 只带最新一份。
-//       **img/ 不带（2026-10-03 用户定的脱敏口径）**：那 15 张界面截图是实拍，含账号名、真实地址与家庭照片；
+//       **img/ 不带（2026-10-03 用户定的脱敏口径）**：那 28 张界面截图是实拍，含账号名、真实地址与家庭照片；
 //       仓库里照旧保留（在线 README 配图正常），但分发包里另存一份摘掉配图行的 README——见 stripReadmeImages()。
 // 用法：node scripts/build-dist-packages.mjs [--out <目录>]
 import { spawnSync } from 'node:child_process';
@@ -39,6 +39,11 @@ const XD_COMMON = [ // 目录
   A(ROOT, 'tts', 'tmp'),
 ];
 const XF_COMMON = ['repro-*.mjs']; // 漏洞复现脚本不分发
+
+// IM 官方 CLI 二进制按端裁剪（v1.10.31 起 server/ 里有两套：linux-x64 与 win-x64）：
+// 每个平台只带自己跑得动的那套——macOS 两套都不是 Mach-O，带了也是死重（飞书走 REST 不受影响）。
+const XD_IM_LINUX = [A(ROOT, 'server', 'dws', 'linux-x64'), A(ROOT, 'server', 'wecom', 'linux-x64')];
+const XD_IM_WIN = [A(ROOT, 'server', 'dws', 'win-x64'), A(ROOT, 'server', 'wecom', 'win-x64')];
 
 function rc(relSrc, relDst, extra = []) {
   const src = A(ROOT, relSrc);
@@ -93,6 +98,8 @@ function deployNote(variant) {
       '· 浏览器自动化需要 Chromium：npx playwright install chromium',
       '· 独立转写引擎（vibeasr）只提供 Windows / Linux 预编译版，macOS 上该功能不可用，',
       '  请在「录音转写」页改用其它引擎。',
+      '· 钉钉 / 企业微信聊天记录归档依赖的官方 CLI（dws / wecom）只有 Windows 与 Linux 版，',
+      '  macOS 包不带这两个二进制，这两个 IM 连接在 macOS 上不可用（飞书走 REST 接口，不受影响）。',
     ],
     docker: [
       '【Docker 部署】',
@@ -112,12 +119,20 @@ function deployNote(variant) {
   return [...common, ...byVariant[variant], '', '完整功能说明见 README.md（界面截图见项目主页，本包不含）。'].join('\n');
 }
 
-// 分发包里的 README：摘掉所有配图行——img/ 不进包，留着就是一堆裂图。
+// 分发包里的 README：摘掉所有配图行（及紧跟其后的斜体说明行——图没了说明行悬空）——img/ 不进包，留着就是一堆裂图。
 // 只改暂存副本，仓库里的 README.md 一字不动（在线 README 的配图照旧正常）。
 function stripReadmeImages(STAGE) {
   const p = A(STAGE, 'README.md');
   if (!fs.existsSync(p)) return;
-  const kept = fs.readFileSync(p, 'utf8').split(/\r?\n/).filter((l) => !/^\s*!\[[^\]]*\]\(img\//.test(l));
+  const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/);
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*!\[[^\]]*\]\(img\//.test(lines[i])) { kept.push(lines[i]); continue; }
+    // 跳过图片行；若其后（允许隔着空行）紧跟一行「*…*」整行斜体说明，一并摘掉
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim()) j++;
+    if (j < lines.length && /^\s*\*[^*\n]+\*\s*$/.test(lines[j])) i = j;
+  }
   const out = kept.join('\n').replace(/\n{3,}/g, '\n\n');
   const note = [
     '> **本分发包不含界面截图**——截图是实拍的运行界面（含个人数据），故不随包分发；',
@@ -132,16 +147,19 @@ const VARIANTS = [
     key: 'windows', label: 'Windows',
     dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts'], ['node_modules']],
     files: ['package.json', 'package-lock.json', 'README.md', 'start.bat', '.gitignore', '.gitattributes'],
+    extraXd: XD_IM_LINUX,   // Windows 只带 win-x64 那套 IM CLI
   },
   {
     key: 'macos', label: 'macOS',
     dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['scripts'], ['node_modules']],
     files: ['package.json', 'package-lock.json', 'README.md', 'start.command', '.gitignore', '.gitattributes'],
+    extraXd: [...XD_IM_LINUX, ...XD_IM_WIN],   // 两套都跑不动，不带
   },
   {
     key: 'docker', label: 'Docker',
     dirs: [['server'], ['web', 'src'], ['web', 'public'], [A('web', 'dist', latestDist)], ['zhizu'], ['tts'], ['vibeasr'], ['scripts']],
     files: ['package.json', 'package-lock.json', 'README.md', 'Dockerfile', 'docker-compose.yml', '.dockerignore', 'pack-deploy.sh', '.gitignore', '.gitattributes'],
+    extraXd: XD_IM_WIN,      // Linux 容器只带 linux-x64 那套 IM CLI
   },
 ];
 
@@ -157,7 +175,7 @@ for (const v of VARIANTS) {
   fs.mkdirSync(STAGE, { recursive: true });
   console.log(`── ${v.label} → ${dirName}`);
 
-  const xd = XD_COMMON.map((p) => ['/XD', p]).flat();
+  const xd = [...XD_COMMON, ...(v.extraXd || [])].map((p) => ['/XD', p]).flat();
   const xf = XF_COMMON.map((p) => ['/XF', p]).flat();
   for (const seg of v.dirs) rc(A(...seg), STAGE, [...xd, ...xf]);
   for (const f of v.files) cpFile(f, STAGE);
