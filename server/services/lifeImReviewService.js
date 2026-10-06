@@ -1,0 +1,241 @@
+// AI 复盘 IM（v1.10.29）——lifeOS「AI复盘IM」页签的后端。
+//
+// 一句话：选一个笔记文件夹（通常是 IM连接/某平台/某连接器），把时间范围内的聊天记录
+// 交给工作台总配置的 AI，产出 **沟通概要 / 沟通重点 / 待办事项参考**；待办可勾选后
+// 一键落成 lifeOS 行动（todos），截止日按复盘范围从次日起算（日=次日、周=+7、双周=+14、月=+30）。
+//
+// **读取量优化（本模块的核心取舍）**：归档笔记的标题是 `对方名称-YYYY-MM-DD HH:mm-连接器备注名`，
+// 而标题里的时间戳在**每次有新消息的同步里都会被重写成最新一条消息的时间**（imService.upsertImNote
+// 的更新分支无条件 UPDATE title；chatTitle 取本轮最后一条消息的时间）。于是「这篇笔记在时间范围内
+// 有没有消息」**先看标题就够了**——标题时间在范围外的笔记必然不含范围内消息，整篇不读、一个字节
+// 不取。方向是保守安全的：标题时间只会 ≥ 正文最新行（生产实测：官方 last_msg_time 把被过滤掉的
+// 消息类型也计入，会出现「标题新、正文行都旧」的假阳性），最坏多读几篇、绝不漏。
+//
+// **时区**：标题/消息行的时间都是 imService.fmtTime 用**服务器本地时区方法**渲染的——所以这里的
+// cutoff 也必须用同一个 fmtTime 生成（两边同一口径，容器是什么时区都对；定宽零填充，字典序=时间序）。
+//
+// 边界说破：快筛认的是标题里的时间戳。**用户改过标题的归档笔记**（时间戳没了）会被跳过——
+// 这是读取量优化的代价，界面上写明。
+const noteService = require('./noteService');
+const lifeService = require('./lifeService');
+const ai = require('./aiService');
+const im = require('./imService');
+
+const RANGES = [
+  { days: 1, label: '日报（1 天内）' },
+  { days: 7, label: '周报（7 天内）' },
+  { days: 14, label: '双周报（14 天内）' },
+  { days: 30, label: '月报（30 天内）' },
+];
+
+const DEFAULT_PROMPT = [
+  '请根据下面的聊天记录做一份复盘整理，输出一个 JSON 对象（只输出 JSON 本身，不要代码围栏、不要解释）：',
+  '',
+  '{',
+  '  "summary": "沟通概要：这段时间分别和谁沟通了什么，按会话或主题归纳，200 字以内",',
+  '  "highlights": ["沟通重点：决策、约定、风险、重要信息，最多 6 条，每条一句话"],',
+  '  "todos": [',
+  '    { "title": "待办事项参考：动词开头、一条只写一件事", "note": "出处：哪个会话、什么时间、为什么要跟进（一句话）" }',
+  '  ]',
+  '}',
+  '',
+  '要求：待办只收聊天里明确要跟进的行动（别人等你回复、你答应要做、约了时间的事），',
+  '不要编造、不要把寒暄当待办；没有可跟进的就给空数组。重点和待办里保留人名与时间，方便回查。',
+].join('\n');
+
+// 标题时间戳：`对方名称-YYYY-MM-DD HH:mm-连接器备注名`（时间串自带连字符，正则按整段锚定）
+const TITLE_TS_RE = /-(\d{4}-\d{2}-\d{2} \d{2}:\d{2})-/;
+// 消息行：`- **YYYY-MM-DD HH:mm｜发送者**：内容`（全角分隔符，与 imService.MSG_LINE_RE 同款）
+const MSG_LINE_RE = /^- \*\*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})｜(.+?)\*\*：(.*)$/;
+
+function bad(msg) { const e = new Error(msg); e.code = 400; return e; }
+
+function titleTs(title) {
+  const m = TITLE_TS_RE.exec(String(title || ''));
+  return m ? m[1] : '';
+}
+
+/** 某会话名（标题里时间戳前面那一段；认不出就整篇标题当会话名）。 */
+function whoOf(title, ts) {
+  const t = String(title || '');
+  const cut = ts ? t.indexOf(`-${ts}-`) : -1;
+  return (cut > 0 ? t.slice(0, cut) : t).trim() || '未知会话';
+}
+
+/** 交给 AI 的正文上限。超了按会话配额保留最新的行（老对话先丢），并把 truncated 标出来。 */
+const MAX_CORPUS_CHARS = 80000;
+
+// ---------- 元数据（页签首屏：范围选项 + 默认引导词 + AI 配没配） ----------
+function meta(tdb) {
+  return { ranges: RANGES, default_prompt: DEFAULT_PROMPT, has_ai: ai.hasConfig(tdb) };
+}
+
+// ---------- 文件夹树（只数 IM 归档笔记：标题里认得出时间戳的） ----------
+// 不复用 GET /notes/folders 的两个原因：① 那个接口挂在笔记页权限下，本页签挂 life 页，
+// 受限成员会 403；② 这里要的是 IM 篇数口径（note_count 数所有笔记，对选源没用）。
+function listImFolders(tdb) {
+  const map = noteService.folderMap(tdb);
+  const own = new Map();
+  for (const r of tdb.prepare('SELECT title, folder_id FROM notes WHERE folder_id IS NOT NULL').all()) {
+    if (!titleTs(r.title)) continue;
+    const k = Number(r.folder_id);
+    own.set(k, (own.get(k) || 0) + 1);
+  }
+  const total = new Map();
+  const sumOf = (f, depth) => {
+    if (depth > 64) return 0;
+    const t = (own.get(f.id) || 0) + f.children.reduce((acc, c) => acc + sumOf(c, depth + 1), 0);
+    total.set(f.id, t);
+    return t;
+  };
+  map.roots.forEach((f) => sumOf(f, 0));
+  const mk = (f, depth) => {
+    if (depth > 64) return null;
+    return {
+      id: f.id, name: f.name, path: f.path,
+      im_count: own.get(f.id) || 0, im_total: total.get(f.id) || 0,
+      children: f.children.map((c) => mk(c, depth + 1)).filter(Boolean),
+    };
+  };
+  return map.roots.map((f) => mk(f, 0)).filter(Boolean);
+}
+
+/**
+ * 生成复盘：文件夹子树 → 标题时间快筛 → 读命中的笔记 → 行级时间过滤 → 组语料 → AI。
+ * 返回统计（扫描/命中/会话数/条数/字数）+ 概要 + 重点 + 待办参考，不落任何库。
+ */
+async function preview(tdb, body) {
+  const days = Number(body.days);
+  if (![1, 7, 14, 30].includes(days)) throw bad('时间范围只能是 1 / 7 / 14 / 30 天');
+  if (!ai.hasConfig(tdb)) {
+    throw bad('AI 尚未配置：请先在「设置 → AI 模型」里填写模型名称 / API 地址 / API Key');
+  }
+  const prompt = String(body.prompt || DEFAULT_PROMPT).trim() || DEFAULT_PROMPT;
+
+  const ids = noteService.folderSubtreeIds(tdb, Number(body.folder_id));
+  if (!ids.length) throw bad('文件夹不存在（或它下面没有任何子目录）');
+  const ph = ids.map(() => '?').join(',');
+  const rows = tdb.prepare(`SELECT id, title FROM notes WHERE folder_id IN (${ph})`).all(...ids);
+
+  // ① 快筛：只看标题时间，标题在范围外的整篇不读（notes_matched 是「读了内容的」篇数）
+  const cutoff = im.fmtTime(Date.now() - days * 86400000);
+  const matched = [];
+  for (const r of rows) {
+    const ts = titleTs(r.title);
+    if (ts && ts >= cutoff) matched.push({ id: Number(r.id), title: r.title, ts });
+  }
+  matched.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));   // 新会话在前
+
+  // ② 读命中的笔记，按行自己的时间戳过滤（标题假阳性的笔记在这里自然归零）
+  const convs = [];
+  for (const m of matched) {
+    const row = tdb.prepare('SELECT content FROM notes WHERE id=?').get(m.id);
+    const lines = [];
+    for (const line of String((row && row.content) || '').split('\n')) {
+      const hit = MSG_LINE_RE.exec(line.trim());
+      if (hit && hit[1] >= cutoff) lines.push({ ts: hit[1], who: hit[2].trim(), text: hit[3].trim() });
+    }
+    if (lines.length) convs.push({ ...m, who: whoOf(m.title, m.ts), lines });
+  }
+  if (!convs.length) {
+    throw bad(`时间范围（最近 ${days} 天）内没有提取到任何聊天消息：扫描 ${rows.length} 篇、标题命中 ${matched.length} 篇。范围外的笔记按标题时间整篇跳过、未读取。`);
+  }
+
+  // ③ 组语料。超预算时按会话份额保留最新的行，老会话先丢（但每个会话至少留一点，别整段消失）
+  const render = (c) => [`【会话】${c.who}（${c.lines.length} 条）`,
+    ...c.lines.map((l) => `[${l.ts}] ${l.who}：${l.text}`)].join('\n');
+  let texts = convs.map(render);
+  let used = texts.reduce((a, t) => a + t.length, 0);
+  let truncated = false;
+  if (used > MAX_CORPUS_CHARS) {
+    truncated = true;
+    const budget = convs.map((c, i) => Math.max(1200, Math.floor(MAX_CORPUS_CHARS * texts[i].length / used)));
+    texts = convs.map((c, i) => {
+      const head = `【会话】${c.who}（部分，保留最新）`;
+      const out = [head];
+      let n = 0;
+      for (const l of c.lines) {                       // lines 本就是新在前
+        const s = `[${l.ts}] ${l.who}：${l.text}`;
+        if (n + s.length > budget[i] - head.length && n > 0) break;
+        out.push(s); n += s.length;
+      }
+      return out.join('\n');
+    });
+    used = texts.reduce((a, t) => a + t.length, 0);
+  }
+  const corpus = texts.join('\n\n');
+  const linesUsed = convs.reduce((a, c) => a + c.lines.length, 0);
+
+  // ④ 交给总配置的 AI（aiService 自带 408/429/5xx 重试与空回复报错）
+  const { content, model, usage } = await ai.chatEx([
+    { role: 'system', content: '你是中文沟通复盘助手。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
+    { role: 'user', content: `${prompt}\n\n（以下是时间范围：最近 ${days} 天内的聊天记录，每行开头 [时间] 发送者：内容）\n\n${corpus}` },
+  ], { maxTokens: 2000, temperature: 0.3, tdb });
+
+  const o = parseReviewJson(content);
+  return {
+    range: RANGES.find((r) => r.days === days),
+    folders: ids.length, notes_scanned: rows.length, notes_matched: matched.length,
+    conversations: convs.map((c) => ({ id: c.id, title: c.title, lines: c.lines.length })),
+    lines_used: linesUsed, chars: corpus.length, truncated,
+    summary: o.summary, highlights: o.highlights, todos: o.todos,
+    model, usage,
+  };
+}
+
+/** AI 回的 JSON 加固解析：剥代码围栏、截首尾大括号；形状不对按可修复项修，修不了才报错。 */
+function parseReviewJson(raw) {
+  const t = String(raw || '').trim()
+    .replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  const s = t.indexOf('{'), e = t.lastIndexOf('}');
+  let o;
+  try {
+    o = JSON.parse(s >= 0 && e > s ? t.slice(s, e + 1) : t);
+  } catch {
+    const err = new Error('AI 返回的不是合法 JSON，请重试一次（可先把引导词改简单些）');
+    err.code = 500;
+    throw err;
+  }
+  const strArr = (v, cap) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, cap) : []);
+  const todos = (Array.isArray(o.todos) ? o.todos : []).map((x) => typeof x === 'string'
+    ? { title: x } : { title: String((x && x.title) || '').trim(), note: String((x && x.note) || '').trim() })
+    .filter((x) => x.title).slice(0, 20);
+  return {
+    summary: String(o.summary || '').trim(),
+    highlights: strArr(o.highlights, 8),
+    todos,
+  };
+}
+
+// ---------- 待办 → lifeOS 行动 ----------
+// 截止日的口径（用户定的）：日待办=次日；周待办=次日后的 7 天时间范围（窗口末端即截止）；
+// 月待办=次日后的 30 天。双周（14）顺势=+14。落在 lifeService.todayStr() 的本地日期上算。
+const DUE_OFFSET_DAYS = { 1: 1, 7: 7, 14: 14, 30: 30 };
+
+function dueDateFor(days) {
+  const base = lifeService.todayStr();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(base);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + DUE_OFFSET_DAYS[days]);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function createTodos(tdb, body) {
+  const days = Number(body.days);
+  if (!(days in DUE_OFFSET_DAYS)) throw bad('时间范围只能是 1 / 7 / 14 / 30 天');
+  const items = Array.isArray(body.items) ? body.items : null;
+  if (!items || !items.length) throw bad('至少要勾选一条待办');
+  if (items.length > 50) throw bad('一次最多加入 50 条待办');
+  const due = dueDateFor(days);
+  const ids = [];
+  for (const it of items) {
+    const title = String((it && it.title) || '').trim();
+    if (!title) throw bad('待办内容不能为空');
+    if (title.length > 200) throw bad(`待办「${title.slice(0, 30)}…」太长（上限 200 字）`);
+    const note = String((it && it.note) || '').trim().slice(0, 300);
+    ids.push(lifeService.createAction(tdb, { title, desc: note, due_date: due, task_type: 'daily_todo' }));
+  }
+  return { created: ids.length, due_date: due };
+}
+
+module.exports = { RANGES, DEFAULT_PROMPT, meta, listImFolders, preview, createTodos, titleTs };

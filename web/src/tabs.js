@@ -9,6 +9,9 @@ export const TAB_DEFS = {
     { key: 'actions', label: '行动' },
     { key: 'habits', label: '习惯' },
     { key: 'reviews', label: '复盘与SOP' },
+    // AI复盘IM（v1.10.29）：复盘页之后——按 IM 归档文件夹让 AI 整理概要/重点/待办，
+    // 待办可勾选落成行动（日=次日、周=+7、双周=+14、月=+30 截止）
+    { key: 'aimreview', label: 'AI复盘IM' },
     { key: 'projects', label: '项目' },
     { key: 'domains', label: '领域' },
     { key: 'graph', label: '关系' },

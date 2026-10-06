@@ -17,6 +17,7 @@
     <ActionsPanel v-else-if="tab === 'actions'" @toast="toast" />
     <HabitsPanel  v-else-if="tab === 'habits'"  @toast="toast" />
     <ReviewsPanel v-else-if="tab === 'reviews'" @toast="toast" />
+    <ImReviewPanel v-else-if="tab === 'aimreview'" @toast="toast" />
     <ProjectsPanel v-else-if="tab === 'projects'" @toast="toast" />
     <DomainsPanel v-else-if="tab === 'domains'" @toast="toast" />
     <GraphPanel   v-else-if="tab === 'graph'"   @toast="toast" />
@@ -33,6 +34,7 @@ import GoalsPanel from '../components/life/GoalsPanel.vue';
 import ActionsPanel from '../components/life/ActionsPanel.vue';
 import HabitsPanel from '../components/life/HabitsPanel.vue';
 import ReviewsPanel from '../components/life/ReviewsPanel.vue';
+import ImReviewPanel from '../components/life/ImReviewPanel.vue';
 import ProjectsPanel from '../components/life/ProjectsPanel.vue';
 import DomainsPanel from '../components/life/DomainsPanel.vue';
 import GraphPanel from '../components/life/GraphPanel.vue';

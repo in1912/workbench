@@ -1398,6 +1398,6 @@ module.exports = {
   publicConnector, chatTitle,
   connectorFolderId, folderNameFor, migrateImFolders, moveConnectorNotes, normalizeImNotes,
   platformTagOf, noteOrderDesc, splitImSections, orderImNoteContent, mergeImBlock, sameLineBag,
-  imHeaderBlock, refreshImHeader,
+  imHeaderBlock, refreshImHeader, fmtTime,
   autoSyncSlot, autoSyncDue, cstStamp, lockSync, unlockSync,
 };

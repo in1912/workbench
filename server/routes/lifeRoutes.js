@@ -8,6 +8,7 @@
 const express = require('express');
 const svc = require('../services/lifeService');
 const link = require('../services/lifeLinkService');
+const imReview = require('../services/lifeImReviewService');
 
 const router = express.Router();
 
@@ -24,22 +25,29 @@ function int(v, field = 'id') {
 
 // 统一的处理包装：服务层抛的 {code:400} 变成 400，其余记日志并 500
 // v1.10.5：补 409 通道（删领域时「里面还有东西」用，带 counts / can_force 给前端弹确认）
+// v1.10.29：补 async 通道（AI复盘IM 的 preview 要等 AI 返回）——handler 返回 Promise 时
+// 拒绝也走同一个错误映射；同步 handler（原有全部）行为一字不变。
 function ok(fn) {
+  const fail = (res, e) => {
+    if (res.headersSent) return;
+    if (e && e.code === 400) return res.status(400).json({ error: e.message });
+    if (e && e.code === 404) return res.status(404).json({ error: e.message });
+    if (e && e.code === 409) {
+      return res.status(409).json({
+        error: e.message,
+        ...(e.counts ? { counts: e.counts } : {}),
+        ...(e.canForce ? { can_force: true } : {}),
+      });
+    }
+    console.error('[life]', req.method, req.originalUrl, e);
+    res.status(500).json({ error: '服务端错误：' + (e && e.message ? e.message : '未知') });
+  };
   return (req, res) => {
     try {
-      fn(req, res);
+      const pr = fn(req, res);
+      if (pr && typeof pr.catch === 'function') pr.catch((e) => fail(res, e));
     } catch (e) {
-      if (e && e.code === 400) return res.status(400).json({ error: e.message });
-      if (e && e.code === 404) return res.status(404).json({ error: e.message });
-      if (e && e.code === 409) {
-        return res.status(409).json({
-          error: e.message,
-          ...(e.counts ? { counts: e.counts } : {}),
-          ...(e.canForce ? { can_force: true } : {}),
-        });
-      }
-      console.error('[life]', req.method, req.originalUrl, e);
-      res.status(500).json({ error: '服务端错误：' + (e && e.message ? e.message : '未知') });
+      fail(res, e);
     }
   };
 }
@@ -228,6 +236,16 @@ router.post('/life/sops/:id/use', ok((req, res) => {
   if (!s) return notFound(res, 'SOP');
   res.json(s);
 }));
+
+// ---------- AI复盘IM（v1.10.29：IM 归档文件夹 → AI 概要/重点/待办 → 一键落成行动） ----------
+// 静态段注册在 /life/links 之前不冲突（前缀 im-review 无 :id 争抢）。
+// preview 是异步路由（等 AI 返回），靠 ok() 的 async 通道兜错误。
+router.get('/life/im-review/meta', ok((req, res) => res.json(imReview.meta(req.tdb))));
+router.get('/life/im-review/folders', ok((req, res) => res.json(imReview.listImFolders(req.tdb))));
+router.post('/life/im-review/preview', ok((req, res) =>
+  imReview.preview(req.tdb, req.body || {}).then((r) => res.json(r))));
+router.post('/life/im-review/todos', ok((req, res) =>
+  res.json(imReview.createTodos(req.tdb, req.body || {}))));
 
 // ---------- 关系引擎 ----------
 // 静态段必须排在 `/life/links/of/...` 之前

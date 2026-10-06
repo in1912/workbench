@@ -143,7 +143,8 @@ const TAB_PATHS = {
   // 键仍然要列全：缺键时用户的 allowed_tabs 里勾过的 tab 会被 sanitizeTabs 剥掉。
   life: [
     ['today', []], ['goals', []], ['actions', []], ['habits', []],
-    ['reviews', []], ['projects', []], ['domains', []], ['graph', []],
+    ['reviews', []], ['aimreview', []],   // AI复盘IM（v1.10.29）：紧挨复盘页之后；接口仍走 life 页前缀闸
+    ['projects', []], ['domains', []], ['graph', []],
     ['guide', []],   // 使用流程（v1.10.1）：空数组 = 只有授权勾选项，不约束任何接口
   ],
   family: [
