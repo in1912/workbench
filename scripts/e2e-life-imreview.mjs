@@ -24,9 +24,10 @@ const fmtL = (ms) => {
 const fmtD = (ms) => fmtL(ms).slice(0, 10);
 const DAY = 86400000, HOUR = 3600000;
 
-// ---- 假 AI（OpenAI 兼容）：记请求，回可切换的 payload，可设延迟（验进行中快照） ----
+// ---- 假 AI（OpenAI 兼容）：记请求，回可切换的 payload，可设延迟（验进行中快照）----
+// badTimes>0：接下来这么多次回一段散文（不是 JSON）——验「解析失败自动重试一次」。
 const calls = [];
-const stubMode = { fence: false, delay: 0 };
+const stubMode = { fence: false, delay: 0, badTimes: 0 };
 const PAYLOAD = {
   summary: '概要-测试通过',
   highlights: ['重点-排期已定', '重点-有风险'],
@@ -38,7 +39,11 @@ const stub = http.createServer((req, res) => {
   req.on('end', () => {
     calls.push({ url: req.url, auth: req.headers.authorization || '', body: buf });
     const respond = () => {
-      const content = stubMode.fence ? '```json\n' + JSON.stringify(PAYLOAD, null, 1) + '\n```' : JSON.stringify(PAYLOAD);
+      const bad = stubMode.badTimes > 0;
+      if (bad) stubMode.badTimes--;
+      const content = bad
+        ? '好的，我来帮您整理这段时间的沟通记录。整体来看沟通比较顺畅，以下是详细分析：首先……'
+        : (stubMode.fence ? '```json\n' + JSON.stringify(PAYLOAD, null, 1) + '\n```' : JSON.stringify(PAYLOAD));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         choices: [{ message: { content } }],
@@ -245,6 +250,23 @@ try {
   ck('AI 回包带代码围栏仍解析成功', r.body.state === 'done' && r.body.result.summary === '概要-测试通过',
     JSON.stringify(r.body.result && r.body.result.summary));
   stubMode.fence = false;
+
+  // ---------- 10b. 解析失败自动重试：第 1 次散文 → 第 2 次严格指令拿到 JSON；两次都坏 → 任务失败 ----------
+  stubMode.badTimes = 1;
+  r = await runJob(A, { folder_id: fa, days: 1 });
+  ck('第 1 次输出不是 JSON → 自动重试后成功',
+    r.body.state === 'done' && r.body.result.summary === '概要-测试通过'
+    && r.body.logs.some((l) => /输出不是合法 JSON，自动重试一次/.test(l.msg))
+    && r.body.logs.some((l) => /第 1 次输出解析失败/.test(l.msg)),
+    r.body.logs && r.body.logs.map((l) => l.msg).join(' | ').slice(0, 240));
+  ck('重试的第二次请求带了更严格的 JSON 指令（读桩收到的请求体）',
+    lastCall().messages[1].content.includes('你上一次的输出不是合法 JSON'));
+  stubMode.badTimes = 2;
+  r = await runJob(A, { folder_id: fa, days: 1 });
+  ck('两次都不是 JSON → 任务失败态（文案指路重试/改引导词）',
+    r.body.state === 'error' && /AI 返回的不是合法 JSON/.test(r.body.error),
+    r.body.error);
+  stubMode.badTimes = 0;
 
   // ---------- 11. 参数校验（同步 400，不建任务） ----------
   ck('days=5 → 400', (await A.post('/life/im-review/jobs', { folder_id: fa, days: 5 })).status === 400);

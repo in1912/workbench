@@ -238,26 +238,39 @@ async function runJob(job) {
     const linesUsed = convs.reduce((a, c) => a + c.lines.length, 0);
     log(job, `语料 ${corpus.length} 字（预算 ${MAX_CORPUS_CHARS}${truncated ? '，超了：按会话保留最新' : ''}），覆盖 ${convs.length} 个会话 / ${linesUsed} 条消息`);
 
-    // ④ 交给总配置的 AI（aiService 自带 150 秒超时 × 2 次尝试与空回复报错——真实可能要几分钟）
+    // ④ 交给总配置的 AI（aiService 自带 150 秒超时 × 2 次尝试与空回复报错——真实可能要几分钟）。
+    // 生产实测有的模型偶尔不按 JSON 输出（v1.10.30 探针：语料才 1132 字、6 秒返回却是一段散文），
+    // 所以解析失败自动用更严格的 JSON 指令重问一次，再不行才把任务判失败。
     setStage(job, 'ai', 'AI 生成中', 40);
     job.ai_started_at = Date.now();
     job.ai_estimate_s = 20 + Math.round(corpus.length / 1200);
     const model = ai.getConfig(tdb).model || '';
-    const tAi = Date.now();
-    log(job, `调用 AI（${model}）…语料越大越慢，可离开本页，任务在后台继续`);
-    const { content, model: usedModel, usage } = await ai.chatEx([
-      { role: 'system', content: '你是中文沟通复盘助手。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
-      { role: 'user', content: `${job.prompt}\n\n（以下是时间范围：最近 ${days} 天内的聊天记录，每行开头 [时间] 发送者：内容）\n\n${corpus}` },
-    ], { maxTokens: 2000, temperature: 0.3, tdb });
-    if (job.state === 'cancelled') {
-      log(job, `AI 已返回（${((Date.now() - tAi) / 1000).toFixed(0)} 秒），但任务已被取消——结果丢弃`);
-      return;
+    const NUDGE = '\n\n（注意：你上一次的输出不是合法 JSON。这一次从第一个字符起就只输出一个 JSON 对象本身——不要 markdown 代码围栏、不要解释、不要思考过程。）';
+    let o = null, usedModel = '', usage = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const tAi = Date.now();
+      log(job, attempt === 1
+        ? `调用 AI（${model}）…语料越大越慢，可离开本页，任务在后台继续`
+        : '输出不是合法 JSON，自动重试一次（换更严格的 JSON 指令）…');
+      const { content, model: m, usage: u } = await ai.chatEx([
+        { role: 'system', content: '你是中文沟通复盘助手。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
+        { role: 'user', content: `${job.prompt}${attempt > 1 ? NUDGE : ''}\n\n（以下是时间范围：最近 ${days} 天内的聊天记录，每行开头 [时间] 发送者：内容）\n\n${corpus}` },
+      ], { maxTokens: 3000, temperature: 0.3, tdb });
+      if (job.state === 'cancelled') {
+        log(job, `AI 已返回（${((Date.now() - tAi) / 1000).toFixed(0)} 秒），但任务已被取消——结果丢弃`);
+        return;
+      }
+      usedModel = m; usage = u;
+      log(job, `AI 返回：耗时 ${((Date.now() - tAi) / 1000).toFixed(1)} 秒 · ${u && u.total_tokens != null ? u.total_tokens + ' tokens' : 'tokens 未知'}（${m}）`);
+      try {
+        o = parseReviewJson(content);   // 剥围栏等加固在 parseReviewJson
+        break;
+      } catch (e) {
+        if (attempt === 2) throw e;
+        log(job, `第 ${attempt} 次输出解析失败（${e.message.slice(0, 60)}…），重试`);
+      }
     }
-    log(job, `AI 返回：耗时 ${((Date.now() - tAi) / 1000).toFixed(1)} 秒 · ${usage && usage.total_tokens != null ? usage.total_tokens + ' tokens' : 'tokens 未知'}（${usedModel}）`);
     setStage(job, 'parse', '解析结果', 97);
-
-    // ⑤ 解析（剥围栏等加固在 parseReviewJson）
-    const o = parseReviewJson(content);
     log(job, `解析完成：概要 1 段 · 重点 ${o.highlights.length} 条 · 待办参考 ${o.todos.length} 条`);
     job.result = {
       range: RANGES.find((r) => r.days === days),
