@@ -17,6 +17,7 @@ const multer = require('multer');
 const { getSetting, setSetting, tenantDbFile, tenantIdOf } = require('../db');
 const storagePaths = require('../services/storagePaths');
 const noteService = require('../services/noteService');
+const linkAi = require('../services/noteLinkAiService');
 const { buildQuery } = require('../services/noteQueryService');
 const { buildGraph, localGraph } = require('../services/noteGraphService');
 const { stats: noteStats, localToday } = require('../services/noteStatsService');
@@ -745,6 +746,26 @@ router.post('/notes/backlink-clear', (req, res) => {
   } catch (e) {
     res.status(e.code === 400 || e.code === 404 ? e.code : 500).json({ error: e.message || '取消链接失败' });
   }
+});
+
+// 【AI 连接】（v1.10.31）：批量链接的第四种类型——AI 提炼关键字/标签把「等待链接」的笔记分组，
+// 用户挑组后用上面的互链/循环链执行（AI 只筛不写）。分析与 AI复盘IM 同一个后台任务模型：
+// POST 立即返任务号、GET latest 轮询快照（重开弹窗接上进度）、DELETE 取消。
+router.get('/notes/backlink-ai/meta', (req, res) => {
+  try { res.json(linkAi.meta(req.tdb)); } catch { res.status(500).json({ error: '读取 AI 连接配置失败' }); }
+});
+router.post('/notes/backlink-ai/jobs', (req, res) => {
+  try {
+    res.json(linkAi.startJob(req.tdb, String(req.user.id), req.body || {}));
+  } catch (e) {
+    res.status(e.code === 400 ? 400 : 500).json({ error: e.message || 'AI 连接分析失败' });
+  }
+});
+router.get('/notes/backlink-ai/jobs/latest', (req, res) => {
+  res.json(linkAi.getJob(String(req.user.id)));
+});
+router.delete('/notes/backlink-ai/jobs/latest', (req, res) => {
+  res.json(linkAi.cancelJob(String(req.user.id)));
 });
 
 // ============================================================
