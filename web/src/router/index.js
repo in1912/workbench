@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import { NAV_ITEMS } from '../nav';
+import { selfHealChunkFail } from '../boot';
 
 const routes = [
   { path: '/login', component: () => import('../views/Login.vue'), meta: { title: '登录', public: true } },
@@ -90,5 +91,9 @@ router.beforeEach((to) => {
 });
 
 // 标签页标题统一由 App.vue 的 watch 设置（跟随共享 sysName，改名即时生效）
+
+// v1.10.36：路由级懒加载 chunk/CSS 失败自愈（组件级异步 import 的失败由 boot.js 的
+// installErrorHandler 兜，两处共用 selfHealChunkFail——60 秒防循环，详见其注释）
+router.onError((err) => { selfHealChunkFail(err); });
 
 export default router;

@@ -42,6 +42,24 @@ export function installGatewayFetchPatch() {
   return prefix;
 }
 
+// v1.10.36：懒加载 chunk/CSS 瞬时失败自愈。生产实测（2026-10-06 16:41，错误上报仅 1 条）：
+// 首页 Dashboard 的 defineAsyncComponent(HolidayCalendar) 撞上一次网络抖动，Vite preload
+// 抛「Unable to preload CSS」——文件本身 200 可达、之后无复发，纯瞬时失败；但没有兜底时
+// 组件挂死、必须手动刷新。带 60 秒防循环标记整页刷新一次：重试成功即无感恢复；刷了还
+// 失败（真故障）就让错误照常走红条 + 上报，绝不无限 reload。
+// 组件级异步 import 的失败走 Vue errorHandler（installErrorHandler 里调）、路由级懒加载
+// 的失败走 router.onError（router/index.js 里调）——两处共用这一个助手。
+export function selfHealChunkFail(err) {
+  const msg = String((err && err.message) || err || '');
+  if (!/preload|Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(msg)) return false;
+  const KEY = 'wb_route_reload_ts';
+  const last = Number(sessionStorage.getItem(KEY) || 0);
+  if (Date.now() - last < 60000) return false;
+  try { sessionStorage.setItem(KEY, String(Date.now())); } catch { /* 隐私模式 */ }
+  location.reload();
+  return true;
+}
+
 // 页面级异常兜底（v1.9.2 起）：onMounted/setup 里未捕获的异步异常会让整页内容消失
 // （「首页/设置闪一下就没了」的现象）。统一接住：页面不再白屏，右下角红条提示。
 // v1.9.3 诊断增强：红条带上出错位置（文件:行号）、点击复制完整堆栈、
@@ -60,6 +78,7 @@ export function installErrorHandler(app) {
       try {
         navigator.sendBeacon(rawUrl('/api/client-errors'), new Blob([JSON.stringify({ msg, stack: stack.slice(0, 2000), page: location.hash, ts: Date.now() })], { type: 'application/json' }));
       } catch { /* 上报失败不影响本地 */ }
+      selfHealChunkFail(err); // chunk/CSS 瞬时失败：上报完带防循环标记自动刷新一次
       const now = Date.now();
       if (msg === lastErr && now - lastErrAt < 4000) return;
       lastErr = msg; lastErrAt = now;
