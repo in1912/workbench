@@ -15,4 +15,8 @@ installGatewayFetchPatch();
 
 const app = createApp(App);
 installErrorHandler(app);
-app.use(router).mount('#app');
+app.use(router);
+// 等初始路由解析完再挂载（v1.10.32）：否则首帧 route 是空路由（无 meta.public），
+// 公开页（#/s/:token 分享页、#/login）会先按主布局渲染一瞬——访客打开分享链接
+// 会闪现完整侧栏目录，再切到裸布局。初始守卫是同步的（读 localStorage），等待是毫秒级。
+router.isReady().then(() => app.mount('#app'));
