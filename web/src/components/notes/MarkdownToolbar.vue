@@ -7,7 +7,7 @@
     <span class="sep" />
     <button class="md-btn" title="双向链接 [[笔记标题]]" @click="wrap('[[', ']]', '笔记标题')">[[ ]]</button>
     <button class="md-btn" title="行内标签 #标签" @click="insertTag">#</button>
-    <button class="md-btn" title="插入附件 / 图片" @click="$emit('image')">🖼</button>
+    <button class="md-btn" :disabled="busy" :title="busy ? '正在上传…' : '插入附件 / 图片'" @click="$emit('image')">🖼</button>
     <span class="grow" />
     <slot />
   </div>
@@ -19,6 +19,8 @@
 // 选区/光标位置只有 DOM 知道，绕开 DOM 拼字符串必然出现「光标跳到末尾」这类恼人问题。
 const props = defineProps({
   getTextarea: { type: Function, required: true },
+  // v1.10.33：图片/附件上传中——🖼 按钮禁用、title 变「正在上传…」
+  busy: { type: Boolean, default: false },
 });
 defineEmits(['image']);
 

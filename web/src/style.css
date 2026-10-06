@@ -295,6 +295,8 @@ a.link:hover { text-decoration: underline; }
 .markdown-body code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
 .markdown-body a { color: var(--accent); }
 .markdown-body blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--text2); }
+/* 插入的附件图片（v1.10.33）：大图不撑破预览列 */
+.markdown-body img { max-width: 100%; border-radius: 6px; }
 
 .msg { padding: 10px 13px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
 .msg.err { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.3); }

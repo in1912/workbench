@@ -6,6 +6,7 @@
 //    而 marked 从 v5 起就不再自带净化，所以渲染完必须过一遍 scrubHtml；
 // ③ 原始 HTML 一律转义成文本（普通用户不需要在笔记里写 HTML，但需要它不能变成 XSS 载荷）。
 import { Marked } from 'marked';
+import { rawUrl } from '../api';
 
 // ---------- 基础 ----------
 export function escapeHtml(s) {
@@ -126,7 +127,16 @@ export function renderMarkdown(src, opts = {}) {
     },
     extensions: [wikiExtension(resolveWiki, style)],
   });
-  return scrubHtml(m.parse(String(src ?? '')));
+  return authApiUrls(scrubHtml(m.parse(String(src ?? ''))));
+}
+
+// 附件/图片直链（/api/notes/attachments/<id>/raw）存的是裸路径，而 <img>/<a> 加载时
+// 不会自动带 Authorization 头 → 一律 401。渲染时统一过 rawUrl()：补 ?token= 查询参数
+// （服务端 resolveUser 按头→查询参数顺序回退）+ 网关前缀。公开分享页（免登）拿到
+// 原样路径，属于已知边界：附件图不在分享范围里。只认 src/href 属性里的 /api/ 开头，
+// 不碰正文文字（v1.10.33，笔记编辑器「插入附件 / 图片」接通时引入）。
+function authApiUrls(html) {
+  return html.replace(/((?:src|href)=")(\/api\/[^"]+)(")/g, (_, a, u, z) => a + rawUrl(u) + z);
 }
 
 // ---------- 大纲 ----------

@@ -1,6 +1,6 @@
 <template>
   <div class="editor" :class="{ empty: !note }">
-    <MarkdownToolbar v-if="note" :get-textarea="() => taShim" @image="$emit('image')">
+    <MarkdownToolbar v-if="note" :get-textarea="() => taShim" :busy="uploading > 0" @image="pickImage">
       <span class="muted" style="font-size:11.5px; white-space:nowrap">{{ words }} 字</span>
       <div class="modes">
         <button v-for="m in MODES" :key="m.k" class="mbtn" :class="{ on: mode === m.k }" :title="m.title"
@@ -15,6 +15,9 @@
            @click="onPreviewClick" @dblclick="onPreviewDblClick" />
     </div>
     <div v-else class="empty-hint">选择或新建一篇笔记</div>
+    <!-- 工具栏 🖼 的文件选择框（v1.10.33）：隐藏的常驻 input，选完即清 value，同一文件可重复插入。
+         不限 accept：图片插 ![]()、其他文件插 []() 下载链接，后端 note_attachments 本就收任意文件 -->
+    <input ref="fileEl" type="file" multiple hidden @change="onFiles">
   </div>
 </template>
 
@@ -40,6 +43,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { cmBaseTheme, cmSyntax, codeLanguages } from '../../utils/codeTheme';
 import MarkdownToolbar from './MarkdownToolbar.vue';
 import { renderMarkdown, wordCount } from '../../utils/markdown';
+import { api } from '../../api';
 
 const props = defineProps({
   note: { type: Object, default: null },
@@ -50,7 +54,7 @@ const props = defineProps({
   // 页签 key：同一篇笔记从草稿变成已保存时 key 不变，用它判断「是不是换了一篇」
   docKey: { type: String, default: '' },
 });
-const emit = defineEmits(['update:mode', 'image', 'open-note', 'new-note', 'save']);
+const emit = defineEmits(['update:mode', 'open-note', 'new-note', 'save']);
 
 const MODES = [
   { k: 'edit', t: '编辑', title: '只看正文（带语法配色）' },
@@ -281,6 +285,31 @@ function focus() { try { view?.focus(); } catch { /* 忽略 */ } }
 async function ensureEditable() {
   if (props.mode === 'preview') { emit('update:mode', 'split'); await nextTick(); applyMode(props.mode); }
   else if (props.mode === 'source') { emit('update:mode', 'edit'); await nextTick(); applyMode(props.mode); }
+}
+
+// ---------- 插入图片 / 附件（v1.10.33）----------
+// 工具栏 🖼 的链路此前从未接通（事件转发到外壳却没人监听，点了没反应），本版在编辑器内部闭环：
+// 选文件 → POST /notes/attachments（后端 multer 10MB 上限）→ 光标处插入 ![文件名](直链)。
+// 正文里存裸路径 /api/notes/attachments/<id>/raw，预览由 renderMarkdown 统一补登录态（?token=）。
+const fileEl = ref(null);
+const uploading = ref(0);
+function pickImage() { if (!uploading.value) fileEl.value?.click(); }
+async function onFiles(e) {
+  const files = [...(e.target.files || [])];
+  e.target.value = ''; // 清掉选择，同一文件可重复插入
+  for (const f of files) {
+    uploading.value++;
+    try {
+      const r = await api.upload('/notes/attachments',
+        { note_id: props.note && props.note.id != null ? String(props.note.id) : '' },
+        [{ name: 'file', file: f }]);
+      const alt = String(f.name || '附件').replace(/[[\]\n]/g, ' ').trim() || '附件';
+      await insertText(/^image\//.test(f.type) ? `![${alt}](${r.url})` : `[${alt}](${r.url})`);
+    } catch (err) {
+      alert('「' + (f.name || '文件') + '」上传失败：' + err.message);
+    }
+    uploading.value--;
+  }
 }
 
 // 大纲点击 → 在源文里数到第 n 个标题（跳过围栏代码块，与 utils/markdown.js 的 extractHeadings 同口径）
