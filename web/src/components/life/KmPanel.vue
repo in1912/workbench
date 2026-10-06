@@ -26,7 +26,7 @@
             </div>
             <textarea ref="promptEl" readonly rows="9" style="width:100%; resize:vertical; font-size:12px"
                       :value="promptText" @focus="$event.target.select()"></textarea>
-            <div class="muted small">粘贴到任何 AI 对话框发送，把回给我的 JSON 存下来即可在外部生成导图。</div>
+            <div class="muted small">粘贴到任何 AI 对话框发送，会得到 Markdown 技能树 + 7 大类资源表 + 图谱说明 + JSON 附件。</div>
           </div>
         </template>
         <div v-if="!hasAi" class="err-hint">AI 尚未配置：请先到「设置 → AI 模型」填写模型名称 / API 地址 / API Key。</div>
@@ -101,8 +101,10 @@
         </div>
         <span class="km-sep"></span>
         <button class="small" :disabled="exporting" @click="downloadPng">⬇ PNG</button>
-        <button class="small" :disabled="exporting" @click="downloadPdf">⬇ PDF</button>
+        <button class="small" :disabled="exporting" title="导出全部内容：主图 + 地图信息 + 子能力 + 成本表 + 数据来源 + 知识交集"
+                @click="downloadPdf">⬇ PDF（全量）</button>
         <button class="small danger" @click="removeMap">🗑 删除</button>
+        <div v-if="mapMeta" class="muted small km-metainfo">{{ mapMeta }}</div>
       </div>
 
       <div class="km-canvas" ref="canvasEl" @wheel.prevent="onWheel" @pointerdown="onPanStart">
@@ -159,8 +161,8 @@
             <div class="km-group">{{ g.label }} <span class="muted small">{{ g.items.length }}</span></div>
             <div v-for="(r, i) in g.items" :key="i" class="km-res">
               <div class="km-rt">
-                <a v-if="r.url" :href="r.url" target="_blank" rel="noopener">{{ r.title }}</a>
-                <span v-else>{{ r.title }}</span>
+                <a v-if="r.url" :href="r.url" target="_blank" rel="noopener">{{ resTitle(r) }}</a>
+                <span v-else>{{ resTitle(r) }}</span>
               </div>
               <div class="muted small km-rmeta">
                 <span v-if="r.author">{{ r.author }}</span><span v-if="r.source">· {{ r.source }}</span>
@@ -247,6 +249,11 @@
 // PNG/PDF 下载）；右 = 数据来源 / 知识交集 / 子能力 / 成本四个小页签。AI 生成走后台任务
 // （同 AI复盘IM 的 jobs 轮询模型：POST 立即回任务号、1.5s 轮询快照、离开页面不中断）。
 //
+// v1.11.2：① 工具条显示地图元信息（模型 / token 用量 / 生成时间，用量随 tree JSON 落库）；
+// ② PDF 升级全量导出（主图 + 地图信息 + 子能力/优势 + 成本表 + 数据来源 + 知识交集，
+//   文字页 canvas 排字、每页一张 JPEG 进手写多页 PDF）；③ 书籍加权（📚 分组置顶、书名补《》）；
+// ④ 获得提示词改用外部版（Markdown 树 + 7 大类资源表 + JSON 附件，与后端共用构建模型）。
+//
 // 画布口径：布局是纯函数 layoutTree(root, style) → { nodes, edges, bbox }——**坐标摆放与连线
 // 生成分两步**（先摆完坐标再统一画边，sides 左右分组 / treeup 整树翻转都不会让边坐标失效）。
 // 展示层（模板）与导出层（buildSvgString）共用同一布局函数与字号 / 估宽，两处视觉必然一致；
@@ -318,6 +325,21 @@ const elapsedS = computed(() => {
   return Math.max(0, Math.round(((job.value.finished_at || Date.now()) - job.value.started_at) / 1000));
 });
 const tree = computed(() => (map.value && map.value.tree) || {});
+// 地图元信息（v1.11.2）：用了什么模型 / 多少 token / 生成时间。model 列与 created_at 一直在库，
+// token 用量 v1.11.2 起随 tree JSON 落库——老图没有用量就只显示有的部分。
+const mapMeta = computed(() => {
+  if (!map.value) return '';
+  const u = tree.value.usage || {};
+  const parts = [];
+  if (map.value.model) parts.push(`模型 ${map.value.model}`);
+  if (u.total_tokens != null || u.completion_tokens != null) {
+    parts.push(u.prompt_tokens != null || u.completion_tokens != null
+      ? `输入 ${u.prompt_tokens ?? '?'} / 输出 ${u.completion_tokens ?? '?'} tokens`
+      : `${u.total_tokens} tokens`);
+  }
+  if (map.value.created_at) parts.push(`${String(map.value.created_at).slice(0, 16)} 生成`);
+  return parts.join(' · ');
+});
 const recommended = computed(() => tree.value.recommended_style || '');
 const editTitle = ref('');
 const editFolder = ref(null);
@@ -626,10 +648,192 @@ async function downloadPng() {
   finally { exporting.value = false; }
 }
 
-// 最小 PDF：单页嵌一张 JPEG（DCTDecode），页面尺寸 = 图像尺寸(pt)。手写二进制，不引依赖。
-function minimalPdf(jpegBytes, wPx, hPx) {
-  const W = +(wPx * 0.75).toFixed(2), H = +(hPx * 0.75).toFixed(2);
-  const content = `q ${W} 0 0 ${H} 0 0 cm /Im0 Do Q`;
+// ---------- PDF 全量导出（v1.11.2）：不只主图，地图包含的全部信息都导出 ----------
+// 页序：① 主图（A4 白底 + 头部标题/元信息）② 地图信息 + 子能力/优势 ③ 成本表
+// ④ 数据来源（全部分组全部元数据）⑤ 知识交集（与已有资料的关联，含命中词）。
+// 文字页的排字全走 canvas（浏览器字体，中文无障碍），每页一张 JPEG 嵌进手写多页 PDF（不引依赖）。
+const A4W = 794, A4H = 1123, A4S = 2, MARGIN = 54;   // A4@96dpi 逻辑尺寸，2x 出图
+
+function newReportPage() {
+  const cv = document.createElement('canvas');
+  cv.width = A4W * A4S; cv.height = A4H * A4S;
+  const ctx = cv.getContext('2d');
+  ctx.scale(A4S, A4S);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, A4W, A4H);
+  ctx.textBaseline = 'top';
+  return { cv, ctx, y: MARGIN };
+}
+
+// 按像素宽度断行（逐字符累加宽度；中文英文都适用，保留换行符）
+function wrapText(ctx, text, maxW) {
+  const lines = [];
+  let line = '';
+  for (const ch of String(text || '')) {
+    if (ch === '\n') { lines.push(line); line = ''; continue; }
+    if (line && ctx.measureText(line + ch).width > maxW) { lines.push(line); line = ch === ' ' ? '' : ch; }
+    else line += ch;
+  }
+  lines.push(line);
+  return lines;
+}
+
+function clipCanvasText(ctx, t, maxW) {
+  let s = String(t || '');
+  if (ctx.measureText(s).width <= maxW) return s;
+  while (s.length && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+  return s + '…';
+}
+
+// 主图页：A4 白底，头部标题 + 元信息行，主图按框缩放居中（与后面报告页同尺寸，翻阅连贯）
+async function mapPageCanvas() {
+  const src = await renderExportCanvas();   // 2x 白底主图（自带脚注行）
+  const p = newReportPage();
+  p.ctx.font = '700 19px ' + FONT; p.ctx.fillStyle = '#1f2430';
+  p.ctx.fillText(clipCanvasText(p.ctx, map.value.title, A4W - MARGIN * 2 - 220), MARGIN, p.y);
+  p.ctx.font = '10.5px ' + FONT; p.ctx.fillStyle = '#9aa3b5';
+  p.ctx.textAlign = 'right';
+  p.ctx.fillText(`${styleLabel(map.value.style)} · ${new Date().toLocaleDateString('zh-CN')} 导出`, A4W - MARGIN, p.y + 6);
+  p.ctx.textAlign = 'left';
+  p.y += 30;
+  if (mapMeta.value) {
+    p.ctx.font = '11px ' + FONT; p.ctx.fillStyle = '#6b7482';
+    p.ctx.fillText(clipCanvasText(p.ctx, mapMeta.value, A4W - MARGIN * 2), MARGIN, p.y);
+    p.y += 20;
+  }
+  const boxY = p.y + 6, boxW = A4W - MARGIN * 2, boxH = A4H - 36 - boxY;
+  const k = Math.min(boxW / src.width, boxH / src.height);
+  p.ctx.drawImage(src, (A4W - src.width * k) / 2, boxY, src.width * k, src.height * k);
+  return p.cv;
+}
+
+// 报告页（②~⑤）：小节自动分页，页脚统一补「标题 · 第 X / Y 页」
+function buildReportPages() {
+  const pages = [];
+  let pg = null;
+  const BOTTOM = A4H - 40;
+  const ensure = (need = 22) => {
+    if (!pg || pg.y + need > BOTTOM) { pg = newReportPage(); pages.push(pg); }
+    return pg;
+  };
+  const h2 = (t, cnt) => {
+    const p = ensure(32);
+    p.ctx.font = '700 14px ' + FONT; p.ctx.fillStyle = '#4a5568';
+    p.ctx.fillText(cnt != null ? `${t}（${cnt}）` : t, MARGIN, p.y);
+    p.ctx.strokeStyle = '#d8dee9'; p.ctx.beginPath();
+    p.ctx.moveTo(MARGIN, p.y + 19); p.ctx.lineTo(A4W - MARGIN, p.y + 19); p.ctx.stroke();
+    p.y += 28;
+  };
+  const para = (t, opt = {}) => {
+    const size = opt.size || 12, color = opt.color || '#333a45', bold = opt.bold ? '700 ' : '';
+    pg.ctx.font = `${bold}${size}px ${FONT}`;   // 先在当前页 ctx 上定字体量宽（各页字体一致）
+    const lines = wrapText(pg.ctx, t, A4W - MARGIN * 2 - (opt.indent || 0));
+    for (const ln of lines) {
+      const p = ensure(size * 1.7);
+      p.ctx.font = `${bold}${size}px ${FONT}`; p.ctx.fillStyle = color;
+      p.ctx.fillText(ln, MARGIN + (opt.indent || 0), p.y);
+      p.y += size * 1.65;
+    }
+  };
+
+  // ② 地图信息
+  const p0 = ensure(34);
+  p0.ctx.font = '700 19px ' + FONT; p0.ctx.fillStyle = '#1f2430';
+  p0.ctx.fillText(clipCanvasText(p0.ctx, map.value.title + ' · 导出报告', A4W - MARGIN * 2), MARGIN, p0.y);
+  p0.y += 32;
+  para(`目标：${map.value.goal_text || '—'}`);
+  para(`生成信息：${mapMeta.value || '—'}`);
+  if (tree.value.summary) para(`概要：${tree.value.summary}`);
+  const kw = (tree.value.keywords || []).join('、');
+  if (kw) para(`关键词：${kw}`);
+  pg.y += 10;
+
+  // ②b 子能力 / 优势能力
+  const subs = tree.value.subskills || [], advs = tree.value.advantages || [];
+  if (subs.length) {
+    h2('需要扩展的子能力', subs.length);
+    for (const x of subs) para(`· ${x.name}${x.why ? '——' + x.why : ''}`);
+  }
+  if (advs.length) {
+    h2('优势能力', advs.length);
+    for (const a of advs) para(`· ${a}`);
+  }
+  if (subs.length || advs.length) pg.y += 6;
+
+  // ③ 成本表（逐节点四要素；跨页时重画表头）
+  h2('成本（每个知识点的投入）', flatNodes.value.length);
+  const cols = [
+    { x: MARGIN, w: 290, t: '知识点' }, { x: MARGIN + 306, w: 150, t: '周期' },
+    { x: MARGIN + 466, w: 105, t: '程度' }, { x: MARGIN + 579, w: 161, t: '成本' },
+  ];
+  const thead = () => {
+    const p = ensure(26);
+    p.ctx.font = '700 11.5px ' + FONT; p.ctx.fillStyle = '#6b7482';
+    for (const c of cols) p.ctx.fillText(c.t, c.x, p.y);
+    p.y += 17;
+  };
+  thead();
+  for (const n of flatNodes.value) {
+    if (pg.y + 20 > BOTTOM) thead();
+    const p = ensure(19);
+    p.ctx.font = (n.depth === 0 ? '700 ' : '') + '11.5px ' + FONT;
+    p.ctx.fillStyle = n.depth === 0 ? '#1f2430' : '#333a45';
+    p.ctx.fillText(clipCanvasText(p.ctx, n.name, cols[0].w - n.depth * 10), cols[0].x + n.depth * 10, p.y);
+    p.ctx.font = '11px ' + FONT; p.ctx.fillStyle = '#4a5568';
+    p.ctx.fillText(clipCanvasText(p.ctx, n.cycle, cols[1].w), cols[1].x, p.y);
+    p.ctx.fillText(clipCanvasText(p.ctx, n.level, cols[2].w), cols[2].x, p.y);
+    p.ctx.fillText(clipCanvasText(p.ctx, n.cost, cols[3].w), cols[3].x, p.y);
+    p.y += 17;
+  }
+  pg.y += 10;
+
+  // ④ 数据来源（全部分组、全部元数据；不受画布选中过滤影响）
+  const all = tree.value.resources || [];
+  h2('数据来源（学习资源）', all.length);
+  const byType = new Map();
+  for (const r of all) { if (!byType.has(r.type)) byType.set(r.type, []); byType.get(r.type).push(r); }
+  const types = [...byType.keys()].sort((a, b) => {
+    const ia = RES_ORDER.indexOf(a), ib = RES_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  for (const t of types) {
+    ensure(24);
+    para((t === 'book' ? '📚 ' : '') + resLabelOf(t) + `（${byType.get(t).length}）`, { bold: true, size: 12.5 });
+    for (const r of byType.get(t)) {
+      para(`· ${resTitle(r)}${r.author ? '　' + r.author : ''}`, { bold: true, size: 12 });
+      const meta = [r.source, r.version, r.difficulty, r.prereq ? `先修：${r.prereq}` : '',
+        r.stage ? `阶段：${r.stage}` : '', r.credibility ? `可信度：${r.credibility}` : '', r.license]
+        .filter(Boolean).join(' · ');
+      if (meta) para(meta, { size: 10.5, color: '#6b7482', indent: 14 });
+      if (r.url) para(r.url, { size: 10.5, color: '#4a6fd0', indent: 14 });
+      if (r.skill) para(`挂靠技能：${r.skill}`, { size: 10.5, color: '#6b7482', indent: 14 });
+      pg.y += 3;
+    }
+  }
+
+  // ⑤ 知识交集（没加载成功就整节省略，导出不因它失败）
+  if (links.value && ((links.value.groups || []).length || (links.value.words || []).length)) {
+    pg.y += 6;
+    h2('知识交集（与已有资料的关联）');
+    if ((links.value.words || []).length) para(`命中词：${links.value.words.join('、')}`, { size: 11, color: '#6b7482' });
+    for (const g of links.value.groups || []) {
+      ensure(24);
+      para(`${g.label}（${g.items.length}${g.total > g.items.length ? ' / 共 ' + g.total : ''}）`, { bold: true, size: 12.5 });
+      if (!g.items.length) para('（无交集）', { size: 10.5, color: '#9aa3b5', indent: 14 });
+      for (const it of g.items) para(`· ${it.title}「${it.why}」`, { size: 11, indent: 14 });
+    }
+  }
+
+  // 页脚统一补页码（页数此刻才知道，所以放最后画）
+  pages.forEach((p, i) => {
+    p.ctx.font = '10px ' + FONT; p.ctx.fillStyle = '#9aa3b5'; p.ctx.textAlign = 'center';
+    p.ctx.fillText(`${map.value.title} · 知识地图导出 · 第 ${i + 2} / ${pages.length + 1} 页`, A4W / 2, A4H - 28);
+    p.ctx.textAlign = 'left';
+  });
+  return pages.map((p) => p.cv);
+}
+
+// 最小多页 PDF：每页一张 JPEG（DCTDecode），页面尺寸 = 图像尺寸(pt)。手写二进制，不引依赖。
+function minimalPdf(pages) {
   const enc = (str) => { const a = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) a[i] = str.charCodeAt(i) & 0xff; return a; };
   const parts = [enc('%PDF-1.4\n')];
   const offsets = [0];
@@ -642,15 +846,27 @@ function minimalPdf(jpegBytes, wPx, hPx) {
     const t = enc(tail);
     parts.push(t); pos += t.length;
   };
+  const n = pages.length;
+  const pageId = (i) => 3 + i, imgId = (i) => 3 + n + i, contId = (i) => 3 + 2 * n + i;
   pushObj(1, '<< /Type /Catalog /Pages 2 0 R >>', null, 'endobj\n');
-  pushObj(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', null, 'endobj\n');
-  pushObj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`, null, 'endobj\n');
-  pushObj(4, `<< /Type /XObject /Subtype /Image /Width ${wPx} /Height ${hPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`, jpegBytes, '\nendstream\nendobj\n');
-  pushObj(5, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, null, 'endobj\n');
+  pushObj(2, `<< /Type /Pages /Kids [${pages.map((_, i) => `${pageId(i)} 0 R`).join(' ')}] /Count ${n} >>`, null, 'endobj\n');
+  pages.forEach((p, i) => {
+    const W = +(p.w * 0.75).toFixed(2), H = +(p.h * 0.75).toFixed(2);
+    pushObj(pageId(i), `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im${i} ${imgId(i)} 0 R >> >> /Contents ${contId(i)} 0 R >>`, null, 'endobj\n');
+  });
+  pages.forEach((p, i) => {
+    pushObj(imgId(i), `<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpeg.length} >>\nstream\n`, p.jpeg, '\nendstream\nendobj\n');
+  });
+  pages.forEach((p, i) => {
+    const W = +(p.w * 0.75).toFixed(2), H = +(p.h * 0.75).toFixed(2);
+    const content = `q ${W} 0 0 ${H} 0 0 cm /Im${i} Do Q`;
+    pushObj(contId(i), `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, null, 'endobj\n');
+  });
+  const maxId = 2 + 3 * n;
   const xrefPos = pos;
-  let xref = 'xref\n0 6\n0000000000 65535 f \n';
-  for (let i = 1; i <= 5; i++) xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
-  xref += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+  let xref = `xref\n0 ${maxId + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= maxId; i++) xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+  xref += `trailer\n<< /Size ${maxId + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
   parts.push(enc(xref));
   const total = parts.reduce((a, p2) => a + p2.length, 0);
   const out = new Uint8Array(total);
@@ -659,17 +875,23 @@ function minimalPdf(jpegBytes, wPx, hPx) {
   return out;
 }
 
+function canvasJpeg(cv, q = 0.9) {
+  const dataUrl = cv.toDataURL('image/jpeg', q);
+  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
 async function downloadPdf() {
   if (exporting.value) return;
   exporting.value = true;
   try {
-    const cv = await renderExportCanvas();
-    const dataUrl = cv.toDataURL('image/jpeg', 0.92);
-    const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
-    const jpeg = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) jpeg[i] = bin.charCodeAt(i);
-    saveBlob(new Blob([minimalPdf(jpeg, cv.width, cv.height)], { type: 'application/pdf' }), `${safeName(map.value.title)}.pdf`);
-    emit('toast', 'PDF 已下载');
+    if (map.value && linksFor.value !== map.value.id) { try { await loadLinks(true); } catch { /* 交集拉不到就跳过该节 */ } }
+    const cvs = [await mapPageCanvas(), ...buildReportPages()];
+    const pages = cvs.map((cv) => ({ jpeg: canvasJpeg(cv), w: cv.width, h: cv.height }));
+    saveBlob(new Blob([minimalPdf(pages)], { type: 'application/pdf' }), `${safeName(map.value.title)}.pdf`);
+    emit('toast', `PDF 已下载（${pages.length} 页：主图 + 地图信息 + 子能力 + 成本 + 数据来源${links.value ? ' + 知识交集' : ''}）`);
   } catch (e) { emit('toast', 'PDF 导出失败：' + (e.message || e), 'err'); }
   finally { exporting.value = false; }
 }
@@ -821,8 +1043,15 @@ const groupedRes = computed(() => {
     const ia = RES_ORDER.indexOf(a), ib = RES_ORDER.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
-  return order.map((k) => ({ type: k, label: resLabelOf(k), items: by.get(k) }));
+  return order.map((k) => ({ type: k, label: k === 'book' ? '📚 ' + resLabelOf(k) : resLabelOf(k), items: by.get(k) }));
 });
+// 实体书籍展示时补书名号《》：新图由提示词直接带《》；老图（旧提示词生成的）在这里兜底包上；
+// 标题里已出现《》的（AI 自己写过或带副书名）不再重复包，避免出现《《…》》。
+const resTitle = (r) => {
+  if (r.type !== 'book') return r.title;
+  const t = String(r.title || '').trim();
+  return t && !/[《》]/.test(t) ? `《${t}》` : t;
+};
 const resLabelOf = (k) => RES_LABELS[k] || k;
 const RES_LABELS = {
   book: '书籍', article: '文章', standard: '规范', whitepaper: '白皮书', report: '行业报告',
@@ -945,6 +1174,7 @@ onUnmounted(() => {
   padding: 4px 8px; min-width: 120px; max-width: 300px; background: transparent; color: var(--text); }
 .km-title-input:hover, .km-title-input:focus { border-color: var(--border); background: var(--bg, #fff); outline: none; }
 .km-fsel { max-width: 160px; }
+.km-metainfo { flex: 1 1 100%; padding-top: 2px; color: var(--text2); }
 .km-sep { width: 1px; height: 22px; background: var(--border); }
 .km-toolbar .pills { display: flex; gap: 5px; flex-wrap: wrap; }
 .km-toolbar .pills button, .km-toolbar .pills button.rec { padding: 4px 10px; border: 1px solid var(--border);

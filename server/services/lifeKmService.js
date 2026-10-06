@@ -215,7 +215,7 @@ function sanitizeResources(list) {
       title, url,
       author: str(r.author, 80), source: str(r.source, 80), version: str(r.version, 40),
       difficulty: str(r.difficulty, 16), prereq: str(r.prereq, 80), stage: str(r.stage, 60),
-      credibility: str(r.credibility, 16), license: str(r.license, 60), skill: str(r.skill, 60),
+      credibility: str(r.credibility, 40), license: str(r.license, 60), skill: str(r.skill, 60),
     });
   }
   return out;
@@ -348,42 +348,89 @@ function parseTreeJson(raw) {
 const jobs = new Map();   // tenantKey → job
 let jobSeq = 0;
 
-const PROMPT_SCHEMA = [
-  '请为下面这句学习目标规划一棵「技能树学习地图」，严格输出一个 JSON 对象本身（不要 markdown 代码围栏、不要解释）：',
+// v1.11.2 起提示词分三层组装：PROMPT_MODEL 是「知识地图&技能图谱构建引擎」的固化构建模型
+// （用户 2026-10-06 提供模板接入：节点四要素 + 资源 7 大类 + 元数据必填 + 六条约束），
+// 后端 runJob（= MODEL + JSON 契约）与「📋 获得提示词」外部旁路（= MODEL + Markdown/JSON 输出格式）
+// 共用同一份模型——两处口径必然一致，改模型两边自动同步。
+const PROMPT_MODEL = [
+  '你是「知识地图 & 技能图谱构建引擎」。把用户的一句话学习目标，拆解成可执行、可验收、成本透明的技能学习地图。',
+  '按下面五步构建（内部分析用，不要把步骤本身输出）：',
+  '① 目标解析：这项能力由哪些大类技能构成、学习主线怎么走；',
+  '② 技能拆解：一级大类 3~5 个，每类下具体技能 2~4 个（树 2~3 层、总节点 10~25 个），先修技能排在依赖它的技能之前；',
+  '③ 逐节点定四要素：【周期】【程度】【成本】【前置依赖】；',
+  '④ 资源检索：给关键技能配学习资源——实体书籍优先、权威来源优先；',
+  '⑤ 依赖校验：砍掉超纲与循环依赖的节点，核对资源真实存在。',
+  '',
+  '节点四要素规范：',
+  '- cycle 周期：分阶段紧凑给出（如「入门 8 小时/练习 4 周/实战 6 周」，16 字以内），单位用小时或周；',
+  '- level 程度：了解 / 掌握 / 熟练 / 精通 四档之一；',
+  '- cost 成本：免费 或金额区间（如 0～500 元），软件 / 课程 / 认证支出分开写清；',
+  '- note 验收标准：可检验——学会后能独立做成什么（如「能独立完成一次 X 并通过 Y 的验收」），不写空话；',
+  '  前置依赖体现在树的位置上（先修在前）；节点确有树外前置时写在 note 开头（「前置：…」）。',
+  '',
+  '资源分类体系固定 7 大类（资源 type 只能取下列值，不能自创大类）：',
+  '· 文献读物：book 书籍 / article 文章 / standard 规范 / whitepaper 白皮书 / report 行业报告 / paper 论文 / patent 专利',
+  '· 技术文档：docs 官方文档 / api API 文档',
+  '· 开源资产：opensource 开源项目 / dataset 数据集',
+  '· 音视频课程：course 课程 / podcast 播客 / talk 会议演讲',
+  '· 工程模板：template 模板 / sop SOP / tool 工具链 / platform 软件平台',
+  '· 项目案例：case 案例库 / retro 复盘库 / internal 内部文档 / archive 历史项目档案',
+  '· 人际与认证：expert 专家导师 / community 社区 / forum 论坛 / cert 认证',
+  '',
+  '资源元数据全部必填，缺失写「未知」（url 除外，见下）：',
+  'title 资源名称（实体书籍一律写《书名》，必须是真实出版的书）/ source 来源 / author 作者 /',
+  'version 版本（无链接的写「无」）/ url 链接（真实存在的才填，不确定给空字符串，绝不编造）/',
+  'difficulty 难度等级：入门 / 初级 / 中级 / 高级 / 专家 / prereq 先修要求（没有写「无」）/',
+  'stage 适用阶段：入门 / 练习 / 实战 / credibility 可信度：高 / 中 / 低，后接一句理由 / license 版权说明（公开 / 付费 / 开源等）。',
+  '',
+  '约束规则：',
+  '1. 先修排前：任何技能不得排在其前置技能之前；',
+  '2. 程度可落地验收：每条验收标准要能被第三方检验；',
+  '3. 成本如实：免费就写免费，付费给区间；',
+  '4. 资源权威真实：书籍与课程给真实存在、业界公认的；不确定就换你确定的，绝不编造书名 / 作者 / 版本 / 链接；',
+  '5. 参考书籍加权：book 类资源不少于全部资源的四分之一，优先经典教材与公认著作；',
+  '6. 资源总量 10~20 条，7 大类至少覆盖 4 类，书籍 / 文档 / 课程 / 开源项目尽量各有覆盖。',
+].join('\n');
+
+// JSON 结构契约（后端解析用这份骨架；外部版也复用它当「JSON 附件」的格式说明）
+const PROMPT_JSON = [
   '{',
   '  "title": "地图标题，10 字以内",',
   '  "summary": "总述：这项能力由什么构成、学习主线怎么走，120 字以内",',
   '  "root": {',
   '    "name": "能力总名（如：独立开发并上线一个 Web 应用）",',
-  '    "cycle": "总周期估计（如：3 个月 / 约 120 小时）",',
-  '    "level": "目标熟练程度（入门/熟练/精通）",',
-  '    "cost": "总成本估计（如：0～500 元）",',
-  '    "note": "一句话说明",',
+  '    "cycle": "总周期（如：3 个月 / 约 120 小时）", "level": "入门/熟练/精通",',
+  '    "cost": "总成本（如：0～500 元）", "note": "一句话总说明",',
   '    "children": [',
-  '      { "name": "第一阶段或大类（共 3~5 个）", "cycle": "…", "level": "…", "cost": "…", "note": "…",',
+  '      { "name": "第一阶段或大类（3~5 个）", "cycle": "…", "level": "了解/掌握/熟练/精通", "cost": "…", "note": "验收标准",',
   '        "children": [ { "name": "具体技能（每类 2~4 个）", "cycle": "…", "level": "…", "cost": "…", "note": "…" } ] }',
   '    ]',
   '  },',
   '  "resources": [',
-  '    { "type": "类型（见下）", "title": "资源名", "author": "作者/机构", "source": "来源", "version": "版本/年份",',
-  '      "url": "链接（真实存在的才填，不确定就给空字符串，绝不编造）",',
-  '      "difficulty": "入门/进阶/高级", "prereq": "先修要求（没有给空）", "stage": "适用阶段",',
-  '      "credibility": "高/中", "license": "版权/许可（公开/付费/开源等）", "skill": "挂靠的技能名（对应树节点 name）" }',
+  '    { "type": "类型（上面 7 大类里选）", "title": "资源名（实体书籍用《书名》）", "author": "作者/机构", "source": "来源",',
+  '      "version": "版本/年份", "url": "链接（不确定给空字符串）",',
+  '      "difficulty": "入门/初级/中级/高级/专家", "prereq": "先修要求", "stage": "入门/练习/实战",',
+  '      "credibility": "高/中/低+一句理由", "license": "版权/许可", "skill": "挂靠的技能名（对应树节点 name）" }',
   '  ],',
   '  "subskills": [ { "name": "完成该目标还需要补的子能力", "why": "为什么需要（一句话）" } ],',
   '  "advantages": [ "学成后可迁移的优势能力，一句话一条" ],',
   '  "keywords": ["8~15 个用于检索的关键词或短语（技能名、技术名词、领域术语）"],',
   '  "recommended_style": "最适合展示这棵树的风格：mindmap/treeup/pyramid/sides/radial 之一"',
   '}',
-  '',
-  '资源 type 只能取：book 书籍 / article 文章 / standard 规范 / whitepaper 白皮书 / report 行业报告 / paper 论文 / patent 专利 /',
-  'docs 官方文档 / api API 文档 / opensource 开源项目 / dataset 数据集 / course 课程 / podcast 播客 / talk 会议演讲 /',
-  'template 模板 / sop SOP / tool 工具链 / platform 软件平台 / case 案例库 / retro 复盘库 / internal 内部文档 /',
-  'archive 历史项目档案 / expert 专家导师 / community 社区 / forum 论坛 / cert 认证。',
-  '',
-  '要求：树 2~3 层、总节点 10~25 个；资源 10~20 条、类型搭配开（文档/课程/开源项目/书籍至少各有覆盖）；',
-  '书籍与课程给真实存在、业界公认的（不确定就换一个你确定的，不要编造书名）；周期/成本给区间或量级估计。',
 ].join('\n');
+
+// 内部版：后端 runJob 用（解析 JSON 落库）
+const PROMPT_SCHEMA = PROMPT_MODEL + '\n\n输出要求：严格按下面结构输出一个 JSON 对象本身（不要 markdown 代码围栏、不要解释、不要思考过程）：\n\n'
+  + PROMPT_JSON;
+
+// 外部版：「📋 获得提示词」按钮下发（meta.prompt_template）——给外部 AI 工具用，
+// 按「Markdown 技能树 + 资源表 + 图谱说明 + JSON 附件」输出，人直接可读；JSON 附件结构同内部版。
+const PROMPT_EXTERNAL = PROMPT_MODEL + '\n\n输出格式（按顺序四段）：\n'
+  + '1. Markdown 技能树：缩进列表展示整棵树，每个节点后标注【周期】【程度】【成本】，节点有树外前置的用「← 前置：X」标出；\n'
+  + '2. 学习资源表：按 7 大类分组的 Markdown 表格，列 = 资源名称/作者/来源/版本·链接/难度/先修/适用阶段/可信度/版权/挂靠技能；\n'
+  + '3. 图谱说明：依赖关系、建议学习顺序、主要风险（各一两句）；\n'
+  + '4. JSON 附件：完整输出下面结构的 JSON（便于导回知识地图类工具），放在最后一个代码块里：\n\n'
+  + PROMPT_JSON;
 
 function log(job, msg) {
   job.logs.push({ t: Date.now(), msg });
@@ -432,7 +479,7 @@ async function runJob(job) {
       const t0 = Date.now();
       if (attempt > 1) log(job, '输出不是合法 JSON，自动重试一次（换更严格的 JSON 指令）…');
       const { content, model: m, usage: u, finish_reason: finish } = await ai.chatEx([
-        { role: 'system', content: '你是中文知识体系规划专家，精通各类技能的学习路径设计。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
+        { role: 'system', content: '你是「知识地图 & 技能图谱构建引擎」，精通各类技能的学习路径设计。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
         { role: 'user', content: PROMPT_SCHEMA + (attempt > 1 ? NUDGE : '') + `\n\n（学习目标）\n${job.goal_text}` },
       ], { maxTokens: 8000, temperature: 0.4, tdb });
       if (job.state === 'cancelled') { log(job, 'AI 已返回但任务已取消——结果丢弃'); return; }
@@ -455,9 +502,17 @@ async function runJob(job) {
         log(job, `第 ${attempt} 次输出解析失败（${e.message.slice(0, 60)}）· finish=${finish || '?'} · 开头：${String(content).slice(0, 60).replace(/\s+/g, ' ')} … 结尾：… ${String(content).slice(-60).replace(/\s+/g, ' ')}`);
       }
     }
-    // 落库（默认「未分类」）
+    // 落库（默认「未分类」）。token 用量随 tree JSON 落库（v1.11.2：地图要带「模型/用量/生成时间」，
+    // model 列与 created_at 列已有，usage 挂进 tree 里读出来就是同一份）
     job.stage = 'save'; job.stage_label = '保存地图'; job.progress = 97;
     const title = tree.title || (job.goal_text.length > 24 ? job.goal_text.slice(0, 24) + '…' : job.goal_text);
+    if (usage && typeof usage === 'object') {
+      tree.usage = {
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+      };
+    }
     const r = tdb.prepare(
       'INSERT INTO life_km_maps(title, goal_text, folder_id, tree, style, model) VALUES(?,?,?,?,?,?)'
     ).run(title, job.goal_text, null, JSON.stringify(tree), tree.recommended_style || 'mindmap', usedModel);
@@ -590,9 +645,10 @@ function searchLinks(tdb, mapId) {
 }
 
 function meta(tdb) {
-  // prompt_template：固化的导图框架提示词（单一出处）。前端「📋 获得提示词」按钮拿它拼上
-  // 用户的目标，复制出去粘到外部 AI 工具，也能按同一框架生成导图（没用工作台 AI 时的旁路）。
-  return { styles: STYLES, res_types: RES_TYPES, has_ai: ai.hasConfig(tdb), prompt_template: PROMPT_SCHEMA };
+  // prompt_template：固化的导图框架提示词（单一出处，v1.11.2 起下发外部版——Markdown 树 +
+  // 资源表 + 图谱说明 + JSON 附件，与后端 runJob 共用 PROMPT_MODEL 构建模型）。前端
+  // 「📋 获得提示词」按钮拿它拼上用户的目标，复制出去粘到外部 AI 工具按同一模型生成导图。
+  return { styles: STYLES, res_types: RES_TYPES, has_ai: ai.hasConfig(tdb), prompt_template: PROMPT_EXTERNAL };
 }
 
 module.exports = {
