@@ -65,10 +65,16 @@ export function prefixUrl(p) {
 // download / postBlob / upload 走 res.ok 直判——fnOS 网关代答（HTTP 200 +
 // text/plain「invalid token」13 字节，NAS 会话失效签名，真机 2026-10-01 复现）
 // 会被当成功：下载把代答文本存成「空 zip」（红绿灯安装包下载全空的用户反馈），
-// 上传吞成 {}。本应用这些接口的正常响应 Content-Type 恒非 text/plain|html，
-// 命中即读出代答原文：invalid token 给重登指引，其余给片段，并上报前端错误日志。
+// 上传吞成 {}。网关代答没有 Content-Disposition，而本应用合法的下载响应必带
+// attachment 头——v1.10.35 之前「200 + text/plain 一律当代答」把六个 .ps1/.txt
+// 下载端点（剪贴板/短消息代理/监控/桌面宠物/语音转写导出/vibe 客户端）全误伤了
+// （真机复现：下载剪贴板脚本报「响应被网关代答」+ 脚本正文片段）。带 attachment
+// 头的 200 直接放行；无头的 text/plain|html 才是代答，读出原文：invalid token
+// 给重登指引，其余给片段，并上报前端错误日志。
 async function rejectGatewayText(res) {
   if (!res.ok) return; // 非 2xx 由调用方按各自语义报错
+  const cd = res.headers.get('content-disposition') || '';
+  if (/\battachment\b/i.test(cd)) return; // 合法下载（服务端 35 处下载端点全带 attachment；代答没有）
   const ct = res.headers.get('content-type') || '';
   if (!/^text\/(plain|html)/i.test(ct)) return;
   const text = await res.text();
