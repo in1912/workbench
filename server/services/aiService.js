@@ -75,7 +75,8 @@ async function chatEx(messages, { maxTokens = 1024, temperature = 0.7, reasoning
     completion_tokens: u.completion_tokens ?? null,
     total_tokens: u.total_tokens ?? null,
   } : null;
-  return { content: content.trim(), model: cfg.model, usage };
+  // finish_reason（stop=正常收尾 / length=被 max_tokens 截断 / …）：调用方判「截断还是真答完」的依据
+  return { content: content.trim(), model: cfg.model, usage, finish_reason: data.choices?.[0]?.finish_reason ?? null };
 }
 
 async function chat(messages, opts = {}) {

@@ -221,16 +221,96 @@ function sanitizeResources(list) {
   return out;
 }
 
-/** AI 原文 → 合法 tree 对象。root 修不出来才抛（调用方决定重试）。 */
-function parseTreeJson(raw) {
-  const t = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  const i = t.indexOf('{'), e = t.lastIndexOf('}');
-  let o;
-  try {
-    o = JSON.parse(i >= 0 && e > i ? t.slice(i, e + 1) : t);
-  } catch {
-    throw bad('AI 返回的不是合法 JSON，请重试一次');
+// ---------- LLM 输出修复解析（v1.11.1，生产 deepseek-flash 连续两次「不是合法 JSON」后加） ----------
+// 真实模型两类高频病：① 被 max_tokens 截断——停在半个字符串/半个对象上，lastIndexOf('}')
+//   截出的片段必炸；② 尾逗号（",}" / ",]"）。都修；修不好才抛（调用方决定重试）。
+const tryParse = (t) => { try { return JSON.parse(t); } catch { return undefined; } };
+
+/** 去掉字符串外的尾逗号（,} / ,]）：扫描时跟踪 in-string/escape，绝不碰字符串内容。
+ *  连续逗号（,,}）一趟清不干净，有界多趟。 */
+function stripTrailingCommas(text) {
+  for (let pass = 0; pass < 4; pass++) {
+    const drop = [];
+    let inStr = false, esc = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') { inStr = true; continue; }
+      if (c === '}' || c === ']') {
+        let j = i - 1;
+        while (j >= 0 && /\s/.test(text[j])) j--;
+        if (j >= 0 && text[j] === ',') drop.push(j);
+      }
+    }
+    if (!drop.length) return text;
+    let out = '', last = 0;
+    for (const d of drop) { out += text.slice(last, d); last = d + 1; }
+    text = out + text.slice(last);
   }
+  return text;
+}
+
+/** 截断补全：字符串中途断 → 闭引号（悬空反斜杠先摘）；悬空键值（"key": 后没值）→ 逐字符回退重试。 */
+function closeTruncated(t) {
+  const scan = (s) => {
+    const stack = [];
+    let inStr = false, esc = false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') { inStr = false; stack.pop(); }
+        continue;
+      }
+      if (c === '"') { inStr = true; stack.push('"'); }
+      else if (c === '{' || c === '[') stack.push(c);
+      else if (c === '}' || c === ']') {
+        for (let j = stack.length - 1; j >= 0; j--) if (stack[j] !== '"') { stack.length = j; break; }
+      }
+    }
+    return { stack, inStr, esc };
+  };
+  for (let trim = 0; trim <= 400; trim++) {
+    const base = (trim ? t.slice(0, t.length - trim) : t).replace(/[\s,]+$/, '');
+    if (!base.includes('{')) return undefined;
+    const st = scan(base);
+    let fixed = base;
+    if (st.inStr) {
+      if (st.esc) fixed = fixed.slice(0, -1);   // 摘掉悬空反斜杠，闭合引号才不会被转义
+      fixed += '"';
+    }
+    fixed = fixed.replace(/[\s,]+$/, '');
+    let out = fixed;
+    const st2 = scan(out);
+    for (let j = st2.stack.length - 1; j >= 0; j--) if (st2.stack[j] !== '"') out += st2.stack[j] === '{' ? '}' : ']';
+    const parsed = tryParse(out);
+    if (parsed !== undefined) return parsed;
+  }
+  return undefined;
+}
+
+/** AI 原文 → { obj, repaired }：围栏 / 尾逗号 / 截断三重抢救；全部失败返回 undefined。 */
+function hardParseJson(raw) {
+  const t = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  const i = t.indexOf('{');
+  if (i < 0) return undefined;
+  const e = t.lastIndexOf('}');
+  const body = e > i ? t.slice(i, e + 1) : t.slice(i);
+  let o = tryParse(body) ?? tryParse(t.slice(i));
+  if (o !== undefined) return { obj: o, repaired: null };
+  o = tryParse(stripTrailingCommas(body));
+  if (o !== undefined) return { obj: o, repaired: 'commas' };
+  o = closeTruncated(stripTrailingCommas(t.slice(i)));   // 截断时 lastIndexOf('}') 丢后半截，补全要从全文做起
+  if (o !== undefined) return { obj: o, repaired: 'truncated' };
+  return undefined;
+}
+
+/** AI 原文 → { tree, repaired }。root 修不出来才抛（调用方决定重试）。 */
+function parseTreeJson(raw) {
+  const parsed = hardParseJson(raw);
+  if (!parsed) throw bad('AI 返回的不是合法 JSON，请重试一次');
+  const o = parsed.obj;
   const budget = { left: 40 };
   const root = sanitizeNode(o.root, 1, budget);
   if (!root || (!root.children.length && !root.note)) throw bad('AI 没有给出可用的技能树（root 为空），请重试');
@@ -248,16 +328,19 @@ function parseTreeJson(raw) {
     for (const c of n.children || []) collect(c);
   })(root);
   return {
-    title: str(o.title, 60),
-    summary: str(o.summary, 500),
-    root,
-    resources: sanitizeResources(o.resources),
-    subskills: (Array.isArray(o.subskills) ? o.subskills : []).slice(0, 12)
-      .map((x) => typeof x === 'string' ? { name: str(x, 60), why: '' } : { name: str(x && x.name, 60), why: str(x && x.why, 200) })
-      .filter((x) => x.name),
-    advantages: (Array.isArray(o.advantages) ? o.advantages : []).slice(0, 10).map((x) => str(x, 160)).filter(Boolean),
-    keywords: keywords.slice(0, 24),
-    recommended_style: STYLES.some((x) => x.key === o.recommended_style) ? o.recommended_style : '',
+    tree: {
+      title: str(o.title, 60),
+      summary: str(o.summary, 500),
+      root,
+      resources: sanitizeResources(o.resources),
+      subskills: (Array.isArray(o.subskills) ? o.subskills : []).slice(0, 12)
+        .map((x) => typeof x === 'string' ? { name: str(x, 60), why: '' } : { name: str(x && x.name, 60), why: str(x && x.why, 200) })
+        .filter((x) => x.name),
+      advantages: (Array.isArray(o.advantages) ? o.advantages : []).slice(0, 10).map((x) => str(x, 160)).filter(Boolean),
+      keywords: keywords.slice(0, 24),
+      recommended_style: STYLES.some((x) => x.key === o.recommended_style) ? o.recommended_style : '',
+    },
+    repaired: parsed.repaired,
   };
 }
 
@@ -343,21 +426,33 @@ async function runJob(job) {
   try {
     const model = ai.getConfig(tdb).model || '';
     log(job, `调用 AI（${model}）生成技能树…大目标可能要 1~3 分钟，可离开本页，任务在后台继续`);
-    const NUDGE = '\n\n（注意：你上一次的输出不是合法 JSON。这一次从第一个字符起就只输出一个 JSON 对象本身——不要 markdown 代码围栏、不要解释、不要思考过程。）';
+    const NUDGE = '\n\n（注意：你上一次的输出不是合法 JSON。这一次从第一个字符起就只输出一个 JSON 对象本身——不要 markdown 代码围栏、不要解释、不要思考过程；把每段文字压短：summary ≤ 60 字、note ≤ 20 字，整份 JSON 控制在 3000 字以内。）';
     let tree = null, usedModel = '', usage = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       const t0 = Date.now();
       if (attempt > 1) log(job, '输出不是合法 JSON，自动重试一次（换更严格的 JSON 指令）…');
-      const { content, model: m, usage: u } = await ai.chatEx([
+      const { content, model: m, usage: u, finish_reason: finish } = await ai.chatEx([
         { role: 'system', content: '你是中文知识体系规划专家，精通各类技能的学习路径设计。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
         { role: 'user', content: PROMPT_SCHEMA + (attempt > 1 ? NUDGE : '') + `\n\n（学习目标）\n${job.goal_text}` },
-      ], { maxTokens: 6000, temperature: 0.4, tdb });
+      ], { maxTokens: 8000, temperature: 0.4, tdb });
       if (job.state === 'cancelled') { log(job, 'AI 已返回但任务已取消——结果丢弃'); return; }
       usedModel = m; usage = u;
-      log(job, `AI 返回：耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒 · ${u && u.total_tokens != null ? u.total_tokens + ' tokens' : 'tokens 未知'}（${m}）`);
-      try { tree = parseTreeJson(content); break; } catch (e) {
-        if (attempt === 2) throw e;
-        log(job, `第 ${attempt} 次输出解析失败（${e.message.slice(0, 60)}），重试`);
+      const outTok = u && (u.completion_tokens ?? u.total_tokens) != null ? (u.completion_tokens ?? u.total_tokens) : '?';
+      log(job, `AI 返回：耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒 · 输出 ${outTok} tokens · finish=${finish || '?'}（${m}）`);
+      try {
+        const r = parseTreeJson(content);
+        tree = r.tree;
+        if (r.repaired === 'truncated') log(job, '输出疑似被截断——已自动补全闭合括号，解析成功');
+        else if (r.repaired === 'commas') log(job, '输出带尾逗号——已自动修复，解析成功');
+        break;
+      } catch (e) {
+        if (attempt === 2) {
+          // 失败原因分型：截断 / 没按 JSON 回答（拒答或散文）/ 其他，别再一律「不是合法 JSON」
+          if (finish === 'length') throw bad('AI 输出被长度上限截断（finish=length）、自动补全也没救回来——把目标拆小一点再试，或重试一次');
+          if (!String(content).includes('{')) throw bad('AI 没有按 JSON 格式回答（多半是拒答了这个目标或输出了散文，开头已记入任务日志）——换个措辞描述目标再试');
+          throw e;
+        }
+        log(job, `第 ${attempt} 次输出解析失败（${e.message.slice(0, 60)}）· finish=${finish || '?'} · 开头：${String(content).slice(0, 60).replace(/\s+/g, ' ')} … 结尾：… ${String(content).slice(-60).replace(/\s+/g, ' ')}`);
       }
     }
     // 落库（默认「未分类」）
