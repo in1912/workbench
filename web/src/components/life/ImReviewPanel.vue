@@ -1,6 +1,6 @@
 <template>
   <div class="split">
-    <!-- 左：来源/范围/引导词 -->
+    <!-- ==================== 第一列：来源与范围 + 引导词（可折叠）+ 整理进度 ==================== -->
     <div>
       <div class="card" style="margin-bottom:14px">
         <h3>复盘来源与范围</h3>
@@ -30,19 +30,26 @@
         </div>
       </div>
 
-      <div class="card">
-        <h3>引导词（可编辑）
-          <button class="small" title="放弃你的修改，恢复系统默认引导词" @click="resetPrompt">恢复默认</button>
+      <!-- 引导词：默认收起，点标题展开；复制按钮收起时也在（不用展开就能复制当前引导词） -->
+      <div class="card" style="margin-bottom:14px">
+        <h3 class="foldhead">
+          <span class="ft" :title="promptOpen ? '收起' : '展开查看 / 编辑引导词'" @click="promptOpen = !promptOpen">
+            <span class="caret">{{ promptOpen ? '▾' : '▸' }}</span>引导词（可编辑）
+          </span>
+          <span class="row" style="gap:6px; flex:0 0 auto">
+            <button class="small" title="把当前引导词复制到剪贴板（不展开也能复制）" @click="copyPrompt">📋 复制</button>
+            <button v-if="promptOpen" class="small" title="放弃你的修改，恢复系统默认引导词" @click="resetPrompt">恢复默认</button>
+          </span>
         </h3>
-        <textarea v-model="prompt" rows="12" style="width:100%; resize:vertical"
-                  placeholder="告诉 AI 怎么整理这份复盘（输出的 JSON 结构保留 summary / highlights / todos 三个字段即可被下方界面识别）"></textarea>
-        <div class="muted" style="margin-top:6px">改完立即生效（只存在你自己的浏览器里），不影响其他成员。</div>
+        <div v-show="promptOpen">
+          <textarea ref="promptEl" v-model="prompt" rows="12" style="width:100%; resize:vertical"
+                    placeholder="告诉 AI 怎么整理这份复盘（输出的 JSON 结构保留 summary / highlights / todos 三个字段即可被右侧界面识别）"></textarea>
+          <div class="muted" style="margin-top:6px">改完立即生效（只存在你自己的浏览器里），不影响其他成员。</div>
+        </div>
       </div>
-    </div>
 
-    <!-- 右：进度 + 结果 -->
-    <div>
-      <div v-if="job" class="card" style="margin-bottom:14px">
+      <!-- 整理进度（v1.11.5 从右列挪到左列下方）：有任务才出现 -->
+      <div v-if="job" class="card">
         <h3>整理进度
           <span class="muted" style="font-weight:400;font-size:12.5px">{{ jobLabel }}</span>
         </h3>
@@ -60,30 +67,39 @@
         </div>
         <div v-if="job.state === 'error'" class="err-hint" style="margin-top:8px">失败：{{ job.error }}</div>
       </div>
+    </div>
 
+    <!-- ==================== 第二列：复盘结果（框架常显，生成后逐段填进来） ==================== -->
+    <div>
       <div class="card">
-        <h3>复盘结果</h3>
-        <div v-if="!res" class="empty">
-          还没有生成
-          <div class="muted" style="margin-top:6px">选好文件夹与范围，点「生成复盘」。日报看最近 1 天，周报 / 月报分别看 7 / 30 天。</div>
+        <h3>复盘结果
+          <span v-if="!res" class="muted" style="font-weight:400; font-size:12.5px">（待生成）</span>
+        </h3>
+        <div v-if="!res" class="muted small" style="margin:-4px 0 2px">
+          框架先摆好，生成后结果直接填进下面三段。选好来源与范围点「🤖 生成复盘」即可（日报看最近 1 天，周报 / 月报看 7 / 30 天）。
         </div>
-        <template v-else>
-          <label class="fl">沟通概要</label>
-          <p class="sum">{{ res.summary || '（AI 没有给出概要）' }}</p>
 
-          <label class="fl">沟通重点 <span class="muted" style="font-weight:400">{{ res.highlights.length }} 条</span></label>
-          <ol v-if="res.highlights.length" class="hl">
-            <li v-for="(h, i) in res.highlights" :key="i">{{ h }}</li>
-          </ol>
-          <div v-else class="muted">（无）</div>
+        <label class="fl">沟通概要</label>
+        <p v-if="res" class="sum">{{ res.summary || '（AI 没有给出概要）' }}</p>
+        <p v-else class="sum muted">（待生成——AI 整理的整体沟通概要会放在这段）</p>
 
-          <label class="fl">待办事项参考
-            <span class="muted" style="font-weight:400">{{ res.todos.length }} 条</span>
-            <template v-if="res.todos.length">
-              · <a href="javascript:void(0)" @click.prevent="pickAll">{{ checked.size === res.todos.length ? '全不选' : '全选' }}</a>
-            </template>
-          </label>
-          <div v-if="!res.todos.length" class="muted">（聊天里没有明确要跟进的事项）</div>
+        <label class="fl">沟通重点
+          <span class="muted" style="font-weight:400">{{ res ? res.highlights.length + ' 条' : '待生成' }}</span>
+        </label>
+        <ol v-if="res && res.highlights.length" class="hl">
+          <li v-for="(h, i) in res.highlights" :key="i">{{ h }}</li>
+        </ol>
+        <div v-else class="muted">{{ res ? '（无）' : '（待生成——沟通里的关键事会逐条列在这里）' }}</div>
+
+        <label class="fl">待办事项参考
+          <span class="muted" style="font-weight:400">{{ res ? res.todos.length + ' 条' : '待生成' }}</span>
+          <template v-if="res && res.todos.length">
+            · <a href="javascript:void(0)" @click.prevent="pickAll">{{ checked.size === res.todos.length ? '全不选' : '全选' }}</a>
+          </template>
+        </label>
+        <div v-if="res && !res.todos.length" class="muted">（聊天里没有明确要跟进的事项）</div>
+        <div v-else-if="!res" class="muted">（待生成——聊天里可跟进的事项会列在这里，勾选后一键加入「行动」）</div>
+        <template v-if="res">
           <div v-for="(t, i) in res.todos" :key="i" class="todo" :class="{ added: added.has(i) }">
             <label class="trow">
               <input type="checkbox" :checked="checked.has(i)" :disabled="added.has(i) || busyAdd"
@@ -110,7 +126,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+// AI复盘IM（v1.10.29）——lifeOS「AI复盘IM」页签：选 IM 归档文件夹 + 天数范围 → 后台任务整理 →
+// 结果三段（概要 / 重点 / 待办）+ 待办一键加入「行动」。任务模型 v1.10.30 起：POST 立即回任务号、
+// 1.5s 轮询快照、离开本页不中断。
+//
+// v1.11.5 页面重排（用户需求）：① 两列重分布——第一列 = 来源与范围 + 引导词（折叠）+ 整理进度，
+// 第二列 = 复盘结果；② 引导词默认收起、点标题展开，「📋 复制」不展开也能复制当前引导词
+// （clipboard API 失败时自动展开全选走 execCommand 兜底——http 局域网非安全上下文没有 clipboard）；
+// ③ 复盘结果框架常显（概要 / 重点 / 待办三段占位摆好，不再「还没有生成」整块盖住）；
+// ④ 整页全宽自适应（wbMainFull 同领域/关系/知识地图页）+ 两列 minmax(380px,1fr) 均分屏宽。
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, inject } from 'vue';
 import { api } from '../../api';
 
 const emit = defineEmits(['toast']);
@@ -120,6 +145,8 @@ const folders = ref([]);
 const folderId = ref(null);
 const days = ref(1);
 const prompt = ref('');
+const promptOpen = ref(false);   // v1.11.5：引导词默认收起，点标题展开
+const promptEl = ref(null);
 const res = ref(null);
 const busyAdd = ref(false);
 const checked = ref(new Set());
@@ -183,6 +210,24 @@ function toggle(i) {
 function pickAll() {
   const list = res.value ? res.value.todos : [];
   checked.value = checked.value.size === list.length ? new Set() : new Set(list.map((_, i) => i));
+}
+
+// v1.11.5：快捷复制引导词（收起时也能复制）。非安全上下文（http 局域网直连）没有 clipboard API——
+// 自动展开并全选，让 execCommand / Ctrl+C 兜底（同知识地图「获得提示词」的做法）
+async function copyPrompt() {
+  const t = prompt.value || '';
+  if (!t) { emit('toast', '引导词还是空的', 'err'); return; }
+  try {
+    await navigator.clipboard.writeText(t);
+    emit('toast', '引导词已复制');
+  } catch {
+    promptOpen.value = true;
+    await nextTick();
+    const el = promptEl.value;
+    if (el) { el.focus(); el.select(); }
+    const ok = document.execCommand('copy');
+    emit('toast', ok ? '引导词已复制' : '已全选引导词，按 Ctrl+C 复制', ok ? '' : 'err');
+  }
 }
 
 // ---------- 后台任务（v1.10.30）：POST 立即回任务号，1.5s 轮询拿快照 ----------
@@ -271,7 +316,11 @@ function resetPrompt() {
 watch(prompt, (v) => { if (v) localStorage.setItem(LS_KEY, v); });
 watch(() => job.value && job.value.logs.length, scrollLogs);
 
+// 本页全页自适应（同领域/关系/知识地图页）：挂载打开不限宽开关，卸载（切页签/离开 /life）自动关
+const mainFull = inject('wbMainFull', null);
+
 onMounted(async () => {
+  if (mainFull) mainFull.value = true;
   try {
     meta.value = await api.get('/life/im-review/meta');
     ranges.value = meta.value.ranges || [];
@@ -293,12 +342,21 @@ onMounted(async () => {
     }
   } catch { /* 拿不到就算了，不影响选源 */ }
 });
-onUnmounted(stopTimers);
+onUnmounted(() => {
+  if (mainFull) mainFull.value = false;
+  stopTimers();
+});
 </script>
 
 <style scoped>
-.split { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 14px; align-items: start; }
-@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+/* v1.11.5：两列均分屏宽（整页全宽由 wbMainFull 解除 .main 的 1200px 封顶）；
+   min 380 = 每个矩形框比旧版（320）加宽一档，1fr 随屏幕自适应拉开 */
+.split { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1080px) { .split { grid-template-columns: 1fr; } }
+.foldhead { cursor: pointer; }
+.foldhead .ft { display: inline-flex; align-items: center; gap: 2px; min-width: 0; user-select: none; }
+.foldhead .ft:hover { color: var(--accent, #4a7dff); }
+.caret { display: inline-block; width: 14px; flex: 0 0 auto; color: var(--text2); font-size: 12px; }
 .fl { display: block; font-size: 12.5px; color: var(--text2); margin: 10px 0 4px; }
 .pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .pills button { padding: 5px 12px; border: 1px solid var(--border); background: transparent; color: var(--text2);
