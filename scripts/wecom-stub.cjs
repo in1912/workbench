@@ -29,9 +29,10 @@ const a1 = String(process.argv[1] || '');
 const args = SUBCMDS.has(path.basename(a1)) ? [path.basename(a1), ...process.argv.slice(2)] : process.argv.slice(2);
 
 // 每次调用记一笔账：e2e 拿它断言「群/单聊都走 messages list / 游标分页真的翻页 /
-// 配置目录按连接器隔离 / 时间窗被裁进 7 天」
+// 配置目录按连接器隔离 / 时间窗被裁进 7 天 / 每次都带上随包根证书」
 try {
-  fs.appendFileSync(path.join(dataDir, 'wecom-stub-calls.jsonl'), JSON.stringify({ cmd: args.join(' '), args, cfg }) + '\n');
+  fs.appendFileSync(path.join(dataDir, 'wecom-stub-calls.jsonl'),
+    JSON.stringify({ cmd: args.join(' '), args, cfg, ca: process.env.SSL_CERT_FILE || '' }) + '\n');
 } catch { /* 记账失败不能影响扮演 */ }
 
 const TOKEN = path.join(cfg, 'credentials.enc');  // 「已授权」的标记（真 CLI 是 AES-GCM 加密凭证）

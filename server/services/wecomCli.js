@@ -73,9 +73,18 @@ function whichSync() {
 
 const configDirFor = (connectorId) => path.join(dataDir, 'wecom-config', String(Number(connectorId)));
 
+/** 随包根证书 = v1.10.22 给 dws 布置的那份 Mozilla 121 张根（server/dws/ca-bundle.crt）。
+ *  wecom-cli 是 Rust 程序，reqwest 从**系统**加载根证书——slim 容器没有系统 CA，
+ *  Client::new() 会直接 panic（生产实测 2026-10-06："No CA certificates were loaded
+ *  from the system"，授权/状态/同步全灭）。SSL_CERT_FILE 它认（rustls-native-certs
+ *  与 openssl 都读这个变量）；用户自己设过的不覆盖（dws 同款规矩）。 */
+const CA_BUNDLE = path.join(__dirname, '..', 'dws', 'ca-bundle.crt');
+
 /** CLI 子进程的环境：每连接器独立配置目录（凭证、加密密钥、discovery 缓存全在里面） */
 function childEnv(connectorId) {
-  return { ...process.env, WECOM_CLI_CONFIG_DIR: configDirFor(connectorId) };
+  const env = { ...process.env, WECOM_CLI_CONFIG_DIR: configDirFor(connectorId) };
+  if (!env.SSL_CERT_FILE && fs.existsSync(CA_BUNDLE)) env.SSL_CERT_FILE = CA_BUNDLE;
+  return env;
 }
 
 /** .cmd 走 shell:true 时 node 只做字符串拼接、不转义参数（DEP0190）—— 时间串

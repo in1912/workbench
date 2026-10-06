@@ -140,6 +140,9 @@ try {
     JSON.stringify(calls1.filter((c) => c.args.includes('--cursor')).map((c) => c.args.join(' '))));
   s.ck('所有 CLI 调用都发生在本连接器自己的 WECOM_CLI_CONFIG_DIR 里（多账号不互踩）',
     callsLog().length > 0 && calls1.every((c) => c.cfg === cfgDir(id)), JSON.stringify([...new Set(callsLog().map((c) => c.cfg))]));
+  const caExpect = path.join(ROOT, 'server', 'dws', 'ca-bundle.crt');
+  s.ck('每次 CLI 调用都带上随包根证书（SSL_CERT_FILE；slim 容器无系统 CA → Rust reqwest 直接 panic，2026-10-06 生产实测）',
+    calls1.length > 0 && calls1.every((c) => c.ca === caExpect), JSON.stringify([...new Set(calls1.map((c) => c.ca))]));
   const win7d = calls1.filter((c) => c.args.includes('--begin-time')).every((c) => {
     const t = cstMs(c.args[c.args.indexOf('--begin-time') + 1]);
     return t > 0 && (Date.now() - t) < 7 * 86400e3 + 300e3;   // 钳位=7d-1h，留 5 分钟松量

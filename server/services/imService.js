@@ -315,12 +315,22 @@ async function wecomVerify(tdb, id) {
   const r = await wecom.wecomInitAuth(c.id, c.app_id, c.app_secret);
   const st = await wecom.wecomAuthStatus(c.id);
   if (!st.authenticated) {
-    // CLI 的报错在 PTY 输出里，取最后一个非空行当原因（前面的都是提示词回显；
-    // 先剥掉 dialoguer 的 ANSI 转义，否则遮罩行会混进「最后一个非空行」里）
-    const detail = String(r.output || '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n').map((s) => s.trim()).filter(Boolean).pop() || '';
+    // CLI 的报错藏在 PTY 输出里。Rust panic 时最后一个非空行是无用的 RUST_BACKTRACE
+    // 提示（note: run with …），真原因在「panicked at …」那行和它下一行 —— 优先认它们
+    // （2026-10-06 生产：CA 缺失的 panic 就是被「最后非空行」盖住只露出 note）；
+    // 没有 panic 才退回最后非空行（前面都是提示词回显；先剥掉 dialoguer 的 ANSI 转义，
+    // 否则遮罩行会混进来）。
+    const lines = String(r.output || '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n').map((s) => s.trim()).filter(Boolean);
+    const pi = lines.findIndex((l) => l.includes('panicked at'));
+    const detail = String(pi >= 0 ? (lines[pi] + ' ' + (lines[pi + 1] || '')) : (lines[lines.length - 1] || '')).slice(0, 280);
     const msg = ('企业微信授权失败' + (detail ? '：' + detail : '')).slice(0, 300);
     tdb.prepare("UPDATE im_connectors SET status='error',last_error=? WHERE id=?").run(msg, c.id);
     log(tdb, c.id, 'error', msg);
+    // 完整输出（Secret 打码）也留一条在日志里：提炼行盖住真原因的事这次真发生过
+    if (String(r.output || '').trim()) {
+      const full = String(r.output || '').split(String(c.app_secret || '\x00none')).join('***').slice(-1500);
+      log(tdb, c.id, 'error', '授权失败·完整输出：' + full);
+    }
     throw bad(msg, 400);
   }
   const ident = await wecom.wecomSelfIdentity(c.id) || {};
