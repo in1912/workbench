@@ -308,9 +308,33 @@ function decorateNote(tdb, row, fmap = null) {
   };
 }
 
-// ---------- 批量反链（v1.10.24）----------
+// ---------- 批量反链（v1.10.24；v1.10.28 加循环链）----------
 /** 互链小节的名字。所有由「批量反链」写入的 [[链接]] 都落在这个小节里，重跑只补缺、不重复。 */
 const BACKLINK_SECTION = '## 关联笔记';
+
+/** 把若干条 `- [[标题]]` 行补进正文：已有「## 关联笔记」小节就插在小节头下面（跟既有条目
+ *  并存，重复跑不会越滚越长），没有就追加在正文末尾新建小节。互链 / 循环链共用这一个落点。 */
+function appendBacklinkLines(content, lines) {
+  const ls = String(content || '').split('\n');
+  const at = ls.findIndex((l) => l.trim() === BACKLINK_SECTION);
+  if (at >= 0) { ls.splice(at + 1, 0, ...lines); return ls.join('\n'); }
+  const head = content && !content.endsWith('\n') ? content + '\n' : content;
+  return `${head}\n${BACKLINK_SECTION}\n${lines.join('\n')}\n`;
+}
+
+/** 互链 / 循环链共用的入参校验：去重保序（数组顺序 = 链的顺序）、至少两篇、都得存在、标题不重名。 */
+function backlinkRows(tdb, ids, verb) {
+  const uniq = [...new Set((Array.isArray(ids) ? ids : []).map(Number)
+    .filter((x) => Number.isInteger(x) && x > 0))];
+  if (uniq.length < 2) { const e = new Error(`至少要选两篇笔记才能${verb}`); e.code = 400; throw e; }
+  const rows = uniq.map((id) => tdb.prepare('SELECT id,title,content FROM notes WHERE id=?').get(id));
+  const miss = rows.findIndex((r) => !r);
+  if (miss >= 0) { const e = new Error(`笔记 ${uniq[miss]} 不存在`); e.code = 404; throw e; }
+  // 同名标题互链没有意义（[[标题]] 只会解析到其中一篇），先挑明
+  const titles = rows.map((r) => String(r.title || '').trim());
+  if (new Set(titles).size !== titles.length) { const e = new Error('所选笔记里有重名标题，[[链接]] 无法区分，请先改名'); e.code = 400; throw e; }
+  return rows;
+}
 
 /**
  * 给一组笔记**两两互加** `[[标题]]` 链接：每篇的正文末尾（或既有的「关联笔记」小节里）补上
@@ -323,16 +347,7 @@ const BACKLINK_SECTION = '## 关联笔记';
  *    note_links 重建、updated_at 前进 —— 它就是一次真实的正文编辑。
  */
 function backlinkMutual(tdb, ids) {
-  const uniq = [...new Set((Array.isArray(ids) ? ids : []).map(Number)
-    .filter((x) => Number.isInteger(x) && x > 0))];
-  if (uniq.length < 2) { const e = new Error('至少要选两篇笔记才能互链'); e.code = 400; throw e; }
-  const rows = uniq.map((id) => tdb.prepare('SELECT id,title,content FROM notes WHERE id=?').get(id));
-  const miss = rows.findIndex((r) => !r);
-  if (miss >= 0) { const e = new Error(`笔记 ${uniq[miss]} 不存在`); e.code = 404; throw e; }
-  // 同名标题互链没有意义（[[标题]] 只会解析到其中一篇），先挑明
-  const titles = rows.map((r) => String(r.title || '').trim());
-  if (new Set(titles).size !== titles.length) { const e = new Error('所选笔记里有重名标题，[[链接]] 无法区分，请先改名'); e.code = 400; throw e; }
-
+  const rows = backlinkRows(tdb, ids, '互链');
   const upd = tdb.prepare("UPDATE notes SET content=?, word_count=?, updated_at=datetime('now','localtime') WHERE id=?");
   const details = [];
   let linksAdded = 0;
@@ -343,18 +358,7 @@ function backlinkMutual(tdb, ids) {
       .map((o) => String(o.title || '').trim())
       .filter((t) => t && !content.includes(`[[${t}]]`));
     if (!missing.length) continue;
-    const lines = missing.map((t) => `- [[${t}]]`);
-    let next;
-    const at = content.split('\n').findIndex((l) => l.trim() === BACKLINK_SECTION);
-    if (at >= 0) {
-      // 已有小节：插到小节头下面（跟既有条目并存；缺哪些补哪些，重复跑不会越滚越长）
-      const ls = content.split('\n');
-      ls.splice(at + 1, 0, ...lines);
-      next = ls.join('\n');
-    } else {
-      const head = content && !content.endsWith('\n') ? content + '\n' : content;
-      next = `${head}\n${BACKLINK_SECTION}\n${lines.join('\n')}\n`;
-    }
+    const next = appendBacklinkLines(content, missing.map((t) => `- [[${t}]]`));
     upd.run(next, extractWordCount(next), a.id);
     syncNoteTags(tdb, a.id, next);   // 不传显式数组 → 沿用库里已有的手动标签
     syncNoteLinks(tdb, a.id, next);
@@ -364,12 +368,82 @@ function backlinkMutual(tdb, ids) {
   return { notes_total: rows.length, updated: details.length, links_added: linksAdded, details };
 }
 
+/**
+ * 给一组笔记按**传入顺序**串成一条循环链：每篇只在「## 关联笔记」小节里补**一条**指向下一篇的
+ * `[[标题]]` 链接，末篇链回首篇（首尾相接）。适合「系列 / 连载 / 日记」这类有先后关系的笔记——
+ * 顺着一条线读到底，不像互链那样把整批标题都塞进每一篇。
+ *  · ids 的数组顺序就是链的顺序（前端按勾选行的展示顺序传）；
+ *  · 幂等与副作用与互链完全同口径（已链过不重复加、没要补的一字节不动、词数/标签/双链重算）。
+ */
+function backlinkChain(tdb, ids) {
+  const rows = backlinkRows(tdb, ids, '串链');
+  const upd = tdb.prepare("UPDATE notes SET content=?, word_count=?, updated_at=datetime('now','localtime') WHERE id=?");
+  const details = [];
+  let linksAdded = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i];
+    const nx = rows[(i + 1) % rows.length];   // 末篇的「下一篇」= 首篇（循环）
+    const t = String(nx.title || '').trim();
+    const content = String(a.content || '');
+    if (!t || content.includes(`[[${t}]]`)) continue;
+    const next = appendBacklinkLines(content, [`- [[${t}]]`]);
+    upd.run(next, extractWordCount(next), a.id);
+    syncNoteTags(tdb, a.id, next);
+    syncNoteLinks(tdb, a.id, next);
+    linksAdded += 1;
+    details.push({ id: a.id, title: a.title, added: 1, links: [t] });
+  }
+  return { notes_total: rows.length, updated: details.length, links_added: linksAdded, details };
+}
+
+/**
+ * 批量取消链接（互链 / 循环链的逆操作）：把所选笔记「## 关联笔记」小节里的链接条目清掉，
+ * 小节清空后小节头也不留。**只清「整行就是一条 `- [[标题]]`」的条目**——正文其他位置手写的
+ * `[[链接]]`、以及带说明文字的条目（如 `- 相关：[[xx]]`）一律不动，它们是用户自己的字。
+ *  · 幂等：没有可清条目的笔记一个字节都不动（updated_at 不前进）；
+ *  · 副作用与写入侧同口径：word_count / note_links 重算、手动标签沿用。
+ */
+function backlinkClear(tdb, ids) {
+  const uniq = [...new Set((Array.isArray(ids) ? ids : []).map(Number)
+    .filter((x) => Number.isInteger(x) && x > 0))];
+  if (!uniq.length) { const e = new Error('至少要选一篇笔记才能取消链接'); e.code = 400; throw e; }
+  const rows = uniq.map((id) => tdb.prepare('SELECT id,title,content FROM notes WHERE id=?').get(id));
+  const miss = rows.findIndex((r) => !r);
+  if (miss >= 0) { const e = new Error(`笔记 ${uniq[miss]} 不存在`); e.code = 404; throw e; }
+
+  const isLinkLine = (l) => /^-\s+\[\[[^\]]+\]\]\s*$/.test(String(l).trim());
+  const upd = tdb.prepare("UPDATE notes SET content=?, word_count=?, updated_at=datetime('now','localtime') WHERE id=?");
+  const details = [];
+  let linksRemoved = 0;
+  for (const a of rows) {
+    const ls = String(a.content || '').split('\n');
+    const at = ls.findIndex((l) => l.trim() === BACKLINK_SECTION);
+    if (at < 0) continue;
+    // 小节的范围：从节头到下一个标题行（# 开头）为止
+    let end = ls.length;
+    for (let j = at + 1; j < ls.length; j++) { if (/^#{1,6}\s/.test(ls[j])) { end = j; break; } }
+    const removed = [], kept = [];
+    for (let j = at + 1; j < end; j++) { (isLinkLine(ls[j]) ? removed : kept).push(ls[j]); }
+    if (!removed.length) continue;
+    // 节体里还有非空内容（说明文字等）→ 留着节头；清空了 → 节头一起撤
+    const next = kept.some((l) => l.trim() !== '')
+      ? [...ls.slice(0, at + 1), ...kept, ...ls.slice(end)].join('\n')
+      : [...ls.slice(0, at), ...ls.slice(end)].join('\n');
+    upd.run(next, extractWordCount(next), a.id);
+    syncNoteTags(tdb, a.id, next);
+    syncNoteLinks(tdb, a.id, next);
+    linksRemoved += removed.length;
+    details.push({ id: a.id, title: a.title, removed: removed.length });
+  }
+  return { notes_total: rows.length, updated: details.length, links_removed: linksRemoved, details };
+}
+
 module.exports = {
   extractTitle, extractTags, extractInlineTags, extractWordCount,
   syncNoteTags, syncNoteLinks, resolveTitle, resolveUnresolvedFor,
   folderMap, folderSubtreeIds,
   createNote, deleteNote, decorateNote,
   fillTemplate, ensureDailyNote,
-  backlinkMutual, BACKLINK_SECTION,
+  backlinkMutual, backlinkChain, backlinkClear, BACKLINK_SECTION,
   WIKI_RE, INLINE_TAG_RE, TITLE_MAX,
 };

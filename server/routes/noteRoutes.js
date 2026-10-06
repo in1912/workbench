@@ -725,6 +725,28 @@ router.post('/notes/backlink-mutual', (req, res) => {
   }
 });
 
+// 【循环链】（v1.10.28）：按 ids 顺序串成一条环——每篇只补一条指向下一篇的 [[标题]]，末篇链回首篇。
+// ids 的数组顺序就是链的顺序（前端按勾选行的展示顺序传）；幂等与副作用同互链。
+router.post('/notes/backlink-chain', (req, res) => {
+  const ids = Array.isArray((req.body || {}).ids) ? req.body.ids : [];
+  try {
+    res.json(noteService.backlinkChain(req.tdb, ids));
+  } catch (e) {
+    res.status(e.code === 400 || e.code === 404 ? e.code : 500).json({ error: e.message || '循环链接失败' });
+  }
+});
+
+// 【批量取消链接】（v1.10.28）：清掉所选笔记「## 关联笔记」小节里的链接条目（互链/循环链的逆操作）。
+// 只清整行是 - [[标题]] 的条目；正文手写的 [[链接]] 与带说明文字的条目不动；小节清空后节头也不留。
+router.post('/notes/backlink-clear', (req, res) => {
+  const ids = Array.isArray((req.body || {}).ids) ? req.body.ids : [];
+  try {
+    res.json(noteService.backlinkClear(req.tdb, ids));
+  } catch (e) {
+    res.status(e.code === 400 || e.code === 404 ? e.code : 500).json({ error: e.message || '取消链接失败' });
+  }
+});
+
 // ============================================================
 // 五、图谱 / 统计 / 时间线 / 日历 / 每日笔记 / 设置
 // ============================================================

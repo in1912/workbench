@@ -14,8 +14,8 @@
         <!-- IM连接（v1.10.5，需求③）：以本人身份授权，把 IM 聊天记录归档成笔记。
              放在【新建】【切换】【面板】之后，右侧那个 ⇥ 是布局开关，留在最右边。 -->
         <button class="small" title="IM连接：授权飞书等 IM，把聊天记录归档成笔记" @click="imOpen = true">🔗 IM连接</button>
-        <!-- 批量反链（v1.10.24）：搜一批相关笔记，两两互加 [[双链]]，给知识网络连边 -->
-        <button class="small" title="批量反链：按关键词搜一批笔记，互相添加 [[双链]]" @click="blOpen = true">🕸 批量反链</button>
+        <!-- 批量链接（v1.10.24 互链；v1.10.28 循环链 + 取消链接）：搜一批相关笔记批量加/清 [[双链]] -->
+        <button class="small" title="批量链接：按关键词搜一批笔记，两两互加 [[双链]] / 按顺序串成循环链 / 批量取消链接" @click="blOpen = true">🕸 批量链接</button>
         <button class="small" :title="rightOpen ? '收起右栏' : '展开右栏'" @click="toggleRight()">{{ rightOpen ? '⇥' : '⇤' }}</button>
       </div>
     </div>
