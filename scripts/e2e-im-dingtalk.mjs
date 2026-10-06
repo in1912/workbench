@@ -168,6 +168,33 @@ try {
   r = await A.del(`/im/connectors/${idErr}`);
   s.ck('删掉错误信封路径的临时连接器', r.status === 200, JSON.stringify(r.body));
 
+  // ---------- ⑦d 防静默两道闸：形状漂移 / 时间字段漂移必须大声失败，不许「0 条 = 跳过」 ----------
+  // 2026-10-06 生产缺陷（会话名能拉到、内容拉不到）的另一半根因模拟：CLI 真在翻页（每会话 ~50 秒），
+  // 但解析层认不出真实输出形状 / 字段名 → 静默按「0 条新消息」跳过 → 笔记一个不建、游标一个不推进。
+  // 闸①：账本声明 count>0 却一行都认不出 → 抛错（带顶层字段名样本）；闸②：行认出但时间全解析失败 → 抛错（带首行字段名）。
+  r = await A.post('/im/connectors', { provider: 'dingtalk', label: '形状漂移公司' });
+  const idDrift = r.body.id;
+  r = await A.post(`/im/connectors/${idDrift}/dingtalk-login`, {});
+  await sleep(400);
+  fs.writeFileSync(path.join(DATA, 'dws-config', String(idDrift), 'shape-drift'), '1');
+  r = await A.post(`/im/connectors/${idDrift}/sync`, { since_days: 7 });
+  s.ck('闸①形状漂移：会话级失败被抛出（不再静默 0 条）',
+    r.status === 200 && (r.body.errors || []).some((e) => /声明 5 条但一条都没认出来/.test(e) && /weirdRows/.test(e)),
+    JSON.stringify(r.body).slice(0, 240));
+  r = await A.get('/im/connectors');
+  s.ck('闸①的原因带字段名样本、留在卡片 last_error 上',
+    /声明 5 条但一条都没认出来/.test((((r.body || []).find((c) => c.id === idDrift)) || {}).last_error || ''),
+    String((((r.body || []).find((c) => c.id === idDrift)) || {}).last_error || '').slice(0, 240));
+  fs.rmSync(path.join(DATA, 'dws-config', String(idDrift), 'shape-drift'));
+  fs.writeFileSync(path.join(DATA, 'dws-config', String(idDrift), 'time-drift'), '1');
+  await sleep(1200);   // 分轮规则按秒比较 last_sync_at 与 round：两轮贴在同一秒里，会话会被判「本轮已处理」而跳过
+  r = await A.post(`/im/connectors/${idDrift}/sync`, { since_days: 7 });
+  s.ck('闸②时间字段漂移：同样大声失败（带首行字段名）',
+    r.status === 200 && (r.body.errors || []).some((e) => /时间字段全部解析失败/.test(e) && /sentAt/.test(e)),
+    JSON.stringify(r.body).slice(0, 240));
+  r = await A.del(`/im/connectors/${idDrift}`);
+  s.ck('删掉漂移演算的临时连接器', r.status === 200, JSON.stringify(r.body));
+
   // ---------- ⑧ 笔记本体：目录 / 标题 / 标签 / 抬头 / 排版 / 我-识别 / 消息类型 ----------
   const gn = await noteOf(gRow.note_id);
   const pn = await noteOf(pRow.note_id);

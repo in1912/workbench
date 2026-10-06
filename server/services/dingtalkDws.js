@@ -112,11 +112,28 @@ function runDws(connectorId, args, { timeoutMs = 120000 } = {}) {
   });
 }
 
-/** 把 stdout 解析成 JSON 对象；不是 JSON（或空）就返回 null。登录轮询那种人话输出走 stderr，不受影响。 */
+/** 把 stdout 解析成 JSON 对象；不是 JSON（或空）就返回 null。登录轮询那种人话输出走 stderr，不受影响。
+ *  失败场景 CLI 会把「部分结果账本 + error 信封」**两个 JSON 拼在同一个 stdout** 里打印（2026-10-06
+ *  用 --mock 实测所见）——JSON.parse 直接炸会把真实 error 丢掉、只剩「没有返回 JSON」。所以 parse
+ *  失败时再试一层：pretty 输出的顶层 `{` 是唯一「行首无缩进」的花括号，按它们切块逐段 parse，
+ *  **优先取带 error 键的那块**，否则取第一块。 */
 function parseJsonOut(stdout) {
   const s = String(stdout || '').trim();
   if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
+  try { return JSON.parse(s); } catch { /* 落到多对象拆分 */ }
+  const blocks = [];
+  let cur = null;
+  for (const ln of s.split('\n')) {
+    if (/^\{/.test(ln)) { if (cur) blocks.push(cur); cur = [ln]; }
+    else if (cur) cur.push(ln);
+  }
+  if (cur) blocks.push(cur);
+  const objs = [];
+  for (const b of blocks) {
+    try { const o = JSON.parse(b.join('\n')); if (o && typeof o === 'object') objs.push(o); } catch { /* 这块不完整，跳过 */ }
+  }
+  if (!objs.length) return null;
+  return objs.find((o) => o.error) || objs[0];
 }
 
 /** 信封里的 error → 给用户看的中文短句（对齐 feishuErrText 的角色，不是复述堆栈） */
@@ -348,21 +365,31 @@ async function dwsPullMessages(connectorId, chat, { startSec, endSec, maxMsgs = 
 }
 
 /** CLI 的两种消息视图（列表投影 / 搜索视图）→ 飞书形状。容错取行：messages、
- *  conversationMessagesList[].messages（搜索按会话分组）、list/items 等常见信封都认。 */
+ *  conversationMessagesList[].messages（搜索按会话分组，**包在 result 一层下面**——search-advanced
+ *  的 --help 原文就写着「合并 result.conversationMessagesList」，2026-10-06 前只认顶层、生产实测
+ *  单聊全被解析成 0 条）、list/items 等常见信封都认。 */
 function normalizeDwsMessages(data, maxMsgs) {
   const d = data || {};
+  const src = (d.result && typeof d.result === 'object') ? d.result : d;
   let rows = [];
-  if (Array.isArray(d.conversationMessagesList)) {
-    for (const g of d.conversationMessagesList) {
+  if (Array.isArray(src.conversationMessagesList)) {
+    for (const g of src.conversationMessagesList) {
       if (g && Array.isArray(g.messages)) rows.push(...g.messages);
     }
   }
   if (!rows.length) {
     for (const k of ['messages', 'list', 'items', 'records']) {
-      if (Array.isArray(d[k])) { rows = d[k]; break; }
-      const inner = d[k];
+      if (Array.isArray(src[k])) { rows = src[k]; break; }
+      const inner = src[k];
       if (inner && Array.isArray(inner.messages)) { rows = inner.messages; break; }
     }
+  }
+  // 防静默两道闸（会话列表那次「解析不出来 = 0 个 = 成功」的同款教训，落在消息路径上）：
+  //  ① 账本自己声明有 N 条（count）却一行都没认出来 → 数组名变了，这是解析层错、不是「会话没消息」；
+  //  ② 行认出来了、但**没有一条**能解析出有效时间 → 时间字段名变了。两个都大喊，把字段名样本带出来。
+  const declared = Number(d.count ?? src.count ?? 0) || 0;
+  if (!rows.length && declared > 0) {
+    throw new Error(`钉钉消息账本声明 ${declared} 条但一条都没认出来（顶层字段：${Object.keys(d).slice(0, 12).join('、') || '（空）'}）——CLI 输出形状变了，需要跟`);
   }
   const out = [];
   const seen = new Set();
@@ -373,17 +400,28 @@ function normalizeDwsMessages(data, maxMsgs) {
     if (id) seen.add(id);
     out.push(projectToFeishuShape(r));
   }
+  if (out.length && !out.some((m) => Number(m.create_time) > 0)) {
+    throw new Error(`钉钉消息认出 ${out.length} 行但时间字段全部解析失败（首行字段：${Object.keys(rows[0] || {}).slice(0, 14).join('、') || '（空）'}）——CLI 字段变了，需要跟`);
+  }
   out.sort((a, b) => Number(a.create_time) - Number(b.create_time));
   return out.slice(0, maxMsgs);
 }
 
-/** 单条 dws 消息 → 飞书形状。时间统一成毫秒数（飞书口径）；文本类预先渲染成可读文本。 */
+/** 单条 dws 消息 → 飞书形状。时间统一成毫秒数（飞书口径，数字毫秒或 ISO 串都收）；
+ *  文本类预先渲染成可读文本。字段名多收几个变体（搜索视图与列表投影不完全同名）。 */
 function projectToFeishuShape(m) {
-  const ms = Number(m.createTime ?? m.create_time ?? m.sendTime ?? 0) || 0;
+  const timeRaw = m.createTime ?? m.create_time ?? m.sendTime ?? m.send_time ?? m.gmtCreate;
+  let ms = 0;
+  if (typeof timeRaw === 'number') ms = timeRaw;
+  else if (timeRaw != null && timeRaw !== '') {
+    const n = Number(timeRaw);
+    if (Number.isFinite(n) && n > 0) ms = n;
+    else { const t = Date.parse(String(timeRaw)); if (Number.isFinite(t)) ms = t; }   // ISO 串（带时区）
+  }
   const mt = String(m.messageType ?? m.msgType ?? m.msg_type ?? 'text');
-  const senderId = String(m.senderId ?? (m.sender && (m.sender.id || m.sender.openDingTalkId)) ?? '');
-  const senderName = typeof m.sender === 'string' ? m.sender : String((m.sender && m.sender.name) || m.senderNick || '');
-  const rawText = String(m.text ?? '');
+  const senderId = String(m.senderId ?? m.senderStaffId ?? (m.sender && (m.sender.id || m.sender.openDingTalkId)) ?? '');
+  const senderName = typeof m.sender === 'string' ? m.sender : String((m.sender && m.sender.name) || m.senderNick || m.senderNickName || '');
+  const rawText = String(m.text ?? (typeof m.content === 'string' ? m.content : '') ?? '');
   const type = mt.toLowerCase();
   // 文件/图片/音视频：dws 给 resourceRefs（带名字的取名字），正文给占位
   const res = Array.isArray(m.resourceRefs) ? m.resourceRefs : [];

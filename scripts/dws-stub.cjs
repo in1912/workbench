@@ -174,6 +174,9 @@ if (args[0] === 'chat' && args[1] === '+chat-messages') {
     process.exit(0);
   }
   if (cid.startsWith('cidE2ECRASH')) { process.stdout.write('stub: 这不是 JSON\n'); process.exit(1); }   // 单会话失败隔离用
+  // e2e ⑦d 演算：输出形状/字段漂移（只演消息拉取这步，chat-list 不受影响）
+  if (fs.existsSync(path.join(cfg, 'shape-drift'))) { env({ count: 5, weirdRows: [{ x: 1 }] }); process.exit(0); }
+  if (fs.existsSync(path.join(cfg, 'time-drift'))) { env({ messages: [{ messageId: 'm-td', msgType: 'text', text: '时间漂移', sentAt: '2026-10-06T08:00:00+08:00' }], count: 1, complete: true }); process.exit(0); }
   const rows = groupMsgs(pullCount(cid));
   env({ messages: rows, count: rows.length, complete: true });
   process.exit(0);
@@ -181,8 +184,13 @@ if (args[0] === 'chat' && args[1] === '+chat-messages') {
 if (args[0] === 'chat' && args[1] === 'message' && args[2] === 'search-advanced') {
   const cid = flag('--conversation-ids');
   if (!fs.existsSync(TOKEN)) { fail('auth', '未登录'); process.exit(0); }
+  // e2e ⑦d 演算：单聊路径同样会漂移
+  if (fs.existsSync(path.join(cfg, 'shape-drift'))) { env({ count: 5, weirdRows: [{ x: 1 }] }); process.exit(0); }
+  if (fs.existsSync(path.join(cfg, 'time-drift'))) { env({ messages: [{ messageId: 'm-td', msgType: 'text', text: '时间漂移', sentAt: '2026-10-06T08:00:00+08:00' }], count: 1, complete: true }); process.exit(0); }
   const rows = p2pMsgs(pullCount(cid));
-  env({ conversationMessagesList: [{ conversationId: cid, messages: rows }], count: rows.length }, { count: rows.length, operation: 'message_search' });
+  // 真实契约（--help 原文「合并 result.conversationMessagesList」）：分组包在 result 一层下面 ——
+  // 2026-10-06 前替身照顶层猜着写，服务端也只认顶层，两边一起错、e2e 还全绿（单聊生产 0 条的根因之一）
+  env({ result: { conversationMessagesList: [{ conversationId: cid, messages: rows }], count: rows.length }, count: rows.length }, { count: rows.length, operation: 'message_search' });
   process.exit(0);
 }
 
