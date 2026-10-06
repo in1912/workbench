@@ -35,11 +35,12 @@ function askClose(t) {
 .tabstack.vertical { flex-direction: column; overflow-x: hidden; overflow-y: auto; gap: 2px; }
 .tab {
   display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
-  padding: 5px 8px; font-size: 12.5px; border-radius: 8px 8px 0 0;
-  border: 1px solid var(--border); border-bottom: none; cursor: pointer;
+  /* v1.10.34：半框（上/左/右有线、底边不闭合、上圆角）改全框闭合线条，其余形态不动 */
+  padding: 5px 8px; font-size: 12.5px; border-radius: 8px;
+  border: 1px solid var(--border); cursor: pointer;
   background: var(--bg2); color: var(--text2); max-width: 200px;
 }
-.tabstack.vertical .tab { border-bottom: 1px solid var(--border); border-radius: 8px; max-width: none; }
+.tabstack.vertical .tab { max-width: none; }
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--bg3); color: var(--text); border-color: var(--accent); }
 .tab .ico { font-size: 12px; }

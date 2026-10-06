@@ -106,6 +106,10 @@ router.get('/life/domains/:id', ok((req, res) => {
 // 有未归档目标 → 409（force 也不行）；项目/习惯/SOP 挂着 → 409 报数，?force=1 才解引用。
 router.post('/life/domains', ok((req, res) =>
   res.json({ id: svc.createDomain(req.tdb, req.body || {}) })));
+// 拖拽排序（v1.10.34）：全量 id 清单按序重写 sort_order。**必须注册在 PUT /:id 之前**——
+// Express 按注册顺序匹配，放后面 'reorder' 会被 :id 参数吞掉。
+router.put('/life/domains/reorder', ok((req, res) =>
+  res.json(svc.reorderDomains(req.tdb, (req.body || {}).ids))));
 router.put('/life/domains/:id', ok((req, res) => {
   const d = svc.updateDomain(req.tdb, int(req.params.id), req.body || {});
   if (!d) return notFound(res, '领域');

@@ -109,8 +109,9 @@ page.on('console', (m) => {
   errs.push({ kind: 'console', text: t, stack: '' });
 });
 
-await page.goto(B, { waitUntil: 'domcontentloaded' });
-await page.evaluate(([tk, u]) => {
+// 登录态必须在应用首次初始化前就位（addInitScript）：先 goto 再 evaluate 塞 token，
+// 首次导航已被弹回 /login，后续只变 hash 的 goto 不会重新走守卫（v1.10.32 老坑，v1.10.34 修）
+await page.addInitScript(([tk, u]) => {
   localStorage.setItem('wb_token', tk);
   localStorage.setItem('wb_user', JSON.stringify(u));
 }, [TOKEN, admin.user || { username: 'admin' }]);
@@ -133,13 +134,13 @@ const shot = {};
 try {
   // 侧栏页签存在 + 路由落地
   await page.goto(`${B}/#/life`, { waitUntil: 'domcontentloaded' });
-  // 侧栏那条用 href 精确定位：锚点里的文本是「flag人生」（图标连字 + 标签），按整串文本匹配永远等不到
+  // 侧栏那条用 href 精确定位：锚点文本是「flag + lifeOS」（图标连字 + 标签），按整串文本匹配永远等不到
   const lifeLink = page.locator('aside.sidebar nav a[href="#/life"]');
   await lifeLink.waitFor({ state: 'visible', timeout: T });
   const lifeTxt = (await lifeLink.innerText()).trim();
-  ck('左侧栏出现独立页「人生」', lifeTxt.includes('人生'), lifeTxt);
+  ck('左侧栏出现独立页「lifeOS」', lifeTxt.includes('lifeOS'), lifeTxt);
   const title = (await page.locator('.page-title').first().innerText()).trim();
-  ck('路由 /#/life 落到「人生」页', title.startsWith('人生'), title);
+  ck('路由 /#/life 落到「lifeOS」页', title.startsWith('lifeOS'), title);
 
   shot.today = await tab('今日', ['今日主线', '（验收）年度目标：把副业做成第二条收入']);
   ck('今日：重点目标 + 今日主线渲染出来', true, shot.today);
@@ -195,10 +196,11 @@ try {
   ck('项目：项目卡片渲染', projVal.includes('写作课'), projVal);
 
   shot.domains = await tab('领域', ['事业', '个人成长']);
-  ck('领域：六个领域卡片渲染', (await page.locator('.grid .card').count()) === 6);
+  // v1.10.5 起领域页是一领域一竖列（.dom-cols .dom-col），不再是旧版 .grid .card 矩阵
+  ck('领域：六个领域卡片渲染', (await page.locator('.dom-cols .dom-col').count()) === 6);
   // 图标必须真的被字体渲染成字形：漏了 class="material-icons" 时会画出「trending_up」这串字母（宽得多）。
   // 有效连字在 18px 字号下不超过 ~40px；缺失的名字会到 90px 以上。
-  const iconW = await page.locator('.grid .card h3 span.material-icons').evaluateAll((els) => Math.max(...els.map((e) => e.getBoundingClientRect().width)));
+  const iconW = await page.locator('.dom-cols .dom-col .dom-titlerow .material-icons').evaluateAll((els) => Math.max(...els.map((e) => e.getBoundingClientRect().width)));
   ck('领域：领域图标是字形而不是图标名拼写的字母', iconW > 4 && iconW < 45, `最宽 ${iconW.toFixed(1)}px`);
 
   shot.graph = await tab('关系', ['个节点', '条关联']);

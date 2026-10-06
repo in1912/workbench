@@ -101,6 +101,43 @@ try {
     && typeof r.body.habits === 'number' && typeof r.body.sops === 'number' && 'avg_progress' in r.body,
     JSON.stringify(Object.keys(r.body || {})));
 
+  // ---------- ⑦b 拖拽排序（v1.10.34：PUT /life/domains/reorder，全量清单重写 sort_order） ----------
+  r = await A.get('/life/domains');
+  const doms = r.body;
+  const ids = doms.map((d) => d.id);
+  const origNames = doms.map((d) => d.name);
+  const revIds = [...ids].reverse();
+  r = await A.put('/life/domains/reorder', { ids: revIds });
+  s.ck('倒序重排成功，返回值就是新清单',
+    r.status === 200 && r.body.map((d) => d.id).join() === revIds.join(), JSON.stringify(r.body || {}).slice(0, 160));
+  r = await A.get('/life/domains');
+  s.ck('重排后列表顺序持久（GET 再拉也是倒序）',
+    r.status === 200 && r.body.map((d) => d.name).join() === [...origNames].reverse().join(),
+    JSON.stringify(r.body.map((d) => d.name)));
+  r = await A.put('/life/domains/reorder', { ids: [...ids, ids[0]] });
+  s.ck('重复 id → 400', r.status === 400 && /重复/.test(r.body.error || ''), JSON.stringify(r.body));
+  r = await A.put('/life/domains/reorder', { ids: ids.slice(1) });
+  s.ck('缺一个领域（前端列表不新鲜）→ 400 而不是硬写', r.status === 400 && /少了/.test(r.body.error || ''), JSON.stringify(r.body));
+  r = await A.put('/life/domains/reorder', { ids: [...ids.slice(1), 999999] });
+  s.ck('未知 id → 400', r.status === 400 && /不存在/.test(r.body.error || ''), JSON.stringify(r.body));
+  r = await A.put('/life/domains/reorder', { ids: [] });
+  s.ck('空清单 → 400', r.status === 400, JSON.stringify(r.body));
+  const anonReorder = await fetch(`${B}/api/life/domains/reorder`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }),
+  });
+  s.ck('未登录 PUT reorder → 401', anonReorder.status === 401, String(anonReorder.status));
+  // 归档领域不在面板上：混进清单必须拒；同时它的存在不影响未归档集合的正常重排
+  r = await A.post('/life/domains', { name: '归档排序测试域' });
+  const archId = r.body.id;
+  await A.put(`/life/domains/${archId}`, { archived: 1 });
+  r = await A.put('/life/domains/reorder', { ids: [...ids, archId] });
+  s.ck('已归档领域混进清单 → 400（面板看不见它）', r.status === 400 && /不存在（或已归档）/.test(r.body.error || ''), JSON.stringify(r.body));
+  r = await A.put('/life/domains/reorder', { ids });
+  s.ck('有归档领域在场时，未归档全量重排仍成功', r.status === 200, JSON.stringify(r.body || {}).slice(0, 120));
+  await A.del(`/life/domains/${archId}?force=1`);
+  r = await A.put('/life/domains/reorder', { ids });
+  s.ck('顺序还原为初始', r.status === 200 && (await A.get('/life/domains')).body.map((d) => d.name).join() === origNames.join(), '');
+
   // ---------- ⑧ 权限：/life/* 归 life 页 ----------
   const anon = await fetch(`${B}/api/life/domains`);
   s.ck('未登录访问 /life/domains → 401', anon.status === 401, String(anon.status));

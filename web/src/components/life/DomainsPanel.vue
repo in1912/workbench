@@ -19,10 +19,16 @@
 
     <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="!list.length" class="empty">还没有领域，点右上角「＋ 新增领域」建一个</div>
-    <div v-else class="dom-cols">
-      <section v-for="d in list" :key="d.id" class="dom-col">
+    <div v-else ref="colsEl" class="dom-cols">
+      <section v-for="d in list" :key="d.id" class="dom-col"
+               :class="{ dragging: dragId === d.id, 'drop-left': overId === d.id && overSide === 'left' && dragId !== d.id,
+                         'drop-right': overId === d.id && overSide === 'right' && dragId !== d.id }"
+               @dragover="onColDragOver(d, $event)" @drop.prevent="onColDrop(d, $event)"
+               @dragleave="if (overId === d.id && dragId !== d.id) { overId = 0; overSide = ''; }">
         <header class="dom-head">
           <div class="dom-titlerow">
+            <span class="drag-h" draggable="true" title="按住拖动，调整领域顺序"
+                  @dragstart="onHDragStart(d, $event)" @dragend="onDragEnd">⇄</span>
             <span class="material-icons ic">{{ d.icon }}</span>
             <input v-if="editing === d.id" ref="nameIn" v-model="draft" class="dom-name-in" maxlength="20"
                    @keyup.enter="saveRename(d)" @keyup.esc="cancelRename" @blur="saveRename(d)" />
@@ -194,6 +200,66 @@ async function saveRename(d) {
   } catch (e) { emit('toast', e.message, 'err'); }
 }
 
+// ---------- 拖拽排序（v1.10.34）----------
+// 模式与 Dashboard 卡片一致（HTML5 DnD + splice 重排），两点横向列表特有的处理：
+// ① draggable 挂在 ⇄ 把手上而不是整卡——领域卡片很大，整卡可拖会和横向滚动、
+//    列内目标列表的滚轮/选择误触打架；
+// ② 落点按「指针在目标卡左半 / 右半」决定插到它前面还是后面（格子布局是替换式，
+//    一维列表要分左右半才有自然的「挪一格」手感）。
+// 拖到容器左右边缘自动横滚：dragover 拖着不动也会持续触发，天然就是滚动循环。
+const colsEl = ref(null);
+const dragId = ref(0);
+const overId = ref(0);
+const overSide = ref('');
+
+function onHDragStart(d, e) {
+  dragId.value = d.id;
+  overId.value = 0; overSide.value = '';
+  try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(d.id)); } catch { /* 老 webview */ }
+}
+function onDragEnd() { dragId.value = 0; overId.value = 0; overSide.value = ''; }
+
+function onColDragOver(d, e) {
+  if (!dragId.value || d.id === dragId.value) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const r = e.currentTarget.getBoundingClientRect();
+  overId.value = d.id;
+  overSide.value = (e.clientX - r.left) < r.width / 2 ? 'left' : 'right';
+  // 边缘自动横滚（6 个领域 1920 宽必有横向滚动，拖不到远端的卡等于功能没有）
+  const box = colsEl.value?.getBoundingClientRect();
+  if (box) {
+    const EDGE = 70;
+    if (e.clientX > box.right - EDGE) colsEl.value.scrollLeft += 16;
+    else if (e.clientX < box.left + EDGE) colsEl.value.scrollLeft -= 16;
+  }
+}
+
+async function onColDrop(d) {
+  // dragleave 可能在 drop 前把 overId 清掉，落点回退用 drop 事件自己的目标卡（side 默认插前面）
+  const from = dragId.value, target = overId.value || d.id, side = overId.value ? overSide.value : 'left';
+  onDragEnd();
+  if (!from || !target || from === target) return;
+  const arr = list.value;
+  const moved = arr.find((x) => x.id === from);
+  const ti = arr.findIndex((x) => x.id === target);
+  if (!moved || ti < 0) return;
+  arr.splice(arr.indexOf(moved), 1);
+  let at = arr.findIndex((x) => x.id === target);
+  if (side === 'right') at += 1;
+  arr.splice(at, 0, moved);
+  await saveOrder();
+}
+
+async function saveOrder() {
+  try {
+    const doms = await api.put('/life/domains/reorder', { ids: list.value.map((x) => x.id) });
+    // 服务端按同一口径回的新清单（顺序即事实）；失败走 catch 重拉，不留半新半旧
+    list.value = await Promise.all(doms.map((x) => api.get(`/life/domains/${x.id}`)));
+    emit('toast', '领域顺序已保存');
+  } catch (e) { emit('toast', e.message, 'err'); await load(); }
+}
+
 // ---------- 删除 ----------
 // 服务端有两道闸（有目标一律拒绝；项目/习惯/SOP 要 force），这里按同一套规矩提前问清楚，
 // 免得用户点了确认才被服务端拒回来。
@@ -253,4 +319,11 @@ async function delDomain(d) {
 .dom-sep { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; color: var(--text3); font-size: 11.5px; }
 .dom-sep::before, .dom-sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .dom-more { width: 100%; margin-top: 4px; }
+/* 拖拽排序（v1.10.34）：⇄ 把手可拖，卡片自身是 drop 目标（dragover 里按指针左右半判插前/插后） */
+.drag-h { flex: 0 0 auto; cursor: grab; color: var(--text3); font-size: 13px; padding: 0 2px; user-select: none; }
+.drag-h:hover { color: var(--accent); }
+.drag-h:active { cursor: grabbing; }
+.dom-col.dragging { opacity: .45; }
+.dom-col.drop-left { box-shadow: -3px 0 0 var(--accent); }
+.dom-col.drop-right { box-shadow: 3px 0 0 var(--accent); }
 </style>

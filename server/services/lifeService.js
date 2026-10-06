@@ -645,6 +645,31 @@ function updateDomain(tdb, id, b = {}) {
 }
 
 /**
+ * 领域拖拽排序（v1.10.34，用户需求：领域页卡片可以前后挪动顺序）。
+ * 入参是**未归档领域的全量 id 清单**（面板列表的顺序），按数组下标 0..n-1 重写 sort_order。
+ * 三道校验：必须是数组；id 都真实存在且不重复；恰好覆盖全部未归档领域（少了说明前端
+ * 列表不新鲜，硬写会把没出现的领域挤到不可预期的位置——宁可拒绝让前端重拉）。
+ * 归档领域不动（面板看不见它们，sort_order 保持原值）。
+ */
+function reorderDomains(tdb, ids = []) {
+  if (!Array.isArray(ids) || !ids.length) throw domainBad('排序清单不能为空');
+  const want = ids.map(Number);
+  if (want.some((n) => !Number.isInteger(n) || n <= 0)) throw domainBad('排序清单里有无效的领域编号');
+  if (new Set(want).size !== want.length) throw domainBad('排序清单里有重复的领域');
+  const have = tdb.prepare('SELECT id FROM life_domains WHERE archived=0').all().map((r) => Number(r.id));
+  const missing = have.filter((h) => !want.includes(h));
+  const foreign = want.filter((w) => !have.includes(w));
+  if (foreign.length) throw domainBad('排序清单里有不存在（或已归档）的领域');
+  if (missing.length) throw domainBad(`排序清单少了 ${missing.length} 个领域，请刷新页面后重试`);
+  const tx = tdb.transaction(() => {
+    const st = tdb.prepare('UPDATE life_domains SET sort_order=? WHERE id=?');
+    want.forEach((id, i) => st.run(i, id));
+  });
+  tx();
+  return listDomains(tdb, {});
+}
+
+/**
  * 删领域（需求⑩：「删除时提示是否领域内有目标，有目标的需要删除后才能删除领域」）。
  *
  * 规矩（两道闸，服务端是硬闸、前端那道只是提前把话说清楚）：
@@ -762,6 +787,6 @@ module.exports = {
   listReviews, saveReview, reviewToSop,
   listProjects, createProject, updateProject, deleteProject,
   listSops, createSop, updateSop, deleteSop, useSop,
-  listDomains, domainOverview, createDomain, updateDomain, deleteDomain, domainCounts, DOMAIN_ICONS,
+  listDomains, domainOverview, createDomain, updateDomain, deleteDomain, domainCounts, DOMAIN_ICONS, reorderDomains,
   today, dashboard,
 };
