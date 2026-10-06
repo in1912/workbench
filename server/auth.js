@@ -145,6 +145,7 @@ const TAB_PATHS = {
     ['today', []], ['goals', []], ['actions', []], ['habits', []],
     ['reviews', []], ['aimreview', []],   // AI复盘IM（v1.10.29）：紧挨复盘页之后；接口仍走 life 页前缀闸
     ['projects', []], ['domains', []], ['graph', []],
+    ['km', []],      // 知识地图（v1.11.0）：空数组 = 只有授权勾选项，接口走 life 页前缀闸
     ['guide', []],   // 使用流程（v1.10.1）：空数组 = 只有授权勾选项，不约束任何接口
   ],
   family: [

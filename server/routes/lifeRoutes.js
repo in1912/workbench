@@ -9,6 +9,7 @@ const express = require('express');
 const svc = require('../services/lifeService');
 const link = require('../services/lifeLinkService');
 const imReview = require('../services/lifeImReviewService');
+const km = require('../services/lifeKmService');
 
 const router = express.Router();
 
@@ -256,6 +257,52 @@ router.delete('/life/im-review/jobs/latest', ok((req, res) =>
   res.json(imReview.cancelJob(String(req.user.id)))));
 router.post('/life/im-review/todos', ok((req, res) =>
   res.json(imReview.createTodos(req.tdb, req.body || {}))));
+
+// ---------- 知识地图（v1.11.0）：一句话目标 → AI 技能树 ----------
+// 注册顺序规矩照旧：静态段（meta/folders/maps/jobs）全在参数段（/:id）之前；
+// 本段静态段之间无 :id 争抢。生成走后台任务（同 AI复盘IM 的 jobs 模型）。
+router.get('/life/km/meta', ok((req, res) => res.json(km.meta(req.tdb))));
+router.get('/life/km/folders', ok((req, res) => res.json(km.folderTree(req.tdb))));
+router.post('/life/km/folders', ok((req, res) =>
+  res.json({ id: km.createFolder(req.tdb, req.body || {}) })));
+router.put('/life/km/folders/:id', ok((req, res) => {
+  const r = km.renameFolder(req.tdb, int(req.params.id), req.body || {});
+  if (!r) return notFound(res, '文件夹');
+  res.json(r);
+}));
+router.delete('/life/km/folders/:id', ok((req, res) => {
+  const r = km.deleteFolder(req.tdb, int(req.params.id), { force: req.query.force === '1' });
+  if (!r) return notFound(res, '文件夹');
+  res.json(r);
+}));
+router.get('/life/km/maps', ok((req, res) =>
+  res.json(km.listMaps(req.tdb, { folder_id: req.query.folder_id }))));
+router.post('/life/km/jobs', ok((req, res) =>
+  res.json(km.startJob(req.tdb, String(req.user.id), req.body || {}))));
+router.get('/life/km/jobs/latest', ok((req, res) =>
+  res.json(km.getJob(String(req.user.id)))));
+router.delete('/life/km/jobs/latest', ok((req, res) =>
+  res.json(km.cancelJob(String(req.user.id)))));
+router.get('/life/km/maps/:id', ok((req, res) => {
+  const m = km.getMap(req.tdb, int(req.params.id));
+  if (!m) return notFound(res, '知识地图');
+  res.json(m);
+}));
+router.put('/life/km/maps/:id', ok((req, res) => {
+  const m = km.updateMap(req.tdb, int(req.params.id), req.body || {});
+  if (!m) return notFound(res, '知识地图');
+  res.json(m);
+}));
+router.delete('/life/km/maps/:id', ok((req, res) => {
+  if (!km.deleteMap(req.tdb, int(req.params.id))) return notFound(res, '知识地图');
+  res.json({ removed: 1 });
+}));
+// 知识交集：五类定向检索（lifeOS 实体 / 笔记 / RSS / 邮箱 / IM 归档），点击跳回原文
+router.get('/life/km/maps/:id/links', ok((req, res) => {
+  const r = km.searchLinks(req.tdb, int(req.params.id));
+  if (!r) return notFound(res, '知识地图');
+  res.json(r);
+}));
 
 // ---------- 关系引擎 ----------
 // 静态段必须排在 `/life/links/of/...` 之前

@@ -746,6 +746,36 @@ CREATE TABLE IF NOT EXISTS life_links (
   UNIQUE(src_type, src_id, dst_type, dst_id, relation)
 );
 
+-- ========== 知识地图（v1.11.0，lifeOS 第九个实页签）==========
+-- 一句话目标 → AI 生成技能树（学习地图）：树节点带【周期/程度/成本】，资源带全套元数据，
+-- 另产 keywords 供「知识交集」在用户已有数据里（lifeOS 实体 / 笔记 / RSS / 邮件 / IM 归档）找关联。
+-- 文件夹与笔记模块的 note_folders 完全独立（两套树、两套权限页），folder_id NULL = 未分类。
+CREATE TABLE IF NOT EXISTS life_km_folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- tree 列存 AI 产物的完整 JSON：{ title, summary, root{name,cycle,level,cost,note,children[]},
+-- resources[{type,title,author,source,version,url,difficulty,prereq,stage,credibility,license,skill}],
+-- subskills[{name,why}], advantages[], keywords[], recommended_style }。
+-- 展示风格（style 列）是用户偏好，与 AI 推荐分开存：mindmap 思维导图 / treeup 向上生长 /
+-- pyramid 金字塔向下 / sides 左右扩展。
+CREATE TABLE IF NOT EXISTS life_km_maps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  goal_text TEXT NOT NULL DEFAULT '',
+  folder_id INTEGER,
+  tree TEXT NOT NULL DEFAULT '{}',
+  style TEXT NOT NULL DEFAULT 'mindmap',
+  model TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_km_maps_folder ON life_km_maps(folder_id);
+
 -- ========== IM 连接器（v1.10.5，需求①~⑤）==========
 -- 目标：以**用户身份**（不是群机器人）授权，拉取该用户自己的单聊/群聊记录，落成笔记。
 -- 合规红线（写死在代码里）：只走官方开放平台 OpenAPI + 官方 OAuth 授权码流程；
@@ -1917,6 +1947,8 @@ const TENANT_TABLES = [
   // ② cleanupMainBusinessTables 清主库残留。漏了它 = 老数据搬不过去，不是「租户库缺表」。
   'life_domains', 'life_goals', 'life_key_results', 'life_habits', 'life_habit_logs',
   'life_reviews', 'life_projects', 'life_sops', 'life_links',
+  // 知识地图（v1.11.0）：文件夹树 + AI 生成的技能树地图
+  'life_km_folders', 'life_km_maps',
   // IM 连接器（v1.10.5）：授权凭证 + 会话游标 + 同步日志。im_oauth_states 是**主库**表
   // （OAuth 回跳没有登录态，只能靠 state 反查用户），故意不进这份清单。
   'im_connectors', 'im_chats', 'im_sync_logs',
