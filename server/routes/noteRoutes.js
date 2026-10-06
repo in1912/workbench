@@ -882,6 +882,55 @@ router.post('/notes/attachments', uploadOne('file'), (req, res) => {
   res.json(r);
 });
 
+// 远程图转存（v1.11.6 粘贴富文本用）：前端把 <img src="https://…"> 交给服务端代取。
+// 浏览器直拉远程图会撞 CORS，只有服务端能拉。成功后与本地上传同形状返回 {id,url,…}。
+// 权限随 /notes 前缀（auth.js pageForPath），无需另挂闸。上限与上传端点同口径 10MB。
+const FROM_URL_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(?:[?#]|$)/i;
+const EXT_OF_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg' };
+const MIME_OF_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', svg: 'image/svg+xml' };
+router.post('/notes/attachments/from-url', async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    const noteId = int((req.body && req.body.note_id) ?? null, null);
+    if (!/^https?:\/\/\S+$/i.test(url)) return res.status(400).json({ error: '只支持 http/https 图片地址' });
+    let resp;
+    try {
+      resp = await fetch(url, { signal: AbortSignal.timeout(20000), redirect: 'follow' });
+    } catch (err) {
+      return res.status(502).json({ error: '取图失败：' + (err && err.message ? err.message : err) });
+    }
+    if (!resp.ok) return res.status(502).json({ error: `取图失败（HTTP ${resp.status}）` });
+    const declared = Number(resp.headers.get('content-length') || 0);
+    if (declared > 10 * 1024 * 1024) return res.status(400).json({ error: '图片超过 10MB 上限' });
+    let mime = String(resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    const extHit = FROM_URL_EXT_RE.exec(url);
+    if (!mime.startsWith('image/')) {
+      // 有些源站不报 content-type，按 URL 扩展名兜底；两头都不是图片才拒
+      const byExt = extHit ? MIME_OF_EXT[extHit[1].toLowerCase()] : '';
+      if (!byExt) return res.status(400).json({ error: `目标不是图片（${mime || '未知类型'}）` });
+      mime = byExt;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (!buf.length) return res.status(502).json({ error: '取回的内容是空的' });
+    if (buf.length > 10 * 1024 * 1024) return res.status(400).json({ error: '图片超过 10MB 上限' });
+    let name = '';
+    try { name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || ''); } catch { /* 名字取不出就算了 */ }
+    name = name.replace(/[\r\n\t\\/:*?"<>|]/g, ' ').trim();
+    if (!name || name.length > 100 || !/^[^.].*\.[a-z0-9]{2,5}$/i.test(name)) {
+      const ext = EXT_OF_MIME[mime] || (extHit ? extHit[1].toLowerCase() : 'png');
+      const d = new Date(), p = (n) => String(n).padStart(2, '0');
+      name = `粘贴图片-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+    }
+    const r = storeAttachment(req.tdb, noteId, { originalname: name, mimetype: mime, buffer: buf });
+    if (r.error) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (err) {
+    res.status(500).json({ error: '转存失败：' + (err && err.message ? err.message : err) });
+  }
+});
+
 router.get('/notes/attachments/:id/raw', (req, res) => {
   const a = req.tdb.prepare('SELECT * FROM note_attachments WHERE id=?').get(int(req.params.id, -1));
   if (!a) return res.status(404).json({ error: '附件不存在' });

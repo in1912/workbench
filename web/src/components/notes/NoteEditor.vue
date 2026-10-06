@@ -43,6 +43,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { cmBaseTheme, cmSyntax, codeLanguages } from '../../utils/codeTheme';
 import MarkdownToolbar from './MarkdownToolbar.vue';
 import { renderMarkdown, wordCount } from '../../utils/markdown';
+import { htmlToMarkdown } from '../../utils/htmlToMd';
 import { api } from '../../api';
 
 const props = defineProps({
@@ -146,13 +147,15 @@ function makeState(content) {
 function createView() {
   if (view || !hostEl.value) return;
   view = new EditorView({ state: makeState(props.note?.content), parent: hostEl.value });
+  // 富文本粘贴（v1.11.6）：捕获相位，必须跑在 CM 自己的 contentDOM 处理器之前（见 onPaste 注释）
+  view.dom.addEventListener('paste', onPaste, true);
   view.scrollDOM.scrollTop = 0;
   applyMode(props.mode);
   view.focus();
 }
 
 function destroyView() {
-  if (view) { view.destroy(); view = null; }
+  if (view) { view.dom.removeEventListener('paste', onPaste, true); view.destroy(); view = null; }
 }
 
 // 换了一篇：整个 state 重来（撤销栈也翻篇，不会把上一篇的编辑退回来）
@@ -297,19 +300,91 @@ function pickImage() { if (!uploading.value) fileEl.value?.click(); }
 async function onFiles(e) {
   const files = [...(e.target.files || [])];
   e.target.value = ''; // 清掉选择，同一文件可重复插入
-  for (const f of files) {
-    uploading.value++;
-    try {
+  for (const f of files) await uploadAndInsert(f);
+}
+
+// 单文件上传 + 插入（工具栏选文件 / 粘贴截图文件 / 富文本里的 data:URI 图共用）
+async function uploadAndInsert(f) {
+  uploading.value++;
+  try {
+    const r = await api.upload('/notes/attachments',
+      { note_id: props.note && props.note.id != null ? String(props.note.id) : '' },
+      [{ name: 'file', file: f }]);
+    const alt = String(f.name || '附件').replace(/[[\]\n]/g, ' ').trim() || '附件';
+    await insertText(/^image\//.test(f.type) ? `![${alt}](${r.url})` : `[${alt}](${r.url})`);
+  } catch (err) {
+    alert('「' + (f.name || '文件') + '」上传失败：' + err.message);
+  }
+  uploading.value--;
+}
+
+// ---------- 粘贴富文本 / 截图（v1.11.6）----------
+// 从网页复制带图文章 → 直接 Ctrl+V：text/html 转成 Markdown 插入，图片全部转存成
+// 自己的附件直链（data:URI 走本地上传端点；远程 URL 浏览器直拉会撞 CORS，交服务端
+// POST /notes/attachments/from-url 代取）。一条都不满足就放行浏览器默认粘贴。
+// ⚠️ 必须挂在 view.dom 的**捕获相位**（createView 里第三个参数 true）：CodeMirror 自己
+// 在 contentDOM 上处理 paste——会把 text/plain 同步插进文档再 preventDefault，冒泡监听
+// 跑不过它，结果「转换后的 Markdown」和「剪贴板纯文本」各插一份。劫持时 stopPropagation
+// 让 CM 根本看不到这个事件；不劫持的分支什么都不动，CM 照旧。
+// 两条 guard：① 源码模式只读，自定义插入会绕过只读态 → 放行；② CodeMirror 自己复制
+// 的剪贴板里也有 text/html（带 cm-line/cm-editor/cm-content class 的语法高亮 HTML），
+// 照转会把代码块缩进搅乱 → 认出来放行走默认，text/plain 原文进编辑器。
+function onPaste(e) {
+  if (!view || !props.note || props.mode === 'source') return;
+  const dt = e.clipboardData;
+  if (!dt) return;
+  const imgs = [...(dt.files || [])].filter((f) => /^image\//.test(f.type));
+  if (imgs.length) {
+    e.preventDefault(); e.stopPropagation();
+    void (async () => { for (const f of imgs) await uploadAndInsert(f); })();
+    return;
+  }
+  const html = (dt.getData('text/html') || '').trim();
+  if (html && html.length > 30 && !/cm-(?:line|content|editor)/.test(html)) {
+    e.preventDefault(); e.stopPropagation();
+    void pasteRich(html, dt.getData('text/plain') || '');
+  }
+}
+
+async function pasteRich(html, plain) {
+  uploading.value++;
+  try {
+    const md = await htmlToMarkdown(html, { resolveImage: resolvePastedImage });
+    if (md && md.trim()) await insertText(md);
+    else if (plain) await insertText(plain);
+  } catch (err) {
+    if (plain) await insertText(plain);   // 转换炸了也别把用户的东西丢掉
+    alert('富文本粘贴转换失败，已按纯文本插入：' + (err && err.message ? err.message : err));
+  }
+  uploading.value--;
+}
+
+// htmlToMarkdown 拿到 <img> 时来问「最终地址用哪个」；返回 null = 保留原地址
+async function resolvePastedImage({ src, alt }) {
+  try {
+    if (/^data:image\//i.test(src)) {
+      const blob = await (await fetch(src)).blob();
+      const f = new File([blob], dataUriName(src, alt), { type: blob.type || 'image/png' });
       const r = await api.upload('/notes/attachments',
         { note_id: props.note && props.note.id != null ? String(props.note.id) : '' },
         [{ name: 'file', file: f }]);
-      const alt = String(f.name || '附件').replace(/[[\]\n]/g, ' ').trim() || '附件';
-      await insertText(/^image\//.test(f.type) ? `![${alt}](${r.url})` : `[${alt}](${r.url})`);
-    } catch (err) {
-      alert('「' + (f.name || '文件') + '」上传失败：' + err.message);
+      return r.url;
     }
-    uploading.value--;
-  }
+    if (/^https?:\/\//i.test(src)) {
+      const r = await api.post('/notes/attachments/from-url',
+        { url: src, note_id: props.note && props.note.id != null ? String(props.note.id) : '' });
+      return r.url;
+    }
+  } catch { return null; }   // 转存失败不拦整篇粘贴，正文里保留原地址
+  return null;
+}
+
+// data:URI 图的文件名：alt 能用就用 alt，扩展名从 MIME 推
+function dataUriName(src, alt) {
+  const m = /^data:image\/([\w.+-]+)\s*[;,]/i.exec(src);
+  const ext = ({ jpeg: 'jpg', 'svg+xml': 'svg' })[m ? m[1].toLowerCase() : ''] || (m ? m[1].toLowerCase() : 'png');
+  const base = String(alt || '').replace(/[\\/:*?"<>|\r\n/[\]]/g, ' ').trim().slice(0, 40);
+  return (base || '粘贴的图片') + '.' + ext;
 }
 
 // 大纲点击 → 在源文里数到第 n 个标题（跳过围栏代码块，与 utils/markdown.js 的 extractHeadings 同口径）
