@@ -237,13 +237,19 @@ router.post('/life/sops/:id/use', ok((req, res) => {
   res.json(s);
 }));
 
-// ---------- AI复盘IM（v1.10.29：IM 归档文件夹 → AI 概要/重点/待办 → 一键落成行动） ----------
+// ---------- AI复盘IM（v1.10.29 起；v1.10.30 改后台任务模型） ----------
 // 静态段注册在 /life/links 之前不冲突（前缀 im-review 无 :id 争抢）。
-// preview 是异步路由（等 AI 返回），靠 ok() 的 async 通道兜错误。
+// v1.10.30：生成改后台任务——POST /jobs 立即回任务号（AI 真实耗时可达数分钟，同步 POST
+// 会被前端 180s / 网关 ~100s 超时腰斩成「网络连接失败」）；GET jobs/latest 轮询拿快照
+// （重进页面恢复进度），DELETE 取消。ok() 的 async 通道保留（历史 handler 可能用）。
 router.get('/life/im-review/meta', ok((req, res) => res.json(imReview.meta(req.tdb))));
 router.get('/life/im-review/folders', ok((req, res) => res.json(imReview.listImFolders(req.tdb))));
-router.post('/life/im-review/preview', ok((req, res) =>
-  imReview.preview(req.tdb, req.body || {}).then((r) => res.json(r))));
+router.post('/life/im-review/jobs', ok((req, res) =>
+  res.json(imReview.startJob(req.tdb, String(req.user.id), req.body || {}))));
+router.get('/life/im-review/jobs/latest', ok((req, res) =>
+  res.json(imReview.getJob(String(req.user.id)))));
+router.delete('/life/im-review/jobs/latest', ok((req, res) =>
+  res.json(imReview.cancelJob(String(req.user.id)))));
 router.post('/life/im-review/todos', ok((req, res) =>
   res.json(imReview.createTodos(req.tdb, req.body || {}))));
 

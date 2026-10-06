@@ -14,10 +14,11 @@
                   :title="'整理最近 ' + r.days + ' 天的聊天记录'" @click="days = r.days">{{ r.label }}</button>
         </div>
         <div class="row">
-          <button class="primary" :disabled="!folderId || busy" @click="run">
-            {{ busy ? 'AI 整理中…（可能要几十秒）' : '🤖 生成复盘' }}
+          <button class="primary" :disabled="!folderId || running" @click="run">
+            {{ running ? '整理中…（可离开本页）' : '🤖 生成复盘' }}
           </button>
-          <span v-if="res" class="muted small">
+          <button v-if="running" class="small" @click="cancel">取消整理</button>
+          <span v-if="res && !running" class="muted small">
             扫描 {{ res.notes_scanned }} 篇 · 快筛命中 {{ res.notes_matched }} 篇 · {{ res.conversations.length }} 个会话 · {{ res.lines_used }} 条消息
             <span v-if="res.truncated" class="badge warn" title="聊天记录太多，已按会话保留最新的部分">已截断</span>
           </span>
@@ -25,7 +26,7 @@
         <div v-if="meta && !meta.has_ai" class="err-hint">AI 尚未配置：请先到「设置 → AI 模型」填写模型名称 / API 地址 / API Key。</div>
         <div v-else class="muted" style="margin-top:8px">
           只读取标题时间在范围内的归档笔记（范围外的整篇跳过、不占读取量）；改过标题的归档笔记认不出时间戳，也会被跳过。
-          AI 用的是工作台总配置的模型{{ res && res.model ? '（' + res.model + '）' : '' }}。
+          AI 用的是工作台总配置的模型{{ res && res.model ? '（' + res.model + '）' : '' }}，一轮可能要几分钟，任务在服务器后台跑，离开本页不中断。
         </div>
       </div>
 
@@ -39,56 +40,77 @@
       </div>
     </div>
 
-    <!-- 右：结果 -->
-    <div class="card">
-      <h3>复盘结果</h3>
-      <div v-if="!res" class="empty">
-        还没有生成
-        <div class="muted" style="margin-top:6px">选好文件夹与范围，点「生成复盘」。日报看最近 1 天，周报 / 月报分别看 7 / 30 天。</div>
+    <!-- 右：进度 + 结果 -->
+    <div>
+      <div v-if="job" class="card" style="margin-bottom:14px">
+        <h3>整理进度
+          <span class="muted" style="font-weight:400;font-size:12.5px">{{ jobLabel }}</span>
+        </h3>
+        <div class="bar"><div class="fill" :style="{ width: job.progress + '%' }"></div></div>
+        <div class="row" style="margin-top:6px">
+          <span class="muted small">
+            {{ job.progress }}% · 已进行 {{ fmtDur(elapsedS) }}
+            <template v-if="running && job.stage === 'ai'"> · AI 已等 {{ tick && aiWaitS }} 秒（上游越慢越久，可先去干别的）</template>
+          </span>
+          <button v-if="running" class="small" style="margin-left:auto" @click="cancel">取消整理</button>
+        </div>
+        <div class="muted small" style="margin-top:4px">任务在服务器后台运行，离开本页不中断，回来接着看。（任务保存在内存里，服务重启会丢失进行中的任务）</div>
+        <div ref="logsEl" class="logs">
+          <div v-for="(l, i) in job.logs" :key="i" class="logline">[{{ fmtClock(l.t) }}] {{ l.msg }}</div>
+        </div>
+        <div v-if="job.state === 'error'" class="err-hint" style="margin-top:8px">失败：{{ job.error }}</div>
       </div>
-      <template v-else>
-        <label class="fl">沟通概要</label>
-        <p class="sum">{{ res.summary || '（AI 没有给出概要）' }}</p>
 
-        <label class="fl">沟通重点 <span class="muted" style="font-weight:400">{{ res.highlights.length }} 条</span></label>
-        <ol v-if="res.highlights.length" class="hl">
-          <li v-for="(h, i) in res.highlights" :key="i">{{ h }}</li>
-        </ol>
-        <div v-else class="muted">（无）</div>
+      <div class="card">
+        <h3>复盘结果</h3>
+        <div v-if="!res" class="empty">
+          还没有生成
+          <div class="muted" style="margin-top:6px">选好文件夹与范围，点「生成复盘」。日报看最近 1 天，周报 / 月报分别看 7 / 30 天。</div>
+        </div>
+        <template v-else>
+          <label class="fl">沟通概要</label>
+          <p class="sum">{{ res.summary || '（AI 没有给出概要）' }}</p>
 
-        <label class="fl">待办事项参考
-          <span class="muted" style="font-weight:400">{{ res.todos.length }} 条</span>
-          <template v-if="res.todos.length">
-            · <a href="javascript:void(0)" @click.prevent="pickAll">{{ checked.size === res.todos.length ? '全不选' : '全选' }}</a>
-          </template>
-        </label>
-        <div v-if="!res.todos.length" class="muted">（聊天里没有明确要跟进的事项）</div>
-        <div v-for="(t, i) in res.todos" :key="i" class="todo" :class="{ added: added.has(i) }">
-          <label class="trow">
-            <input type="checkbox" :checked="checked.has(i)" :disabled="added.has(i) || busyAdd"
-                   style="width:auto; flex:0 0 auto" @change="toggle(i)" />
-            <span class="t">{{ t.title }}</span>
-            <span v-if="added.has(i)" class="badge green">✓ 已加入</span>
+          <label class="fl">沟通重点 <span class="muted" style="font-weight:400">{{ res.highlights.length }} 条</span></label>
+          <ol v-if="res.highlights.length" class="hl">
+            <li v-for="(h, i) in res.highlights" :key="i">{{ h }}</li>
+          </ol>
+          <div v-else class="muted">（无）</div>
+
+          <label class="fl">待办事项参考
+            <span class="muted" style="font-weight:400">{{ res.todos.length }} 条</span>
+            <template v-if="res.todos.length">
+              · <a href="javascript:void(0)" @click.prevent="pickAll">{{ checked.size === res.todos.length ? '全不选' : '全选' }}</a>
+            </template>
           </label>
-          <div v-if="t.note" class="muted small note">{{ t.note }}</div>
-        </div>
-        <div v-if="res.todos.length" class="row" style="margin-top:10px">
-          <button class="primary small" :disabled="!checked.size || busyAdd" @click="addTodos">
-            {{ busyAdd ? '加入中…' : `加入行动（${checked.size}）` }}
-          </button>
-          <span class="muted small">截止 {{ duePreview }}（{{ dueDesc }}）· 建为「日常待办」，到「行动」页可再挂目标 / 改日期</span>
-        </div>
+          <div v-if="!res.todos.length" class="muted">（聊天里没有明确要跟进的事项）</div>
+          <div v-for="(t, i) in res.todos" :key="i" class="todo" :class="{ added: added.has(i) }">
+            <label class="trow">
+              <input type="checkbox" :checked="checked.has(i)" :disabled="added.has(i) || busyAdd"
+                     style="width:auto; flex:0 0 auto" @change="toggle(i)" />
+              <span class="t">{{ t.title }}</span>
+              <span v-if="added.has(i)" class="badge green">✓ 已加入</span>
+            </label>
+            <div v-if="t.note" class="muted small note">{{ t.note }}</div>
+          </div>
+          <div v-if="res.todos.length" class="row" style="margin-top:10px">
+            <button class="primary small" :disabled="!checked.size || busyAdd" @click="addTodos">
+              {{ busyAdd ? '加入中…' : `加入行动（${checked.size}）` }}
+            </button>
+            <span class="muted small">截止 {{ duePreview }}（{{ dueDesc }}）· 建为「日常待办」，到「行动」页可再挂目标 / 改日期</span>
+          </div>
 
-        <div class="muted small" style="margin-top:12px; border-top:1px solid var(--border); padding-top:8px">
-          生成于 {{ res.generated_at }}{{ res.usage && res.usage.total_tokens != null ? ` · ${res.usage.total_tokens} tokens` : '' }}
-        </div>
-      </template>
+          <div class="muted small" style="margin-top:12px; border-top:1px solid var(--border); padding-top:8px">
+            生成于 {{ res.generated_at }}{{ res.usage && res.usage.total_tokens != null ? ` · ${res.usage.total_tokens} tokens` : '' }}
+          </div>
+        </template>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { api } from '../../api';
 
 const emit = defineEmits(['toast']);
@@ -99,11 +121,31 @@ const folderId = ref(null);
 const days = ref(1);
 const prompt = ref('');
 const res = ref(null);
-const busy = ref(false);
 const busyAdd = ref(false);
 const checked = ref(new Set());
 const added = ref(new Set());
+const job = ref(null);       // 后台任务快照（v1.10.30：生成在服务端跑，这里只是展示）
+const tick = ref(0);         // 每秒走字（已进行 / AI 已等），驱动 computed 重算
+const logsEl = ref(null);
 const LS_KEY = 'lifeImReview.prompt';
+let pollTimer = null, tickTimer = null, pollFails = 0;
+
+const running = computed(() => job.value?.state === 'running');
+const elapsedS = computed(() => {
+  tick.value;   // 依赖 tick，每秒重算
+  if (!job.value) return 0;
+  const end = job.value.finished_at || Date.now();
+  return Math.max(0, Math.round((end - job.value.started_at) / 1000));
+});
+const aiWaitS = computed(() => {
+  tick.value;
+  const t0 = job.value?.ai_started_at;
+  return t0 ? Math.max(0, Math.round((Date.now() - t0) / 1000)) : 0;
+});
+const jobLabel = computed(() => {
+  const map = { done: '已完成', error: '失败', cancelled: '已取消', running: '' };
+  return `${job.value?.stage_label || ''}${map[job.value?.state] || ''}`.trim();
+});
 
 // 文件夹下拉：整棵树摊平，缩进表示层级，标出该子树里 IM 归档笔记的篇数
 const folderOptions = computed(() => {
@@ -127,6 +169,12 @@ const duePreview = computed(() => {
 });
 const dueDesc = computed(() => ({ 1: '次日', 7: '次日后的 7 天窗口', 14: '次日后的 14 天窗口', 30: '次日后的 30 天窗口' }[days.value] || ''));
 
+const fmtDur = (s) => (s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`);
+const fmtClock = (ms) => {
+  const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
 function toggle(i) {
   const s = new Set(checked.value);
   s.has(i) ? s.delete(i) : s.add(i);
@@ -137,23 +185,63 @@ function pickAll() {
   checked.value = checked.value.size === list.length ? new Set() : new Set(list.map((_, i) => i));
 }
 
+// ---------- 后台任务（v1.10.30）：POST 立即回任务号，1.5s 轮询拿快照 ----------
+function stopTimers() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+}
+function startTimers() {
+  stopTimers();
+  pollFails = 0;
+  pollTimer = setInterval(async () => {
+    try {
+      const j = await api.get('/life/im-review/jobs/latest');
+      pollFails = 0;
+      job.value = j;
+      if (j && j.state === 'running') scrollLogs();
+      if (!j) { stopTimers(); return; }
+      if (j.state === 'done') {
+        stopTimers();
+        applyResult(j.result);
+        emit('toast', `整理完成：${j.result.conversations.length} 个会话 · ${j.result.lines_used} 条消息`);
+      } else if (j.state === 'error') {
+        stopTimers();
+        emit('toast', j.error || '整理失败', 'err');
+      } else if (j.state === 'cancelled') {
+        stopTimers();
+      }
+    } catch { if (++pollFails >= 5) { stopTimers(); emit('toast', '进度查询连续失败，任务仍在后台运行，稍后回来刷新即可', 'err'); } }
+  }, 1500);
+  tickTimer = setInterval(() => { tick.value++; }, 1000);
+}
+function scrollLogs() { nextTick(() => { if (logsEl.value) logsEl.value.scrollTop = logsEl.value.scrollHeight; }); }
+
 async function run() {
-  if (!folderId.value || busy.value) return;
-  busy.value = true;
+  if (!folderId.value || running.value) return;
   try {
-    const r = await api.post('/life/im-review/preview', {
+    const j = await api.post('/life/im-review/jobs', {
       folder_id: folderId.value, days: days.value, prompt: prompt.value,
     });
-    r.generated_at = new Date().toLocaleString('zh-CN');
-    res.value = r;
-    checked.value = new Set();
-    added.value = new Set();
-    emit('toast', `整理完成：${r.conversations.length} 个会话 · ${r.lines_used} 条消息`);
+    job.value = j;
+    if (j.resumed) emit('toast', '上一次整理还在进行，已接上它的进度');
+    startTimers();
   } catch (e) {
     emit('toast', e.message, 'err');
-  } finally {
-    busy.value = false;
   }
+}
+async function cancel() {
+  try {
+    const r = await api.del('/life/im-review/jobs/latest');
+    if (r.ok) { emit('toast', '已取消整理'); }
+    else emit('toast', '没有在进行的任务', 'err');
+  } catch (e) { emit('toast', e.message, 'err'); }
+}
+
+function applyResult(r) {
+  if (!r) return;
+  res.value = { ...r, generated_at: r.generated_at_ms ? new Date(r.generated_at_ms).toLocaleString('zh-CN') : '' };
+  checked.value = new Set();
+  added.value = new Set();
 }
 
 async function addTodos() {
@@ -181,6 +269,7 @@ function resetPrompt() {
 
 // 用户改过的引导词记在本地；「恢复默认」清掉
 watch(prompt, (v) => { if (v) localStorage.setItem(LS_KEY, v); });
+watch(() => job.value && job.value.logs.length, scrollLogs);
 
 onMounted(async () => {
   try {
@@ -194,7 +283,17 @@ onMounted(async () => {
     if (first) folderId.value = first.id;
     else if (folderOptions.value.length) folderId.value = folderOptions.value[0].id;
   } catch (e) { emit('toast', e.message, 'err'); }
+  // 重进页面：接上还在跑的任务；上次跑完的直接把结果摆出来
+  try {
+    const j = await api.get('/life/im-review/jobs/latest');
+    if (j) {
+      job.value = j;
+      if (j.state === 'running') startTimers();
+      else if (j.state === 'done') applyResult(j.result);
+    }
+  } catch { /* 拿不到就算了，不影响选源 */ }
 });
+onUnmounted(stopTimers);
 </script>
 
 <style scoped>
@@ -215,4 +314,9 @@ onMounted(async () => {
 .note { margin: 3px 0 0 24px; }
 .err-hint { color: #d93025; font-size: 13px; margin-top: 8px; }
 .badge.warn { background: #b26a00; color: #fff; }
+.bar { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.bar .fill { height: 100%; background: var(--accent, #4a7dff); border-radius: 999px; transition: width .6s ease; }
+.logs { margin-top: 8px; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; background: rgba(127,127,127,.06); font-size: 12px; line-height: 1.7; }
+.logline { white-space: pre-wrap; word-break: break-all; }
 </style>
