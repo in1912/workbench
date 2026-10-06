@@ -131,8 +131,12 @@ function blockOf(el) {
       return childBlocks(el).flatMap((b) => b.split('\n').map((l) => '> ' + l));
     case 'ul': case 'ol':
       return [listLines(el, '').join('\n')];
-    case 'table':
-      return tableBlock(el);
+    case 'table': {
+      // 表格必须整体一块（行间单 \n）：表头/分隔行/数据行被 \n\n 拆开就不成 GFM 表格，
+      // 预览会当三个段落原样显示竖线（v1.11.7 热修；列表同理由 listLines().join('\n')）
+      const lines = tableBlock(el);
+      return lines.length ? [lines.join('\n')] : [];
+    }
     case 'figcaption': {
       const t = inlineOf(el).replace(/\n/g, ' ').trim();
       return t ? ['*' + t + '*'] : [];
