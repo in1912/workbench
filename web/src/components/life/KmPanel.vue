@@ -254,6 +254,9 @@
 //   文字页 canvas 排字、每页一张 JPEG 进手写多页 PDF）；③ 书籍加权（📚 分组置顶、书名补《》）；
 // ④ 获得提示词改用外部版（Markdown 树 + 7 大类资源表 + JSON 附件，与后端共用构建模型）。
 // v1.11.3：进页默认打开最近制作的一张（按 created_at 挑最新，构建中不抢空态）。
+// v1.11.4：修成本表「知识点」列整列空白——flatNodes 递归漏传初始 depth（undefined/NaN），
+//   PDF fillText 拿到 NaN 横坐标静默不画（周期/程度/成本在固定列 x 所以幸存）；屏上顺带
+//   找回根节点加粗与层级缩进。教训：PDF 内容断言必须落到墨迹像素，数页数什么都证明不了。
 //
 // 画布口径：布局是纯函数 layoutTree(root, style) → { nodes, edges, bbox }——**坐标摆放与连线
 // 生成分两步**（先摆完坐标再统一画边，sides 左右分组 / treeup 整树翻转都不会让边坐标失效）。
@@ -1081,7 +1084,9 @@ const flatNodes = computed(() => {
   (function walk(n, depth) {
     out.push({ name: n.name, cycle: n.cycle || '', level: n.level || '', cost: n.cost || '', depth });
     (n.children || []).forEach((c) => walk(c, depth + 1));
-  })(tree.value.root || { name: '', children: [] });
+  })(tree.value.root || { name: '', children: [] }, 0);   // ← 初始 0 不能省：漏了它 depth=undefined/NaN，
+  //  PDF 里 `x + n.depth*10` = NaN，fillText 收到 NaN 横坐标会静默一个像素都不画——
+  //  v1.11.4 修的正是这个（成本表「知识点」列整列空白，屏上还顺带丢了根节点加粗与缩进）
   return out;
 });
 
