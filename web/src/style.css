@@ -297,6 +297,11 @@ a.link:hover { text-decoration: underline; }
 .markdown-body blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--text2); }
 /* 插入的附件图片（v1.10.33）：大图不撑破预览列 */
 .markdown-body img { max-width: 100%; border-radius: 6px; }
+/* GFM 表格（v1.11.8）：marked 渲出的 <table> 没有默认边框，视觉上与普通文本无异
+   （v1.11.7 只修了「渲染成表格」，目视发现无边框仍读不成表）；宽表横向滚动不撑破预览列 */
+.markdown-body table { border-collapse: collapse; margin: 8px 0; display: block; max-width: 100%; overflow-x: auto; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 5px 12px; text-align: left; white-space: nowrap; }
+.markdown-body th { background: var(--bg); font-weight: 600; }
 
 .msg { padding: 10px 13px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
 .msg.err { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.3); }
