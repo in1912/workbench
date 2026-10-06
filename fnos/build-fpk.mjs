@@ -38,9 +38,14 @@ for (const f of ['manifest', 'ICON.PNG', 'ICON_256.PNG', 'cmd', 'config', 'wizar
 // 2) UI 入口：fnos/app-ui → app/ui（manifest desktop_uidir=ui）
 fs.cpSync(path.join(FNOS_DIR, 'app-ui'), path.join(APP, 'ui'), { recursive: true });
 // 3) 运行文件：git 已提交内容（server + zhizu + package*.json + fnos 说明），与 GitHub 完全一致
-//    （MSYS tar 不认反斜杠盘符路径，-C 统一转正斜杠）
+//    ⚠️ `git archive` 与 checkout 同规则会吃 core.autocrlf——Windows 上会把库里的 LF 全转成 CRLF，
+//    载荷就和 git 逐字节对不上了；必须 `-c core.autocrlf=false -c core.eol=lf` 钉死原样字节，
+//    再用 Windows 自带 bsdtar 解包（二进制模式，不像 MSYS tar 那样做文本转换）。
 const APP_POSIX = APP.replaceAll('\\', '/');
-execSync(`git archive HEAD server zhizu package.json package-lock.json fnos/README-FNOS.md | tar -x -C "${APP_POSIX}"`, { cwd: ROOT, stdio: 'inherit' });
+const tmpTar = path.join(OUT, 'head-payload.tar');
+execSync(`git -c core.autocrlf=false -c core.eol=lf archive HEAD server zhizu package.json package-lock.json fnos/README-FNOS.md --output="${tmpTar.replaceAll('\\', '/')}"`, { cwd: ROOT, stdio: 'inherit' });
+execSync(`"${process.env.SystemRoot || 'C:/Windows'}/System32/tar.exe" -xf "${tmpTar}" -C "${APP_POSIX}"`, { stdio: 'inherit' });
+fs.rmSync(tmpTar, { force: true });
 // git archive 保留 fnos/ 路径前缀：说明文档挪到 app 根（随包安装在 target/ 根可读）
 fs.renameSync(path.join(APP, 'fnos', 'README-FNOS.md'), path.join(APP, 'README-FNOS.md'));
 fs.rmSync(path.join(APP, 'fnos'), { recursive: true, force: true });
