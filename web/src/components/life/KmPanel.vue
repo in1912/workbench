@@ -253,6 +253,7 @@
 // ② PDF 升级全量导出（主图 + 地图信息 + 子能力/优势 + 成本表 + 数据来源 + 知识交集，
 //   文字页 canvas 排字、每页一张 JPEG 进手写多页 PDF）；③ 书籍加权（📚 分组置顶、书名补《》）；
 // ④ 获得提示词改用外部版（Markdown 树 + 7 大类资源表 + JSON 附件，与后端共用构建模型）。
+// v1.11.3：进页默认打开最近制作的一张（按 created_at 挑最新，构建中不抢空态）。
 //
 // 画布口径：布局是纯函数 layoutTree(root, style) → { nodes, edges, bbox }——**坐标摆放与连线
 // 生成分两步**（先摆完坐标再统一画边，sides 左右分组 / treeup 整树翻转都不会让边坐标失效）。
@@ -1122,12 +1123,19 @@ onMounted(async () => {
   try { await loadMeta(); } catch (e) { emit('toast', e.message, 'err'); }
   try { await loadFolders(); } catch (e) { emit('toast', e.message, 'err'); }
   try { await loadMaps(); } catch (e) { emit('toast', e.message, 'err'); }
-  // 重进页面：接上还在跑的任务
+  // 重进页面：接上还在跑的任务；没有在跑的就默认打开最近制作的一张（v1.11.3 用户需求
+  // 「知识地图页面，默认显示最近一次制作的知识地图」）。按 created_at 挑最新——列表本身按
+  // updated_at 排，重命名/换风格会把老图顶到最上面，那不是「最近制作」；构建中不抢，
+  // 画布留给「AI 正在构建技能树…」的空态说明。
   try {
     const j = await api.get('/life/km/jobs/latest');
     if (j) {
       job.value = j;
       if (j.state === 'running') startTimers();
+    }
+    if ((!job.value || job.value.state !== 'running') && !map.value && allMaps.value.length) {
+      const newest = allMaps.value.reduce((a, b) => (String(b.created_at || '') > String(a.created_at || '') ? b : a));
+      selectMap(newest.id);
     }
   } catch { /* 拿不到就算了 */ }
 });
