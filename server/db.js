@@ -847,6 +847,53 @@ CREATE TABLE IF NOT EXISTS im_oauth_states (
   connector_id INTEGER NOT NULL,
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
+
+-- ============ 数字人（v1.12.0，智能家居页「数字人」tab，Vivix 实时数字人） ============
+-- 一个数字人 = 一条 dh_personas（角色注册表：类型/声音/API 配置 + 人设引导构建的结构化字段）。
+-- persona 列存引导表单的 JSON（默认值见 dhService.PERSONA_DEFAULTS）；Vivix 会话 JSON 由服务端
+-- 单一出处组装（dhService.buildSessionJson），库里不存组装产物——改引导字段永远是最新口径。
+-- api_key 明文存租户库：同 im_connectors.app_secret 的口径（租户库本来就是该用户私有库），
+-- 接口返回给前端时一律擦掉（dhService.publicPersona 只回 hasKey 布尔）。
+CREATE TABLE IF NOT EXISTS dh_personas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL DEFAULT '数字人',
+  type TEXT NOT NULL DEFAULT '女友',             -- 男友|女友|宠物
+  api_base TEXT NOT NULL DEFAULT 'https://api.vivix.ai',
+  api_key TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT 'vivix-a1-stream',
+  voice_id TEXT NOT NULL DEFAULT 'longanhuan_v3.6',
+  remark TEXT NOT NULL DEFAULT '',               -- 备注信息（一句话）
+  note TEXT NOT NULL DEFAULT '',                 -- 备注说明（长文本）
+  persona TEXT NOT NULL DEFAULT '{}',            -- 人设引导构建的结构化字段 JSON
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+-- 参考图（Vivix 的 source image）：磁盘优先（storagePaths 的 dh-images 子目录），
+-- 未配置上传根目录或写盘失败回退 base64 入库（同笔记附件 storeAttachment 的兜底口径）。
+CREATE TABLE IF NOT EXISTS dh_images (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id INTEGER NOT NULL,
+  file TEXT NOT NULL DEFAULT '',
+  orig_name TEXT NOT NULL DEFAULT '',
+  mime TEXT NOT NULL DEFAULT 'image/png',
+  size INTEGER NOT NULL DEFAULT 0,
+  storage_path TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',          -- 首图描述：构图/姿势/服装/场景（帮模型理解可动范围）
+  sort INTEGER NOT NULL DEFAULT 0,               -- 越小越靠前；卡片叠放默认看最前面那张
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+-- 历史对话：role=user（用户）/ assistant（数字人）。
+-- audio_file 非空 = 语音气泡（实时会话阶段把对方语音落盘后回填路径，气泡区 UI 已预留）。
+CREATE TABLE IF NOT EXISTS dh_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  audio_file TEXT NOT NULL DEFAULT '',
+  ts TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 `;
 
 // 为已有表补充新列（SQLite ADD COLUMN，幂等）
@@ -1059,6 +1106,9 @@ function initBusinessSchema(d) {
     CREATE INDEX IF NOT EXISTS idx_life_sops_domain ON life_sops(domain_id, archived);
     -- IM 连接器（v1.10.5）：日志按连接器倒序翻；会话游标靠 UNIQUE(connector_id,chat_id) 自带索引
     CREATE INDEX IF NOT EXISTS idx_im_sync_logs ON im_sync_logs(connector_id, id DESC);
+    -- 数字人（v1.12.0）：历史按数字人倒序翻一页；参考图按 persona+sort 取正面卡
+    CREATE INDEX IF NOT EXISTS idx_dh_history ON dh_history(persona_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_dh_images ON dh_images(persona_id, sort);
     CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
     CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
     -- 今日主线按天取：部分索引（NULL 不参与，普通待办不占索引）
@@ -1952,6 +2002,8 @@ const TENANT_TABLES = [
   // IM 连接器（v1.10.5）：授权凭证 + 会话游标 + 同步日志。im_oauth_states 是**主库**表
   // （OAuth 回跳没有登录态，只能靠 state 反查用户），故意不进这份清单。
   'im_connectors', 'im_chats', 'im_sync_logs',
+  // 数字人（v1.12.0）：角色注册表 + 参考图 + 历史对话（智能家居页「数字人」tab）
+  'dh_personas', 'dh_images', 'dh_history',
 ];
 // 归租户库的 settings 键（其余留在主库）
 const TENANT_SETTING_KEYS = [

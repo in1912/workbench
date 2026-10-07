@@ -120,6 +120,8 @@ export const TAB_DEFS = {
   // v1.9.22 曾把「Agent红绿灯」升格独立页；v1.9.23 放回本页（智能板之后）
   smarthome: [
     { key: 'mijia', label: '米家' },
+    // 数字人（v1.12.0，本页第二个 tab）：Vivix 实时数字人——数字人界面/设置/历史对话三个子页（DhPanel 内部分）
+    { key: 'dh', label: '数字人' },
     // 智能板（v1.9.11）：小智 Korvo2V3 语音板 = 装机向导 + 唤醒词编译烧录 + 语音控米家
     { key: 'xiaozhi', label: '智能板' },
     // Agent红绿灯（v1.8.1 起的本页子 tab）：ESP32-C3 三色灯指示九家 AI Agent 状态；

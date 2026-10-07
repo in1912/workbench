@@ -3,6 +3,8 @@
     <h2 v-if="layout !== 'sidebar'" class="page-title">智能家居</h2>
     <div v-if="layout !== 'sidebar'" class="tabs">
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
+      <!-- 数字人（v1.12.0，第二个 tab）：配置/参考图/历史对话，面板内再分三个子页 -->
+      <button v-if="canTab('smarthome','dh')" :class="{active: tab==='dh'}" @click="switchTab('dh')">数字人</button>
       <button v-if="canTab('smarthome','xiaozhi')" :class="{active: tab==='xiaozhi'}" @click="switchTab('xiaozhi')">智能板</button>
       <!-- Agent红绿灯（v1.8.1 起为本页子 tab；v1.9.22 曾升格独立页，v1.9.23 放回智能板之后） -->
       <button v-if="canTab('smarthome','cclight')" :class="{active: tab==='cclight'}" @click="switchTab('cclight')">Agent红绿灯</button>
@@ -94,6 +96,9 @@
         <div v-if="!termGroups.length" style="color:var(--muted);text-align:center;padding:24px">没有匹配的词条</div>
       </div>
     </template>
+
+    <!-- ==================== 数字人 tab（v1.12.0，第二个 tab）：三个子页全在 DhPanel 内 ==================== -->
+    <DhPanel v-else-if="tab==='dh'" />
 
     <!-- ==================== 智能板 tab（v1.9.11：小智 Korvo2V3 装机/唤醒词/语音控米家） ==================== -->
     <XiaozhiPanel v-else-if="tab==='xiaozhi'" />
@@ -335,6 +340,7 @@ import { api } from '../api';
 import QRCode from 'qrcode';
 import { zh, TERM_GROUPS } from '../miotTerms';
 import XiaozhiPanel from '../components/XiaozhiPanel.vue';
+import DhPanel from '../components/DhPanel.vue';
 import CcLightPanel from '../components/CcLightPanel.vue';
 import VideoCenterPanel from '../components/VideoCenterPanel.vue';
 

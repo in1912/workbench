@@ -25,6 +25,7 @@ const monitorRoutes = require('./routes/monitorRoutes');
 const mihomeRoutes = require('./routes/mihomeRoutes');
 const ccLightRoutes = require('./routes/ccLightRoutes');
 const xiaozhiRoutes = require('./routes/xiaozhiRoutes');
+const dhRoutes = require('./routes/dhRoutes');
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
 const flashToolRoutes = require('./routes/flashToolRoutes');
@@ -139,6 +140,7 @@ const SH_API_ALLOW = [
   '/auth/me',           // 拿内置本地账号（登录接口 /auth/login 故意不在名单里：本应用没有登录页）
   '/messages/contacts', // 用户选择器数据源（misc.js 里的）
   '/mihome', '/cclight', '/xiaozhi', '/vc', '/flashtool',
+  '/dh',                // 数字人（v1.12.0，智能家居第二个 tab）：角色注册表/参考图/历史/试聊/连通测试
 ];
 app.use('/api', (req, res, next) => {
   if (!SH_MODE) return next();
@@ -158,6 +160,7 @@ app.use('/api', miscRoutes); // 含 /system-info、前端错误上报、文件�
 app.use('/api', mihomeRoutes);
 app.use('/api', ccLightRoutes);
 app.use('/api', xiaozhiRoutes);
+app.use('/api', dhRoutes); // 数字人（v1.12.0）：/dh/*（角色注册表/参考图/历史对话/Vivix 会话预览）
 app.use('/api', vstudyRoutes); // 视频中心（智能家居最后一个 tab）用的 /vc 接口
 app.use('/api', flashToolRoutes); // 本地烧录工具包（v2.0.0 新增）
 app.use('/api', fnosRoutes);

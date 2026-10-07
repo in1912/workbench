@@ -109,6 +109,8 @@ function pageForPath(p) {
   // 智能板（小智 Korvo2V3，v1.9.11）：装机/唤醒词/桥接归智能家居页 xiaozhi tab；
   // /xiaozhi/bridge 在 index.js EXEMPT 免登录（板端固件回连，key 即凭证），不经过这里
   if (p.startsWith('/xiaozhi')) return 'smarthome';
+  // 数字人（v1.12.0）：归智能家居页 dh tab（角色注册表/参考图/历史对话/试聊/Vivix 预览与连通测试）
+  if (p.startsWith('/dh')) return 'smarthome';
   // 业务系统改名「推送任务」并入效率工具页（2026-09 v1.7.0）
   if (p.startsWith('/business')) return 'tools';
   if (p.startsWith('/ai')) return 'ai';
@@ -237,6 +239,8 @@ const TAB_PATHS = {
   // v1.6.29：移除「监控」tab 与摄像头事件凭证通道（micam 路由已删，历史 allowed_tabs 里的 monitor 键无害）
   smarthome: [
     ['mijia', []],
+    // 数字人（v1.12.0，本页第二个 tab）：/dh 整块（meta/角色 CRUD/参考图/历史/试聊/预览/连通测试）
+    ['dh', ['/dh']],
     ['terms', []],
     ['xiaozhi', ['/xiaozhi']],
     // Agent红绿灯（v1.9.23 放回本页）：/cclight 文件清单/单文件/打包下载整块归这一个 tab；

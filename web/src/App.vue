@@ -53,11 +53,20 @@
     </div>
 
     <!-- 全局搜索悬浮框（v1.7.0）：最右下角短输入框 + 搜索按钮，直达效率工具的全局搜索 tab；
-         空输入点搜索 = 进搜索页；带词回车/点按钮 = 进页并自动执行搜索 -->
-    <div v-if="canGlobalSearch" class="float-search">
-      <input v-model="gsQ" placeholder="全局搜索…" @keyup.enter="goSearch" />
-      <button title="全局搜索" @click="goSearch">🔍</button>
+         空输入点搜索 = 进搜索页；带词回车/点按钮 = 进页并自动执行搜索。
+         v1.12.0 起三段式：前面加「数字人」按钮（标签随默认数字人类型显示 AI男友/AI女友/AI萌宠），
+         点开最外层页面右侧的手机模型浮层（DhPhone，不遮本搜索框）。 -->
+    <div v-if="canGlobalSearch || canDh" class="float-search">
+      <button v-if="canDh" class="float-dh" :title="dhPhoneTip" @click="toggleDhPhone">
+        <span class="material-icons" style="font-size:14px;vertical-align:-2px">smart_toy</span>
+        {{ dhLabel() || '数字人' }}
+      </button>
+      <input v-if="canGlobalSearch" v-model="gsQ" placeholder="全局搜索…" @keyup.enter="goSearch" />
+      <button v-if="canGlobalSearch" title="全局搜索" @click="goSearch">🔍</button>
     </div>
+
+    <!-- 数字人手机模型浮层（v1.12.0）：最外层、页面最右侧、高度自适应视口、不遮右下角搜索框 -->
+    <DhPhone v-if="dhState.phoneOpen" />
 
     <!-- 升级自愈提示：常驻 webview（钉钉工作台等）里的旧前端检测到服务端已升级，提示后自动刷新加载新包 -->
     <div v-if="upgradeTip" class="upgrade-tip">⬆ {{ upgradeTip }}</div>
@@ -84,6 +93,8 @@ import { probeLocalBase } from './utils/localBase';
 import { sysName, setSysInfo } from './sysname';
 import { plainText } from './utils/rich';
 import { canTab } from './tabs';
+import { dhState, dhRefresh, dhLabel } from './dhState';
+import DhPhone from './components/DhPhone.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -153,6 +164,8 @@ onMounted(async () => {
       }
       // 本地直连：登录后即后台探测设置的内网地址（不阻塞界面），可达则学习页大文件自动走内网
       probeLocalBase();
+      // 数字人（v1.12.0）：预拉角色注册表，右下角按钮的「AI男友/AI女友/AI萌宠」标签首屏即正确
+      if (canDh.value) dhRefresh();
       // 新邮件提示音开关（邮箱页「邮箱设置」里配置；无邮箱设置权限的成员静默跳过）
       try { const n = await api.get('/emails/notify'); emailSoundOn.value = !!n.sound; } catch {}
     }
@@ -307,6 +320,26 @@ function goSearch() {
   router.push({ path: '/tools', query: { tab: 'search', ...(q ? { q } : {}) } });
 }
 
+// ---------- 数字人（v1.12.0）：右下角按钮 + 手机浮层 ----------
+// 权限 = 智能家居页的 dh 子 tab（canTab 同源后端 TAB_PATHS）；没有搜索权限但 dh 有时也显示这一段
+const canDh = computed(() => {
+  route.fullPath; userTick.value;
+  const u = user.value;
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+  const allowed = u.allowed_pages || [];
+  if (allowed.length && !allowed.includes('smarthome')) return false;
+  return canTab('smarthome', 'dh');
+});
+const dhPhoneTip = computed(() => {
+  const p = dhState.personas.find((x) => x.is_default) || dhState.personas[0];
+  return p ? `打开${p.name}（${p.type}）` : '打开数字人';
+});
+function toggleDhPhone() {
+  dhState.phoneOpen = !dhState.phoneOpen;
+  if (dhState.phoneOpen && !dhState.loaded) dhRefresh();
+}
+
 // localStorage 非响应式：依赖 route.fullPath + userTick（boot 刷新 wb_user 后手动 +1），
 // 否则受限成员 F5 时首次求值为 null → 显示全量菜单，boot 写回后不触发重算（v1.3.5 修复）
 const userTick = ref(0);
@@ -359,13 +392,19 @@ function logout() {
 <style scoped>
 .msg-toasts { position: fixed; right: 16px; bottom: 76px; z-index: 1200; display: flex; flex-direction: column; gap: 10px;
   max-width: 92vw; max-height: calc(100vh - 150px); overflow-y: auto; }
-/* 全局搜索悬浮框（最右下角；消息弹窗在其上方让位） */
-.float-search { position: fixed; right: 16px; bottom: 16px; z-index: 1150; display: flex; align-items: center;
+/* 全局搜索悬浮框（最右下角；消息弹窗在其上方让位）。
+   v1.12.0 三段式：数字人按钮在搜索框前面，同一块底板一体化（比搜索框略宽）。 */
+.float-search { position: fixed; right: 16px; bottom: 16px; z-index: 1150; display: flex; align-items: center; gap: 3px;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 4px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25); }
-.float-search input { border: none; background: transparent; color: var(--text); width: 132px; font-size: 12.5px;
+.float-search input { border: none; background: transparent; color: var(--text); width: 160px; font-size: 12.5px;
   padding: 5px 8px; outline: none; border-radius: 7px; }
 .float-search input:focus { background: var(--bg3, rgba(0, 0, 0, 0.12)); }
+/* 数字人段：与搜索段同底板，主色填充做视觉主按钮 */
+.float-dh { border: none; background: rgba(236, 100, 150, 0.18); color: var(--text); border-radius: 7px;
+  padding: 5px 11px; cursor: pointer; font-size: 12.5px; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+  white-space: nowrap; }
+.float-dh:hover { background: rgba(236, 100, 150, 0.34); }
 .float-search button { border: none; background: rgba(79, 124, 247, 0.16); color: var(--text); border-radius: 7px;
   padding: 5px 11px; cursor: pointer; font-size: 13px; flex-shrink: 0; }
 .float-search button:hover { background: rgba(79, 124, 247, 0.3); }
