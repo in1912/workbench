@@ -103,8 +103,8 @@
 
       <!-- 智能家居视频路径（v1.9.26）：智能家居页「视频中心」tab 的根目录（与学习页视频教学的目录各自独立） -->
       <div class="card" v-if="isAdmin">
-        <h3>智能家居视频路径</h3>
-        <div class="muted" style="font-size:12px; margin-bottom:8px">「智能家居 → 视频中心」tab 浏览播放此目录里的视频/音频（mp4 · flv · mp3 等，支持 PotPlayer/VLC 外部播放器联动）。与「学习 → 视频教学」的学习目录互不影响。Docker/NAS 部署：填容器内路径（先把 NAS 目录映射进容器，如宿主机 /vol2/1000/家庭视频 映射为 /videos 后填 /videos）；Windows 直跑填本机目录（如 D:\家庭视频）。</div>
+        <h3>人工智能视频路径</h3>
+        <div class="muted" style="font-size:12px; margin-bottom:8px">「人工智能 → 视频中心」tab 浏览播放此目录里的视频/音频（mp4 · flv · mp3 等，支持 PotPlayer/VLC 外部播放器联动）。与「学习 → 视频教学」的学习目录互不影响。Docker/NAS 部署：填容器内路径（先把 NAS 目录映射进容器，如宿主机 /vol2/1000/家庭视频 映射为 /videos 后填 /videos）；Windows 直跑填本机目录（如 D:\家庭视频）。</div>
         <div class="row">
           <input v-model="vcRoot.dir" placeholder="D:\家庭视频（Docker 填容器内路径，如 /videos）" class="grow" />
           <button class="primary" @click="saveVcRoot">保存路径</button>
@@ -769,7 +769,7 @@ async function saveVcRoot() {
     await api.post('/vc/settings', { root: vcRoot.value.dir.trim() });
     const c = await api.get('/vc/config');
     vcRoot.value.ok = c.root_ok;
-    flash(c.root_ok ? '智能家居视频路径已保存：' + c.root : (vcRoot.value.dir ? '已保存，但该路径当前在服务器上不可访问（Docker 部署需填容器内路径）' : '已清空，「视频中心」tab 将提示未配置'));
+    flash(c.root_ok ? '人工智能视频路径已保存：' + c.root : (vcRoot.value.dir ? '已保存，但该路径当前在服务器上不可访问（Docker 部署需填容器内路径）' : '已清空，「视频中心」tab 将提示未配置'));
   } catch (e) { flash('保存失败：' + e.message, 'err'); }
 }
 

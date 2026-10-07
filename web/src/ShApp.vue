@@ -54,6 +54,11 @@ const MODULES = [
     svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   },
   {
+    // v1.12.4：原独立「AI 助手」页并入（LLM在线模型），与主工作台同一个 llm tab key
+    key: 'llm', label: 'LLM在线模型',
+    svg: '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 20.5h8M12 16.5v4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  },
+  {
     key: 'xiaozhi', label: '智能板',
     svg: '<svg viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   },

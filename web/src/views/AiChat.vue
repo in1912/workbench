@@ -1,6 +1,7 @@
 <template>
+  <!-- v1.12.4：原独立「AI 助手」页整页并入「人工智能」页的 llm 子 tab（改名「LLM在线模型」）。
+       外层 SmartHome 已画页面标题，这里不再带自己的 page-title；组件内部逻辑原样。 -->
   <div>
-    <h2 class="page-title">AI 助手</h2>
     <div class="ai-chat-layout">
       <!-- 会话列表 -->
       <div class="ai-sidebar">

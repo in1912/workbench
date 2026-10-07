@@ -23,14 +23,16 @@ const routes = [
   // v1.7.0 模块重组：业务系统(→效率工具·推送任务)/文件存档/全局搜索/个人账务/用户管理
   // 不再是独立页面，旧地址带 tab 参数重定向到新位置
   { path: '/business', redirect: (to) => ({ path: '/tools', query: { ...to.query, tab: 'business' } }) },
-  { path: '/ai', component: () => import('../views/AiChat.vue'), meta: { title: 'AI 助手', page: 'ai' } },
+  // AI 助手 v1.12.4 整页并入「人工智能」的 llm 子 tab（改名「LLM在线模型」）；旧地址/书签重定向过去
+  // （AiChat 组件本身由 SmartHome 页引进渲染，不再单独挂路由）
+  { path: '/ai', redirect: (to) => ({ path: '/smart-home', query: { ...to.query, tab: 'llm' } }) },
   // 电子宠物 v1.10.10（需求⑨）整页并入「效率工具」的 tab；旧地址与书签一律重定向过去。
   // 原来宠物页自己的 tab 参数也叫 tab（/pets?tab=adopt），跟效率工具的 tab 撞名，
   // 所以挪到 sub 参数：/pets?tab=adopt → /tools?tab=pets&sub=adopt（PetsPanel 读 sub）。
   { path: '/pets', redirect: (to) => ({ path: '/tools', query: { tab: 'pets', ...(to.query.tab ? { sub: to.query.tab } : {}) } }) },
-  // 智能家居（2026-09 v1.6.8）：米家扫码绑定 + 家庭/房间/设备卡片控制
-  { path: '/smart-home', component: () => import('../views/SmartHome.vue'), meta: { title: '智能家居', page: 'smarthome' } },
-  // Agent红绿灯：v1.9.22 曾升格独立页，v1.9.23 放回智能家居子 tab；旧地址/书签重定向过去
+  // 人工智能（2026-09 v1.6.8 智能家居，v1.12.4 改名）：米家扫码绑定 + 数字人 + LLM在线模型 + 视频
+  { path: '/smart-home', component: () => import('../views/SmartHome.vue'), meta: { title: '人工智能', page: 'smarthome' } },
+  // Agent红绿灯：v1.9.22 曾升格独立页，v1.9.23 放回人工智能页子 tab；旧地址/书签重定向过去
   { path: '/cc-light', redirect: (to) => ({ path: '/smart-home', query: { ...to.query, tab: 'cclight' } }) },
   // 「打字赚钱」4 个 tab 已并入学习页（2026-09 v1.2.0）；旧地址带参跳转过去（tab key 不变）
   { path: '/typing', redirect: (to) => ({ path: '/learning', query: { tab: to.query.tab || 'practice' } }) },

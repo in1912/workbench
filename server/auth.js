@@ -67,7 +67,9 @@ function cleanupSessions() {
 // 页面 key → 后端 API 路径前缀（注意：入参是相对 /api 的路径，如 /notes）
 // v1.10.10（需求⑨）：'pets' 从页面清单里去掉 —— 电子宠物整页并入「效率工具」页的 tab，
 // 授权键变成 tools 页下的 'pets'。存量授权由 db.js 的 migratePetsIntoTools 一次性平移。
-const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'ai', 'smarthome', 'settings', 'life'];
+// v1.12.4：'ai' 同款 —— 「AI 助手」页整页并入「人工智能」（原智能家居）页的 llm 子 tab
+// （改名「LLM在线模型」），授权键变成 smarthome.llm，存量授权由 db.js 的 migrateAiIntoSmartHome 平移。
+const PAGES = ['dashboard', 'news', 'email', 'notes', 'tasks', 'family', 'learning', 'tools', 'smarthome', 'settings', 'life'];
 // v1.9.22 曾把「Agent红绿灯」升格独立页；v1.9.23 放回智能家居页 cclight 子 tab（授权由 db.js 幂等迁移回平）
 // v1.8.0：「私有项目」页（mbti/dep/pro 三大测试中心）已整体移除，迁至独立项目 Private_Mini；
 // 历史 allowed_pages/allowed_tabs 里残留的 'private' 键无害（不再有页面/接口映射到它）
@@ -113,7 +115,10 @@ function pageForPath(p) {
   if (p.startsWith('/dh')) return 'smarthome';
   // 业务系统改名「推送任务」并入效率工具页（2026-09 v1.7.0）
   if (p.startsWith('/business')) return 'tools';
-  if (p.startsWith('/ai')) return 'ai';
+  // AI 助手（v1.12.4）整页并入「人工智能」页 llm 子 tab（改名「LLM在线模型」）。
+  // ⚠️ 这里必须跟着改成 'smarthome'（与 pets 同款）：PAGES 里已经没有 'ai'，
+  //    留着 return 'ai' 会让 /api/ai/* 静默变成「仅需登录」，权限形同虚设。
+  if (p.startsWith('/ai')) return 'smarthome';
   if (p.startsWith('/pushes') || p.startsWith('/schedules')) return 'tools'; // 原「AI 推送」页并入的推送 tab
   if (p.startsWith('/files')) return 'tools'; // 文件存档并入效率工具页（v1.7.0）
   // 日历公共数据（看板「中国节日日历」与「待办与日程 → 日历」共用）：仅需登录，不绑页面权限。
@@ -241,6 +246,9 @@ const TAB_PATHS = {
     ['mijia', []],
     // 数字人（v1.12.0，本页第二个 tab）：/dh 整块（meta/角色 CRUD/参考图/历史/试聊/预览/连通测试）
     ['dh', ['/dh']],
+    // LLM在线模型（v1.12.4，本页第三个 tab）：原独立「AI 助手」页整块（会话/消息/附件/配置）；
+    // 页面更名「人工智能」与授权键搬家（ai 页 → smarthome.llm）互不影响
+    ['llm', ['/ai']],
     ['terms', []],
     ['xiaozhi', ['/xiaozhi']],
     // Agent红绿灯（v1.9.23 放回本页）：/cclight 文件清单/单文件/打包下载整块归这一个 tab；

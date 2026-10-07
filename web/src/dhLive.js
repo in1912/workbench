@@ -58,7 +58,7 @@ export function useDhLive({ viewId, getPersona }) {
     const msg = String((e && (e.message || e)) || '控制通道收到错误事件');
     const code = e && e.code ? String(e.code) : '';
     if (/AUDIO_PREPARE_UPSTREAM_ERROR|505001/.test(msg + ' ' + code)) {
-      return `语音合成上游失败（${code || 'TTS'}）——多半是当前音色在 Vivix 侧故障或额度不足，到「设置 → 基本信息」换个音色再开实时对话；未开实时时的文字试聊不受影响`;
+      return `语音合成上游失败（${code || 'TTS'}）——多半是当前音色在 Vivix 侧故障或额度不足，到「角色设置 → 基本信息」换个音色再开实时对话；未开实时时的文字试聊不受影响`;
     }
     return msg;
   }
@@ -89,6 +89,21 @@ export function useDhLive({ viewId, getPersona }) {
       // 用户消息已被服务端确认 → 触发一次回复（音+字都要，文字回流进气泡区）
       pendingRespond = false; clearTimeout(respondTimer);
       wsSend({ type: 'response.create', response: { modalities: ['audio', 'text'] } });
+    } else if (t === 'conversation.item.input_audio_transcription.completed') {
+      // v1.12.4：用户语音转文字——Vivix 默认 ASR（中文 doubao，无需建会话时额外配置）把用户
+      // 说的话以服务端事件回传（payload.transcript=整段文字）。与打字同款待遇：出用户气泡 +
+      // POST /dh/history 落「聊天记录」。ASR 本就是实时会话的组成部分，展示/落库不额外耗积分。
+      // 只认 .completed 整段结果；.delta（部分转写）与 .failed（转写失败）忽略——失败时语音
+      // 对话本身不受影响（服务端照常理解语音），只是不出文字气泡。
+      const tx = String(d.transcript != null ? d.transcript : '').trim();
+      if (!tx) return;
+      pushLive('user', tx);
+      const p = getPersona();
+      if (p) {
+        api.post('/dh/history', { persona_id: p.id, role: 'user', text: tx })
+          .then(() => { dhState.histVer++; })
+          .catch(() => { /* 落库失败不影响会话进行 */ });
+      }
     } else if (t === 'session.closed') {
       flushDelta();
       live.on = false;

@@ -122,6 +122,9 @@ export const TAB_DEFS = {
     { key: 'mijia', label: '米家' },
     // 数字人（v1.12.0，本页第二个 tab）：Vivix 实时数字人——数字人界面/设置/历史对话三个子页（DhPanel 内部分）
     { key: 'dh', label: '数字人' },
+    // LLM在线模型（v1.12.4）：原独立「AI 助手」页整页并入（AiChat 组件原样挂本 tab）；
+    // 授权键从 ai 页平移为 smarthome.llm（db.js migrateAiIntoSmartHome），/api/ai/* 归这一个 tab
+    { key: 'llm', label: 'LLM在线模型' },
     // 智能板（v1.9.11）：小智 Korvo2V3 语音板 = 装机向导 + 唤醒词编译烧录 + 语音控米家
     { key: 'xiaozhi', label: '智能板' },
     // Agent红绿灯（v1.8.1 起的本页子 tab）：ESP32-C3 三色灯指示九家 AI Agent 状态；

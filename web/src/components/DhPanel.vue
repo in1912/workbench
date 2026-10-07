@@ -1,9 +1,10 @@
 <template>
-  <!-- 数字人面板（v1.12.1）：智能家居页第二个 tab。三个子页签（每次进入一律从「数字人界面」开始）：
+  <!-- 数字人面板（v1.12.1）：智能家居页第二个 tab。四个子页签（每次进入一律从「数字人界面」开始）：
        ①数字人界面——画面 + 实时对话（v1.12.1：服务端建 Vivix 会话，浏览器 WSS 控制 + TRTC 拉流，
-         Key 配好即亮「开始实时对话」；打字/开麦都能聊，记录落「聊天记录」）+ 一键切换默认人物
+         Key 配好即亮「开始实时对话」；v1.12.4 开始即默认开麦、说的话转文字气泡；一键切换默认人物）
        ②聊天记录——左：人物角色选择（头像+名称，同角色注册表样式）；右：大框聊天气泡窗口
-       ③设置——自上而下：叠放卡片固定预览 → 参考图上传管理 → 基本信息+API（含公网访问地址） → 人设引导构建 -->
+       ③设置（v1.12.4 拆分）——只管 API 接入相关基础设置：Base/模型/Key/公网访问地址/连通测试/查余额
+       ④角色设置（v1.12.4 拆分）——叠放卡片固定预览 → 参考图上传管理 → 基本信息（含声音） → 人设引导构建 -->
   <div>
     <!-- 子页签（不占外层 ?tab= 查询参数；v1.12.1 起不记忆上次子页签，进 tab 一律回到「数字人界面」） -->
     <div class="dh-subtabs">
@@ -18,7 +19,7 @@
       <span class="material-icons" style="font-size:44px;color:var(--muted)">smart_toy</span>
       <h3 style="margin:12px 0 8px">还没有数字人</h3>
       <p style="color:var(--muted);margin:0 0 16px">先建一个角色：选类型（男友/女友/宠物）、上传参考图、调人设，就能在右下角和悬浮窗里见到 TA。</p>
-      <button class="btn" @click="sub = 'settings'">去设置新建</button>
+      <button class="btn" @click="sub = 'role'">去角色设置新建</button>
     </div>
 
     <template v-else>
@@ -29,7 +30,7 @@
                直播时比例切到流的真实宽高（v1.12.2，见 stageStyle），视频 contain 不裁切 -->
           <div class="dh-stage" :style="stageStyle">
             <img v-if="frontImg && !live.on" class="dh-stage-img" :src="imgSrc(frontImg)" alt="" draggable="false" />
-            <div v-if="!frontImg && !live.on" class="dh-stage-empty">当前数字人还没有参考图，去「设置」上传一张（建议胸像~腰像、面朝镜头、手全入画）</div>
+            <div v-if="!frontImg && !live.on" class="dh-stage-empty">当前数字人还没有参考图，去「角色设置」上传一张（建议胸像~腰像、面朝镜头、手全入画）</div>
             <!-- 实时画面容器（常驻 DOM，TRTC 往里塞 video；v-show 控制） -->
             <div v-show="live.on" class="dh-stage-video" id="dh-live-view"></div>
             <!-- 角标三态：未配 Key=待接入 · 配了未开=可开始 · 开启=实时中 -->
@@ -72,7 +73,7 @@
         <!-- 实时对话文字通道（语音对方直接说出来；文字双方都落「聊天记录」） -->
         <div v-if="live.on" class="card dh-live-chat">
           <div class="dh-live-log" ref="liveLogEl">
-            <div v-if="!liveItems.length" class="dh-live-empty">实时对话已开始，对方会先开口说开场白。打字或点「开麦」都能聊；这里的每一句都会存进「聊天记录」。</div>
+            <div v-if="!liveItems.length" class="dh-live-empty">实时对话已开始，对方会先开口说开场白；麦克风已自动打开，直接说话或打字都能聊（你说的话也会转成文字气泡）。这里的每一句都会存进「聊天记录」。</div>
             <div v-for="(m, i) in liveItems" :key="i" class="dh-lrow" :class="m.role">
               <div class="dh-lbubble">{{ m.text }}</div>
             </div>
@@ -100,10 +101,10 @@
         </div>
       </template>
 
-      <!-- ==================== ② 设置 ==================== -->
+      <!-- ==================== ③ 设置（v1.12.4 拆分：只管 API 接入相关基础设置） ==================== -->
       <template v-else-if="sub === 'settings'">
         <div class="dh-settings">
-          <!-- 左：角色注册表 -->
+          <!-- 左：角色注册表（API Key 按角色存，先选角色再配） -->
           <div class="card dh-reg">
             <div class="dh-reg-head">
               <h3 style="margin:0;font-size:15px">角色注册表</h3>
@@ -119,7 +120,62 @@
             </div>
           </div>
 
-          <!-- 右：编辑器（v1.12.1 自上而下：叠放卡片 → 参考图 → 基本信息 → 人设引导设置框） -->
+          <!-- 右：API 接入编辑器（v1.12.4 拆分：本页只管 API 相关基础设置；角色外观/声音/人设在「角色设置」页） -->
+          <div class="dh-editor" v-if="form">
+            <div class="card">
+              <h3 class="dh-sec">API 接入（Vivix 实时数字人）</h3>
+              <p class="dh-img-tip">API Key 按角色保存在服务端（建会话时才用，前端拿不到明文）；「开始实时对话」前先在这里完成连通测试。角色的名字、外观、声音与人设在「角色设置」页维护。</p>
+              <div class="dh-grid2">
+                <div class="dh-field"><label>API Base</label><input v-model="form.api_base" placeholder="https://api.vivix.ai" /></div>
+                <div class="dh-field"><label>模型</label><input v-model="form.model" placeholder="vivix-a1-stream" /></div>
+              </div>
+              <div class="dh-field"><label>API Key<span class="dh-hint">{{ form.hasKey ? '（已保存，输入新值即替换）' : '（console.vivix.ai 生成）' }}</span></label>
+                <input v-model="newKey" type="password" autocomplete="new-password" placeholder="sk-…" />
+              </div>
+              <div class="dh-field"><label>公网访问地址<span class="dh-hint">（Vivix 从公网取参考图用，实时对话必填）</span></label>
+                <input v-model="form.public_base" placeholder="https://cc.in1912.cc（工作台的公网域名，须 https）" />
+              </div>
+              <p class="dh-img-tip" style="margin:-4px 0 10px">Vivix 服务器建会话时要<b>自己下载参考图</b>（不支持 base64）：这里填工作台的公网 HTTPS 地址（内网 IP 它取不到）。没填的话「开始实时对话」会明确提示。</p>
+              <div class="dh-actions">
+                <button class="btn sm" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存设置' }}</button>
+                <button class="btn sm" :disabled="testing" @click="testKey">{{ testing ? '测试中…' : '连通测试' }}</button>
+                <button v-if="form.hasKey" class="btn sm ghost" :disabled="balBusy" @click="fetchBalance">{{ balBusy ? '查余额中…' : '💰 查余额' }}</button>
+                <button v-if="form.hasKey" class="btn sm ghost" :disabled="testing" @click="clearKey">清除已存 Key</button>
+              </div>
+              <div class="dh-actions" style="margin-top:8px">
+                <span v-if="testResult" class="dh-test" :class="testResult.ok ? 'ok' : 'bad'">
+                  {{ testResult.ok ? `✓ 连通 ${testResult.latency_ms}ms` : '✗ ' + testResult.error }}
+                  <template v-if="testResult.ok && testResult.model_ok"> · {{ form.model }} 可用</template>
+                  <template v-else-if="testResult.ok"> · ⚠ {{ form.model }} 不在可用列表</template>
+                </span>
+                <span v-if="balInfo" class="dh-test" :class="balInfo.ok ? 'ok' : 'bad'">{{ balText }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="card dh-editor" style="color:var(--muted);text-align:center;padding:40px">选择左侧角色，或点「新建」</div>
+        </div>
+      </template>
+
+      <!-- ==================== ④ 角色设置（v1.12.4 拆分：角色外观/声音/人设） ==================== -->
+      <template v-else-if="sub === 'role'">
+        <div class="dh-settings">
+          <!-- 左：角色注册表（与设置页同一份；选谁改谁） -->
+          <div class="card dh-reg">
+            <div class="dh-reg-head">
+              <h3 style="margin:0;font-size:15px">角色注册表</h3>
+              <button class="btn sm" @click="createPersona">＋ 新建</button>
+            </div>
+            <div v-for="p in personas" :key="p.id" class="dh-reg-item" :class="{ on: p.id === selId }" @click="select(p.id)">
+              <img v-if="p.images.length" :src="imgSrc(p.images[0])" alt="" />
+              <span v-else class="material-icons dh-persona-none">smart_toy</span>
+              <div class="dh-persona-name">
+                <b>{{ p.name }}<i v-if="p.is_default" class="dh-reg-def">默认</i></b>
+                <small>{{ p.type }} · {{ p.hasKey ? 'Key 已配' : 'Key 未配' }}</small>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右：角色编辑器（叠放卡片 → 参考图 → 基本信息（含声音） → 人设引导设置框） -->
           <div class="dh-editor" v-if="form">
             <!-- ① 固定预览：叠放卡片（最上面）+ 参考图上传与管理 -->
             <div class="card">
@@ -153,7 +209,7 @@
               <div v-else class="dh-img-empty">还没有参考图</div>
             </div>
 
-            <!-- ② 基本信息 + API 接入 -->
+            <!-- ② 基本信息（v1.12.4：声音从「API 接入」挪来——音色是角色属性，不是接口配置） -->
             <div class="card">
               <h3 class="dh-sec">基本信息</h3>
               <div class="dh-grid2">
@@ -163,40 +219,14 @@
                 </div>
               </div>
               <div class="dh-grid2">
-                <div class="dh-field"><label>备注信息（一句话）</label><input v-model="form.remark" placeholder="如：默认示例：20 岁女友" /></div>
-                <div class="dh-field"><label>备注说明（长文本）</label><input v-model="form.note" placeholder="用途/来历/注意事项" /></div>
-              </div>
-
-              <h3 class="dh-sec">API 接入（Vivix 实时数字人）</h3>
-              <div class="dh-grid2">
-                <div class="dh-field"><label>API Base</label><input v-model="form.api_base" placeholder="https://api.vivix.ai" /></div>
-                <div class="dh-field"><label>模型</label><input v-model="form.model" placeholder="vivix-a1-stream" /></div>
-              </div>
-              <div class="dh-grid2">
-                <div class="dh-field"><label>API Key<span class="dh-hint">{{ form.hasKey ? '（已保存，输入新值即替换）' : '（console.vivix.ai 生成）' }}</span></label>
-                  <input v-model="newKey" type="password" autocomplete="new-password" placeholder="sk-…" />
-                </div>
                 <div class="dh-field"><label>声音（内置 Qwen Audio 九音色）</label>
                   <select v-model="form.voice_id">
                     <option v-for="v in meta.voices" :key="v.id" :value="v.id">{{ v.label }}</option>
                   </select>
                 </div>
+                <div class="dh-field"><label>备注信息（一句话）</label><input v-model="form.remark" placeholder="如：默认示例：20 岁女友" /></div>
               </div>
-              <div class="dh-field"><label>公网访问地址<span class="dh-hint">（Vivix 从公网取参考图用，实时对话必填）</span></label>
-                <input v-model="form.public_base" placeholder="https://cc.in1912.cc（工作台的公网域名，须 https）" />
-              </div>
-              <p class="dh-img-tip" style="margin:-4px 0 10px">Vivix 服务器建会话时要<b>自己下载参考图</b>（不支持 base64）：这里填工作台的公网 HTTPS 地址（内网 IP 它取不到）。没填的话「开始实时对话」会明确提示。</p>
-              <div class="dh-actions">
-                <button class="btn sm" :disabled="testing" @click="testKey">{{ testing ? '测试中…' : '连通测试' }}</button>
-                <button v-if="form.hasKey" class="btn sm ghost" :disabled="balBusy" @click="fetchBalance">{{ balBusy ? '查余额中…' : '💰 查余额' }}</button>
-                <button v-if="form.hasKey" class="btn sm ghost" :disabled="testing" @click="clearKey">清除已存 Key</button>
-                <span v-if="testResult" class="dh-test" :class="testResult.ok ? 'ok' : 'bad'">
-                  {{ testResult.ok ? `✓ 连通 ${testResult.latency_ms}ms` : '✗ ' + testResult.error }}
-                  <template v-if="testResult.ok && testResult.model_ok"> · {{ form.model }} 可用</template>
-                  <template v-else-if="testResult.ok"> · ⚠ {{ form.model }} 不在可用列表</template>
-                </span>
-                <span v-if="balInfo" class="dh-test" :class="balInfo.ok ? 'ok' : 'bad'">{{ balText }}</span>
-              </div>
+              <div class="dh-field"><label>备注说明（长文本）</label><input v-model="form.note" placeholder="用途/来历/注意事项" /></div>
             </div>
 
             <!-- ③ 人设引导构建（设置框） -->
@@ -282,7 +312,7 @@
               <span style="flex:1"></span>
               <button class="btn sm danger ghost" @click="clearHistory">清空记录</button>
             </div>
-            <p class="dh-img-tip">气泡对话；接入实时会话后，对方的语音会存成语音气泡（微信样式）。<b>文字试聊</b>走工作台已配置的 AI，人设由「设置 → 人设引导构建」组装。</p>
+            <p class="dh-img-tip">气泡对话；接入实时会话后，对方的语音会存成语音气泡（微信样式）。<b>文字试聊</b>走工作台已配置的 AI，人设由「角色设置 → 人设引导构建」组装。</p>
 
             <div class="dh-chat" ref="chatEl">
               <div v-if="!items.length" class="dh-chat-empty">还没有对话{{ chatPersona ? '，跟 ' + chatPersona.name + ' 说第一句吧' : '' }}</div>
@@ -342,6 +372,7 @@ const SUBS = [
   { key: 'main', label: '数字人界面' },
   { key: 'chat', label: '聊天记录' },
   { key: 'settings', label: '设置' },
+  { key: 'role', label: '角色设置' }, // v1.12.4：设置拆两页——设置只管 API 接入，角色外观/声音/人设归这里
 ];
 // v1.12.1：进数字人 tab 一律从「数字人界面」开始。此前用 localStorage 记忆上次子页签——
 // 上次停留在「设置」的话，之后每次进来都落在设置页；不再记忆，组件随页签切换重挂载天然归位。
@@ -596,6 +627,11 @@ function scrollBottom() {
 const { live, liveItems, liveText, startLive, stopLive, sendLive, resumePlay, toggleMic } = useDhLive({
   viewId: 'dh-live-view',            // TRTC 渲染容器（模板里 #dh-live-view）
   getPersona: () => cur.value,
+});
+// v1.12.4：主界面也开始实时对话即默认开麦（与悬浮窗 v1.12.3 同款：会话稳定半秒后自动
+// startLocalAudio；失败亮错误条可手动重试；不想说话点「🎤 关麦」关掉即可）
+watch(() => live.on, (v) => {
+  if (v && !live.micOn) setTimeout(() => { if (live.on && !live.micOn) toggleMic(); }, 500);
 });
 // 切走页签/关掉组件：显式关服务端会话（烧额度的会话不挂机；断连 90 秒 auto_close 兜底）
 onBeforeUnmount(() => { stopLive(); });

@@ -22,12 +22,15 @@ export const NAV_ITEMS = [
   { to: '/tasks', icon: 'event_note', label: '日程', page: 'tasks' },
   { to: '/family', icon: 'favorite', label: '家庭管理', page: 'family' },
   { to: '/tools', icon: 'build', label: '效率工具', page: 'tools' },
-  { to: '/ai', icon: 'smart_toy', label: 'AI 助手', page: 'ai' },
+  // AI 助手（v1.12.4）：不再是独立页，整页并入「人工智能」页的 llm 子 tab（改名「LLM在线模型」）；
+  // 旧地址 /ai 在 router 里重定向到 /smart-home?tab=llm。存量授权由 db.js 的 migrateAiIntoSmartHome 平移。
   // 电子宠物（v1.10.10，需求⑨）：不再是独立页，整页并入「效率工具」页的 tab；
   // 旧地址 /pets、/adopt 在 router 里重定向到 /tools?tab=pets。
   { to: '/messages', icon: 'chat', label: '短消息', page: 'messages' },
-  { to: '/smart-home', icon: 'home', label: '智能家居', page: 'smarthome' },
-  // v1.9.22 曾把 Agent红绿灯升格独立侧栏页；v1.9.23 放回智能家居子 tab（旧地址 /cc-light 在 router 重定向）
+  // 智能家居 → 人工智能（v1.12.4）：页里现在住着数字人 + LLM在线模型 + 米家/智能板/红绿灯/视频中心。
+  // wb_page_order 存档里残留的 'ai' 键无害（清单里没有匹配项会被 sortByOrder 忽略，不占位）。
+  { to: '/smart-home', icon: 'smart_toy', label: '人工智能', page: 'smarthome' },
+  // v1.9.22 曾把 Agent红绿灯升格独立侧栏页；v1.9.23 放回人工智能页子 tab（旧地址 /cc-light 在 router 重定向）
   { to: '/settings', icon: 'settings', label: '设置', page: 'settings' },
 ];
 

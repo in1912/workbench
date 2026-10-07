@@ -1,10 +1,12 @@
 <template>
   <div>
-    <h2 v-if="layout !== 'sidebar'" class="page-title">智能家居</h2>
+    <h2 v-if="layout !== 'sidebar'" class="page-title">人工智能</h2>
     <div v-if="layout !== 'sidebar'" class="tabs">
       <button v-if="canTab('smarthome','mijia')" :class="{active: tab==='mijia'}" @click="switchTab('mijia')">米家</button>
       <!-- 数字人（v1.12.0，第二个 tab）：配置/参考图/历史对话，面板内再分三个子页 -->
       <button v-if="canTab('smarthome','dh')" :class="{active: tab==='dh'}" @click="switchTab('dh')">数字人</button>
+      <!-- LLM在线模型（v1.12.4）：原独立「AI 助手」页整页并入，AiChat 组件原样作本 tab 内容 -->
+      <button v-if="canTab('smarthome','llm')" :class="{active: tab==='llm'}" @click="switchTab('llm')">LLM在线模型</button>
       <button v-if="canTab('smarthome','xiaozhi')" :class="{active: tab==='xiaozhi'}" @click="switchTab('xiaozhi')">智能板</button>
       <!-- Agent红绿灯（v1.8.1 起为本页子 tab；v1.9.22 曾升格独立页，v1.9.23 放回智能板之后） -->
       <button v-if="canTab('smarthome','cclight')" :class="{active: tab==='cclight'}" @click="switchTab('cclight')">Agent红绿灯</button>
@@ -99,6 +101,9 @@
 
     <!-- ==================== 数字人 tab（v1.12.0，第二个 tab）：三个子页全在 DhPanel 内 ==================== -->
     <DhPanel v-else-if="tab==='dh'" />
+
+    <!-- ==================== LLM在线模型 tab（v1.12.4：原独立「AI 助手」页并入，AiChat 原样渲染） ==================== -->
+    <AiChat v-else-if="tab==='llm'" />
 
     <!-- ==================== 智能板 tab（v1.9.11：小智 Korvo2V3 装机/唤醒词/语音控米家） ==================== -->
     <XiaozhiPanel v-else-if="tab==='xiaozhi'" />
@@ -211,7 +216,7 @@
           <li>通道：小米账号 OAuth2 官方授权 + 米家云端 MIoT 接口，纯云端调用（不依赖局域网），仅操作你账号下已在米家 App 绑定的成品设备。</li>
           <li>授权内容：读取家庭/房间/设备列表、读写设备属性、调用设备动作；不收集、不修改设备绑定关系。</li>
           <li>安全：访问令牌以 AES-256-GCM 加密存储在本工作台服务器，不出现在日志与接口响应中；解绑即清空令牌即时失效。</li>
-          <li>绑定账号对全工作台共享（家庭成员共用一个米家账号）；可在「用户管理」里控制谁能看到「智能家居」页。</li>
+          <li>绑定账号对全工作台共享（家庭成员共用一个米家账号）；可在「用户管理」里控制谁能看到「人工智能」页。</li>
           <li>本功能仅限个人自用，请勿用于商业用途。</li>
         </ul>
       </div>
@@ -341,6 +346,9 @@ import QRCode from 'qrcode';
 import { zh, TERM_GROUPS } from '../miotTerms';
 import XiaozhiPanel from '../components/XiaozhiPanel.vue';
 import DhPanel from '../components/DhPanel.vue';
+// v1.12.4：原独立「AI 助手」页整页并入本页 llm 子 tab（静态引进 → 打进 SmartHome 分块；
+// /ai 旧地址在 router 重定向到 /smart-home?tab=llm）
+import AiChat from './AiChat.vue';
 import CcLightPanel from '../components/CcLightPanel.vue';
 import VideoCenterPanel from '../components/VideoCenterPanel.vue';
 

@@ -2525,6 +2525,49 @@ function migratePetsIntoTools() {
 }
 migratePetsIntoTools();
 
+// 一次性迁移（2026-10 v1.12.4）：「AI 助手」页从独立侧栏页 'ai' 并入「人工智能」（原「智能家居」改名）
+// 页的 llm 子 tab（改名「LLM在线模型」）。主库 + 全部租户库，幂等（守卫 ai_into_smarthome_v1124）。
+//   页面：allowed_pages 里的 'ai' 剥掉（PAGES 已无此键，留着勾不到也防不住）；
+//         原来**有** ai 页授权的补上 smarthome.llm —— 旧 ai 页没有子 tab 细分（TAB_PATHS 无 'ai' 键，
+//         缺键 = 页内全开），所以「有页面授权」就等于「在用」，一律平移，不漏不扩。
+//   细分：allowed_tabs.ai 整键删除（防御性：正常库不会有这个键）。
+//   提权防线：pages=['ai'] 的账号剥掉后必然经「补 smarthome」分支变成 ['smarthome']，永不变空数组
+//         （空数组在 canAccess 里 = 不限制，是 pets_v11010 踩过的真提权），这条靠结构保证，不需特判。
+function migrateAiIntoSmartHome() {
+  const fix = (d) => {
+    if (getSetting(d, 'ai_into_smarthome_v1124', false)) return;
+    setSetting(d, 'ai_into_smarthome_v1124', true);
+    const users = (() => { try { return d.prepare('SELECT id, allowed_pages, allowed_tabs FROM users').all(); } catch { return []; } })();
+    for (const u of users) {
+      let pages;
+      try { pages = JSON.parse(u.allowed_pages || '[]'); } catch { pages = []; }
+      let tabs;
+      try { tabs = JSON.parse(u.allowed_tabs || '{}'); } catch { tabs = {}; }
+      let changed = false;
+      const hadPage = Array.isArray(pages) && pages.includes('ai');
+      if (hadPage) {
+        pages = pages.filter((p) => p !== 'ai');
+        if (!pages.includes('smarthome')) {
+          // 原来没有人工智能页 → 补上，且**只给 llm 一个 tab**，不顺带拿到米家/数字人/视频中心
+          pages.push('smarthome');
+          tabs.smarthome = Array.isArray(tabs.smarthome) ? [...new Set([...tabs.smarthome, 'llm'])] : ['llm'];
+        } else if (Array.isArray(tabs.smarthome) && !tabs.smarthome.includes('llm')) {
+          // 本来就有人工智能页且是细分列表 → 补 'llm'；没有细分（缺键 = 全部 tab 开放）什么都不用写
+          tabs.smarthome = [...tabs.smarthome, 'llm'];
+        }
+        changed = true;
+      }
+      if (tabs && typeof tabs === 'object' && 'ai' in tabs) { delete tabs.ai; changed = true; }
+      if (changed) d.prepare('UPDATE users SET allowed_pages=?, allowed_tabs=? WHERE id=?')
+        .run(JSON.stringify(pages), JSON.stringify(tabs), u.id);
+    }
+  };
+  fix(db);
+  forEachTenant(fix);
+  console.log('[db] v1.12.4 AI助手并入人工智能页（llm 子 tab）：用户授权已迁移');
+}
+migrateAiIntoSmartHome();
+
 // 一次性迁移（2026-09 v1.6.2）：①剪贴板采集代理——老库补 clipboard_items.device 列 + clipboard_devices 表
 // （主库 + 全部租户库，幂等）；②三大测试中心从「效率工具」页移到新页「私有项目」，用户授权随之迁移。
 function migrateClipboardAgent() {

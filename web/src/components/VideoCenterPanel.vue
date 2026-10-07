@@ -4,9 +4,9 @@
     <div v-if="!cfg.root_ok" class="card vc-empty">
       <div class="ph">
         🎞 视频中心<br>
-        <b>{{ cfg.root ? '视频目录不可访问：' + cfg.root : '尚未配置智能家居视频路径' }}</b>
+        <b>{{ cfg.root ? '视频目录不可访问：' + cfg.root : '尚未配置人工智能视频路径' }}</b>
         <div style="font-size:12px">
-          {{ isAdmin ? '到「设置 → 智能家居视频路径」填写 NAS 目录后即可浏览播放' : '请联系管理员在「设置」页的「智能家居视频路径」配置视频目录' }}
+          {{ isAdmin ? '到「设置 → 人工智能视频路径」填写 NAS 目录后即可浏览播放' : '请联系管理员在「设置」页的「人工智能视频路径」配置视频目录' }}
         </div>
       </div>
     </div>

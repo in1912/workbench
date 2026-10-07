@@ -23,7 +23,7 @@
            配了 Vivix Key 自动建会话 + TRTC 拉流（视频顶替海报）；没配 Key 保持海报 + 文字试聊 -->
       <div class="dhp-stage">
         <img v-if="frontImg && !live.on" class="dhp-video" :src="imgSrc(frontImg)" alt="" draggable="false" />
-        <div v-if="!frontImg && !live.on" class="dhp-stage-empty">先去「智能家居 → 数字人 → 设置」上传参考图</div>
+        <div v-if="!frontImg && !live.on" class="dhp-stage-empty">先去「人工智能 → 数字人 → 角色设置」上传参考图</div>
         <!-- 实时画面容器（常驻 DOM，TRTC 往里塞 video） -->
         <div v-show="live.on" class="dhp-video-box" id="dh-live-view-phone"></div>
         <div class="dhp-live" :class="{ onair: live.on }"><i></i>{{ liveBadge }}</div>

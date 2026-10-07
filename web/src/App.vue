@@ -56,7 +56,12 @@
          空输入点搜索 = 进搜索页；带词回车/点按钮 = 进页并自动执行搜索。
          v1.12.0 起三段式：前面加「数字人」按钮（标签随默认数字人类型显示 AI男友/AI女友/AI萌宠），
          点开最外层页面右侧的手机模型浮层（DhPhone，不遮本搜索框）。 -->
-    <div v-if="canGlobalSearch || canDh" class="float-search">
+    <div v-if="canGlobalSearch || canDh || canLlm" class="float-search">
+      <!-- v1.12.4：【AI助手】按钮排在【AI女友】前面：直跳「人工智能 → LLM在线模型」tab -->
+      <button v-if="canLlm" class="float-ai" title="AI 助手 · LLM在线模型" @click="goLlm">
+        <span class="material-icons" style="font-size:14px;vertical-align:-2px">chat</span>
+        AI助手
+      </button>
       <button v-if="canDh" class="float-dh" :title="dhPhoneTip" @click="toggleDhPhone">
         <span class="material-icons" style="font-size:14px;vertical-align:-2px">smart_toy</span>
         {{ dhLabel() || '数字人' }}
@@ -320,6 +325,21 @@ function goSearch() {
   router.push({ path: '/tools', query: { tab: 'search', ...(q ? { q } : {}) } });
 }
 
+// ---------- AI助手按钮（v1.12.4）：右下角直跳「人工智能 → LLM在线模型」tab ----------
+// 权限 = 人工智能页的 llm 子 tab（原独立「AI 助手」页并入后的授权键）
+const canLlm = computed(() => {
+  route.fullPath; userTick.value;
+  const u = user.value;
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+  const allowed = u.allowed_pages || [];
+  if (allowed.length && !allowed.includes('smarthome')) return false;
+  return canTab('smarthome', 'llm');
+});
+function goLlm() {
+  router.push({ path: '/smart-home', query: { tab: 'llm' } });
+}
+
 // ---------- 数字人（v1.12.0）：右下角按钮 + 手机浮层 ----------
 // 权限 = 智能家居页的 dh 子 tab（canTab 同源后端 TAB_PATHS）；没有搜索权限但 dh 有时也显示这一段
 const canDh = computed(() => {
@@ -405,6 +425,11 @@ function logout() {
   padding: 5px 11px; cursor: pointer; font-size: 12.5px; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
   white-space: nowrap; }
 .float-dh:hover { background: rgba(236, 100, 150, 0.34); }
+/* AI助手段（v1.12.4）：与数字人同款底板、蓝色系（跟数字人的粉色区分开） */
+.float-ai { border: none; background: rgba(79, 124, 247, 0.18); color: var(--text); border-radius: 7px;
+  padding: 5px 11px; cursor: pointer; font-size: 12.5px; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+  white-space: nowrap; }
+.float-ai:hover { background: rgba(79, 124, 247, 0.34); }
 .float-search button { border: none; background: rgba(79, 124, 247, 0.16); color: var(--text); border-radius: 7px;
   padding: 5px 11px; cursor: pointer; font-size: 13px; flex-shrink: 0; }
 .float-search button:hover { background: rgba(79, 124, 247, 0.3); }
