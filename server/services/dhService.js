@@ -273,7 +273,7 @@ function seedIfNeeded(tdb) {
   const has = tdb.prepare('SELECT COUNT(*) AS c FROM dh_personas').get();
   if (has.c > 0) return; // 已有数据（老租户）不种
   const r = tdb.prepare(`INSERT INTO dh_personas(name,type,voice_id,remark,note,persona,is_default)
-    VALUES(?,?,?,?,?,?,1)`).run('小星', '女友', 'longwanxiao_v3.6',
+    VALUES(?,?,?,?,?,?,1)`).run('小星', '女友', VOICES[0].id,   // v1.12.3：种子音色跟 VOICES 首位（longanhuan）——此前写死 longwanxiao（Vivix 侧损坏，新租户首开实时必撞 505001）
     '默认示例：20 岁女友', '首次使用自动创建的示例数字人；可在设置里改人设或换参考图',
     JSON.stringify(PERSONA_DEFAULTS));
   const pid = Number(r.lastInsertRowid);
@@ -343,6 +343,37 @@ async function testKey(p) {
     return { ok: true, latency_ms: latency, models, model_ok: modelOk };
   } catch (e) {
     return { ok: false, latency_ms: Date.now() - t0, error: e.name === 'TimeoutError' ? '超时（15 秒无响应）' : e.message };
+  }
+}
+
+// ---------- 余额查询：GET /v1/balance（2026-10-07 无 Key 探测定案端点存在——401 而非 404；
+// 官方文档没写这个接口，响应形状按常见信封宽松解析，认不出就原样透传给前端展示） ----------
+async function getBalance(p) {
+  if (!p.api_key) return { ok: false, error: '尚未填写 API Key' };
+  const base = String(p.api_base || '').replace(/\/+$/, '');
+  try {
+    const res = await fetch(base + '/v1/balance', {
+      headers: { Authorization: `Bearer ${p.api_key}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (body && (body.message || body.error)) || `HTTP ${res.status}`;
+      return { ok: false, error: String(msg) };
+    }
+    const d = body && body.data != null ? body.data : body;
+    let value = null, currency = '';
+    if (typeof d === 'number') value = d;
+    else if (d && typeof d === 'object') {
+      for (const k of ['balance', 'current_balance', 'currentBalance', 'amount', 'remaining', 'credit', 'credits']) {
+        const v = d[k];
+        if (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)))) { value = Number(v); break; }
+      }
+      currency = String(d.currency || d.unit || '').trim();
+    }
+    return { ok: true, value, currency, raw: JSON.stringify(body).slice(0, 300) };
+  } catch (e) {
+    return { ok: false, error: e.name === 'TimeoutError' ? '超时（15 秒无响应）' : e.message };
   }
 }
 
@@ -423,6 +454,6 @@ module.exports = {
   sanitizePersona, parsePersona, buildInstructions, buildVmps, buildSessionJson,
   mintImageToken, resolveImageToken,
   publicPersona, listPersonas, storeImage, nextSort, ensureDefault, seedIfNeeded,
-  addHistory, recentHistory, chat, testKey,
+  addHistory, recentHistory, chat, testKey, getBalance,
   createSession, closeSession,
 };

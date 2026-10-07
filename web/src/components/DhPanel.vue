@@ -25,7 +25,8 @@
       <!-- ==================== ① 数字人界面 ==================== -->
       <template v-if="sub === 'main'">
         <div class="card dh-main-card">
-          <!-- 画面：静态预览按人设 aspect；直播时舞台盒切到**流的真实比例**（v1.12.2，见 stageStyle），视频 contain 不裁切 -->
+          <!-- 画面：静态预览与直播同一限尺寸公式（v1.12.3：高封顶 78vh 按比例缩宽、居中——不再撑满整卡）；
+               直播时比例切到流的真实宽高（v1.12.2，见 stageStyle），视频 contain 不裁切 -->
           <div class="dh-stage" :style="stageStyle">
             <img v-if="frontImg && !live.on" class="dh-stage-img" :src="imgSrc(frontImg)" alt="" draggable="false" />
             <div v-if="!frontImg && !live.on" class="dh-stage-empty">当前数字人还没有参考图，去「设置」上传一张（建议胸像~腰像、面朝镜头、手全入画）</div>
@@ -187,12 +188,14 @@
               <p class="dh-img-tip" style="margin:-4px 0 10px">Vivix 服务器建会话时要<b>自己下载参考图</b>（不支持 base64）：这里填工作台的公网 HTTPS 地址（内网 IP 它取不到）。没填的话「开始实时对话」会明确提示。</p>
               <div class="dh-actions">
                 <button class="btn sm" :disabled="testing" @click="testKey">{{ testing ? '测试中…' : '连通测试' }}</button>
+                <button v-if="form.hasKey" class="btn sm ghost" :disabled="balBusy" @click="fetchBalance">{{ balBusy ? '查余额中…' : '💰 查余额' }}</button>
                 <button v-if="form.hasKey" class="btn sm ghost" :disabled="testing" @click="clearKey">清除已存 Key</button>
                 <span v-if="testResult" class="dh-test" :class="testResult.ok ? 'ok' : 'bad'">
                   {{ testResult.ok ? `✓ 连通 ${testResult.latency_ms}ms` : '✗ ' + testResult.error }}
                   <template v-if="testResult.ok && testResult.model_ok"> · {{ form.model }} 可用</template>
                   <template v-else-if="testResult.ok"> · ⚠ {{ form.model }} 不在可用列表</template>
                 </span>
+                <span v-if="balInfo" class="dh-test" :class="balInfo.ok ? 'ok' : 'bad'">{{ balText }}</span>
               </div>
             </div>
 
@@ -361,19 +364,17 @@ const preview = reactive({ open: false, json: '' });
 
 const cur = computed(() => personas.value.find((p) => p.is_default) || personas.value[0] || null);
 const frontImg = computed(() => (cur.value && cur.value.images.length ? cur.value.images[0] : null));
-const aspectCss = computed(() => {
+const aspectNum = computed(() => {
   const a = cur.value ? cur.value.persona.aspect : '9:16';
   const [w, h] = a.split(':').map(Number);
-  return Number.isFinite(w) && Number.isFinite(h) && h ? `${w} / ${h}` : '9 / 16';
+  return Number.isFinite(w) && Number.isFinite(h) && h ? w / h : 9 / 16;
 });
-// v1.12.2：直播时舞台盒改用**流的真实比例**（TRTC 首帧后量出 vw/vh），限高 78vh 居中——
-// 竖流不再被人设 aspect（旧默认 16:9）的盒子 cover 裁成只剩中间条；比例未知时先按人设比例
+// v1.12.2：直播时舞台盒用**流的真实比例**（TRTC 首帧后量出 vw/vh）；v1.12.3：静态预览同样
+// 限尺寸——高封顶 78vh、按比例缩宽、居中，两条分支同一公式。旧版静态 width:100%，竖版 9:16
+// 的预览图被撑到两千多像素高（生产反馈「主界面图片尺寸默认太大，要固定高宽」）
 const stageStyle = computed(() => {
-  if (live.on && live.vw && live.vh) {
-    const ar = live.vw / live.vh;
-    return { aspectRatio: String(ar), width: `min(100%, calc(78vh * ${ar.toFixed(4)}))`, margin: '0 auto' };
-  }
-  return { aspectRatio: aspectCss.value };
+  const ar = live.on && live.vw && live.vh ? live.vw / live.vh : aspectNum.value;
+  return { aspectRatio: String(ar), width: `min(100%, calc(78vh * ${ar.toFixed(4)}))`, margin: '0 auto' };
 });
 const voiceLabel = (id) => { const v = meta.value.voices.find((x) => x.id === id); return v ? v.label.split(' · ')[0] : id; };
 const imgSrc = (im) => rawUrl(im.url);
@@ -400,6 +401,7 @@ function select(id) {
   form.value = JSON.parse(JSON.stringify(p));
   newKey.value = '';
   testResult.value = null;
+  balInfo.value = null;
 }
 
 async function createPersona() {
@@ -465,6 +467,25 @@ async function testKey() {
   try { testResult.value = await api.post(`/dh/personas/${form.value.id}/test`, {}); }
   catch (e) { testResult.value = { ok: false, error: e.message }; }
   finally { testing.value = false; }
+}
+
+// 余额查询（v1.12.3）：GET /v1/balance 经服务端带 Key 调用（端点存在但官方文档没写，
+// 响应形状宽松解析；认不出时把原始返回亮出来，不改写不猜）
+const balBusy = ref(false);
+const balInfo = ref(null);
+const balText = computed(() => {
+  const b = balInfo.value;
+  if (!b) return '';
+  if (!b.ok) return '✗ ' + b.error;
+  if (b.value == null) return '✓ 余额（原始）：' + String(b.raw || '').slice(0, 100);
+  return `✓ 余额 ${b.value}${b.currency ? ' ' + b.currency : ''}`;
+});
+async function fetchBalance() {
+  if (balBusy.value || !form.value) return;
+  balBusy.value = true; balInfo.value = null;
+  try { balInfo.value = await api.get(`/dh/personas/${form.value.id}/balance`); }
+  catch (e) { balInfo.value = { ok: false, error: e.message }; }
+  finally { balBusy.value = false; }
 }
 
 async function showPreview() {

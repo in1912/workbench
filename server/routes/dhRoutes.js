@@ -214,6 +214,13 @@ router.post('/dh/personas/:id/test', async (req, res) => {
   try { res.json(await dh.testKey(p)); } catch (e) { res.json({ ok: false, error: e.message }); }
 });
 
+// ---------- 余额查询：GET /v1/balance（v1.12.3；端点存在但官方文档没写，形状宽松解析） ----------
+router.get('/dh/personas/:id/balance', async (req, res) => {
+  const p = getPersona(req.tdb, req.params.id);
+  if (!p) return res.status(404).json({ error: '数字人不存在' });
+  try { res.json(await dh.getBalance(p)); } catch (e) { res.json({ ok: false, error: e.message }); }
+});
+
 // ---------- 实时会话（v1.12.1）：建会话（API Key 只在服务端；浏览器只拿拉流凭证） ----------
 router.post('/dh/personas/:id/session', async (req, res) => {
   const tdb = req.tdb;
