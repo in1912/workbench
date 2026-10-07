@@ -478,7 +478,7 @@ const balText = computed(() => {
   if (!b) return '';
   if (!b.ok) return '✗ ' + b.error;
   if (b.value == null) return '✓ 余额（原始）：' + String(b.raw || '').slice(0, 100);
-  return `✓ 余额 ${b.value}${b.currency ? ' ' + b.currency : ''}`;
+  return `✓ 余额 ${b.value}${b.currency ? ' ' + b.currency : ''}${b.scopes ? '（各额度 ' + b.scopes + '）' : ''}`;
 });
 async function fetchBalance() {
   if (balBusy.value || !form.value) return;

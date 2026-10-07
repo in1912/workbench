@@ -365,6 +365,16 @@ async function getBalance(p) {
     let value = null, currency = '';
     if (typeof d === 'number') value = d;
     else if (d && typeof d === 'object') {
+      // 真实形状（2026-10-07 生产首采）：data.balances=[{scope:'A',available:1091.088},{scope:'W',available:0}]。
+      // scope 语义官方没文档化（A/W），主数值取 A（没有则取最大 available），分项全部拼进 scopes 亮给前端
+      if (Array.isArray(d.balances) && d.balances.length) {
+        const num = (b) => Number(b && b.available);
+        const a = d.balances.find((b) => b.scope === 'A' && Number.isFinite(num(b)))
+          || d.balances.filter((b) => Number.isFinite(num(b))).sort((x, y) => num(y) - num(x))[0];
+        return { ok: true, value: a ? num(a) : null, currency: '',
+          scopes: d.balances.map((b) => `${b.scope}=${Number.isFinite(num(b)) ? num(b) : '?'}`).join(' · '),
+          raw: JSON.stringify(body).slice(0, 300) };
+      }
       for (const k of ['balance', 'current_balance', 'currentBalance', 'amount', 'remaining', 'credit', 'credits']) {
         const v = d[k];
         if (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)))) { value = Number(v); break; }
