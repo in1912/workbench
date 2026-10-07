@@ -208,9 +208,10 @@ watch(() => liveItems.value.length, () => scrollBottom());
 .dhp-live i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #ec6496; margin-right: 5px; animation: dhpPulse 1.6s infinite; }
 .dhp-live.onair { background: rgba(30,158,104,.88); }
 .dhp-live.onair i { background: #fff; }
-/* 实时画面（v1.12.1）：TRTC 渲染容器铺满画面区 */
+/* 实时画面（v1.12.2）：视频 contain 等比完整呈现（流可能与人设 9:16 有一点出入，cover 会裁头脚；
+   !important 压真 TRTC 给 video 打的内联 object-fit:cover——2026-10-07 生产实测抓到） */
 .dhp-video-box { position: absolute; inset: 0; background: #000; }
-.dhp-video-box :deep(video) { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dhp-video-box :deep(video) { width: 100%; height: 100%; object-fit: contain !important; display: block; }
 .dhp-resume { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   border: none; background: rgba(236,100,150,.92); color: #fff; border-radius: 999px; padding: 7px 16px;
   font-size: 12.5px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.45); }

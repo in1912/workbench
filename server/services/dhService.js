@@ -28,6 +28,8 @@ const storagePaths = require('./storagePaths');
 const aiService = require('./aiService');
 
 // Vivix 内置 Qwen Audio 九音色（voice.md 全表；无台湾腔——调研已确认，要特定口音走外接/克隆，暂未开通）
+// ⚠️ 2026-10-07 生产实测：longwanxiao_v3.6 在 Vivix 侧 TTS 上游损坏（505001 AUDIO_PREPARE_UPSTREAM_ERROR，
+//    换 longanhuan_v3.6 立即恢复）——列表保留（上游可能修复），报错时前端已提示换音色。
 const VOICES = [
   { id: 'longanhuan_v3.6', label: '温暖女声 · 中英（默认）' },
   { id: 'longan_fengyue_v3.6', label: '庄重女声 · 中英' },
@@ -49,7 +51,7 @@ const PERSONA_DEFAULTS = {
   habits: '好啦、真的假的、吼、欸你',   // 口语习惯
   callUser: '宝宝',          // 对用户的称呼
   scene: '居家、自然侧光、简洁背景、棉质背心',
-  aspect: '16:9',            // 9:16|16:9|1:1
+  aspect: '9:16',            // 9:16|16:9|1:1——默认竖屏（伴聊/手机浮层场景；参考图多为竖图，横屏盒子会把直播流裁成中间条）
   resolution: '720p',        // Vivix 只有 480p/720p 两档，默认 720p（无 1080p）
   cameraFixed: true,         // 固定平视机位
   cameraLock: true,          // 镜头跟平移但构图锁定

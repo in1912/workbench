@@ -25,8 +25,8 @@
       <!-- ==================== ① 数字人界面 ==================== -->
       <template v-if="sub === 'main'">
         <div class="card dh-main-card">
-          <!-- 画面：比例=人设 aspect（16:9 横 / 9:16 竖 / 1:1）。实时开启后 TRTC 在 #dh-live-view 里渲染视频，首图退为占位 -->
-          <div class="dh-stage" :style="{ aspectRatio: aspectCss }">
+          <!-- 画面：静态预览按人设 aspect；直播时舞台盒切到**流的真实比例**（v1.12.2，见 stageStyle），视频 contain 不裁切 -->
+          <div class="dh-stage" :style="stageStyle">
             <img v-if="frontImg && !live.on" class="dh-stage-img" :src="imgSrc(frontImg)" alt="" draggable="false" />
             <div v-if="!frontImg && !live.on" class="dh-stage-empty">当前数字人还没有参考图，去「设置」上传一张（建议胸像~腰像、面朝镜头、手全入画）</div>
             <!-- 实时画面容器（常驻 DOM，TRTC 往里塞 video；v-show 控制） -->
@@ -362,9 +362,18 @@ const preview = reactive({ open: false, json: '' });
 const cur = computed(() => personas.value.find((p) => p.is_default) || personas.value[0] || null);
 const frontImg = computed(() => (cur.value && cur.value.images.length ? cur.value.images[0] : null));
 const aspectCss = computed(() => {
-  const a = cur.value ? cur.value.persona.aspect : '16:9';
+  const a = cur.value ? cur.value.persona.aspect : '9:16';
   const [w, h] = a.split(':').map(Number);
-  return Number.isFinite(w) && Number.isFinite(h) && h ? `${w} / ${h}` : '16 / 9';
+  return Number.isFinite(w) && Number.isFinite(h) && h ? `${w} / ${h}` : '9 / 16';
+});
+// v1.12.2：直播时舞台盒改用**流的真实比例**（TRTC 首帧后量出 vw/vh），限高 78vh 居中——
+// 竖流不再被人设 aspect（旧默认 16:9）的盒子 cover 裁成只剩中间条；比例未知时先按人设比例
+const stageStyle = computed(() => {
+  if (live.on && live.vw && live.vh) {
+    const ar = live.vw / live.vh;
+    return { aspectRatio: String(ar), width: `min(100%, calc(78vh * ${ar.toFixed(4)}))`, margin: '0 auto' };
+  }
+  return { aspectRatio: aspectCss.value };
 });
 const voiceLabel = (id) => { const v = meta.value.voices.find((x) => x.id === id); return v ? v.label.split(' · ')[0] : id; };
 const imgSrc = (im) => rawUrl(im.url);
@@ -601,9 +610,11 @@ onMounted(async () => {
 .dh-stage-live.onair i { background: #fff; }
 @keyframes dhPulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 
-/* 实时画面（v1.12.1）：TRTC 渲染容器铺满画面区；自动播放恢复按钮居中 */
+/* 实时画面（v1.12.2）：TRTC 渲染容器铺满画面区；视频 contain 等比完整呈现（舞台盒已随流的真实
+   比例切换，cover 在比例未知的头几秒会把竖流裁掉大半）。!important 必须：真 TRTC 给 video
+   打内联 object-fit:cover，不带 important 压不住（2026-10-07 生产实测抓到，桩测不出） */
 .dh-stage-video { position: absolute; inset: 0; background: #000; }
-.dh-stage-video :deep(video) { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dh-stage-video :deep(video) { width: 100%; height: 100%; object-fit: contain !important; display: block; }
 .dh-stage-resume { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   border: none; background: rgba(236,100,150,.92); color: #fff; border-radius: 999px; padding: 9px 20px;
   font-size: 13.5px; cursor: pointer; box-shadow: 0 4px 18px rgba(0,0,0,.45); }

@@ -17,7 +17,10 @@ export function useDhLive({ viewId, getPersona }) {
   let ws = null, rtc = null;
   const resumes = new Set();
   let closingByUser = false, deltaBuf = '', deltaTimer = 0, respondTimer = 0, pendingRespond = false;
-  const live = reactive({ on: false, busy: false, sessionId: '', status: '', err: '', needResume: false, micOn: false });
+  let dimTimer = 0;
+  // vw/vh=直播流的真实宽高（首帧后从 TRTC 塞进来的 video 元素量出）——舞台盒用它等比呈现，
+  // 不再按人设 aspect 硬套（v1.12.2：竖流在 16:9 盒子里被 cover 裁成只剩中间条）
+  const live = reactive({ on: false, busy: false, sessionId: '', status: '', err: '', needResume: false, micOn: false, vw: 0, vh: 0 });
   const liveText = ref('');
   const liveItems = ref([]); // 本次会话内的即时气泡（{role,text}；正式记录以 dh_history 为准）
 
@@ -48,6 +51,30 @@ export function useDhLive({ viewId, getPersona }) {
 
   function wsSend(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
+  // 2026-10-07 生产定案：Vivix 报 505001/AUDIO_PREPARE_UPSTREAM_ERROR 是**输出侧 TTS 上游失败**
+  // （纯文字回复同样复现，与麦克风无关；当时是音色 longwanxiao_v3.6 上游损坏）。映射成人话指路，
+  // 别让用户误以为是麦克风/网络问题。
+  function friendlyErr(e) {
+    const msg = String((e && (e.message || e)) || '控制通道收到错误事件');
+    const code = e && e.code ? String(e.code) : '';
+    if (/AUDIO_PREPARE_UPSTREAM_ERROR|505001/.test(msg + ' ' + code)) {
+      return `语音合成上游失败（${code || 'TTS'}）——多半是当前音色在 Vivix 侧故障或额度不足，到「设置 → 基本信息」换个音色再开实时对话；未开实时时的文字试聊不受影响`;
+    }
+    return msg;
+  }
+
+  // 首帧后量流的真实宽高（TRTC 把 <video> 塞进 view 容器；loadedmetadata 前 videoWidth=0）
+  function watchStreamSize() {
+    clearInterval(dimTimer);
+    let tries = 0;
+    dimTimer = setInterval(() => {
+      tries++;
+      const v = document.getElementById(viewId) && document.getElementById(viewId).querySelector('video');
+      if (v && v.videoWidth > 0) { live.vw = v.videoWidth; live.vh = v.videoHeight; clearInterval(dimTimer); }
+      else if (tries > 80 || !live.on) clearInterval(dimTimer); // ~48 秒还没首帧就放弃（保持人设比例）
+    }, 600);
+  }
+
   function onControlEvent(ev) {
     let d; try { d = JSON.parse(ev.data); } catch { return; }
     const t = d.type || '';
@@ -68,7 +95,7 @@ export function useDhLive({ viewId, getPersona }) {
       live.err = closedReason(d.reason);
       cleanupLive();
     } else if (t === 'error') {
-      live.err = String((d.error && (d.error.message || d.error.code)) || '控制通道收到错误事件');
+      live.err = friendlyErr(d.error);
     }
   }
 
@@ -142,6 +169,7 @@ export function useDhLive({ viewId, getPersona }) {
       await joinRoom(s.trtc);
       live.on = true;
       live.status = '实时';
+      watchStreamSize();
     } catch (e) {
       live.err = e.message || '建立会话失败';
       live.status = '';
@@ -177,7 +205,8 @@ export function useDhLive({ viewId, getPersona }) {
     if (w) { w.onclose = w.onerror = w.onmessage = null; try { w.close(); } catch { /* 已断 */ } }
     const r = rtc; rtc = null;
     resumes.clear();
-    live.needResume = false; live.micOn = false; live.sessionId = '';
+    clearInterval(dimTimer);
+    live.needResume = false; live.micOn = false; live.sessionId = ''; live.vw = 0; live.vh = 0;
     closingByUser = false;
     if (r) r.exitRoom().catch(() => {}).finally(() => { try { r.destroy(); } catch { /* 已销毁 */ } });
   }
