@@ -9,6 +9,7 @@ export const dhState = reactive({
   loading: false,
   personas: [],       // 角色注册表（publicPersona DTO：api_key 已在服务端擦成 hasKey）
   phoneOpen: false,   // 右下角手机模型浮层
+  histVer: 0,         // 对话历史版本号：悬浮窗/聊天记录页/实时会话任一方发过消息就 +1，其余入口监听重拉，记录保持一致
 });
 
 // 当前默认数字人（无默认标记时取第一个）

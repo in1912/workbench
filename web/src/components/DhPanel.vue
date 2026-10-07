@@ -1,10 +1,11 @@
 <template>
-  <!-- 数字人面板（v1.12.0）：智能家居页第二个 tab。三个子页签：
-       ①数字人界面——当前默认数字人的画面（v1 首图占位，实时拉流待 API Key 接入）+ 一键切换默认人物
-       ②设置——角色注册表（类型/API/音色/备注）+ 人设引导构建 + 参考图上传与叠放预览 + 会话 JSON 预览/连通测试
-       ③历史对话——微信式聊天气泡（对方语音气泡样式已预留）+ 文字试聊（工作台已配置的 AI） -->
+  <!-- 数字人面板（v1.12.1）：智能家居页第二个 tab。三个子页签（每次进入一律从「数字人界面」开始）：
+       ①数字人界面——画面 + 实时对话（v1.12.1：服务端建 Vivix 会话，浏览器 WSS 控制 + TRTC 拉流，
+         Key 配好即亮「开始实时对话」；打字/开麦都能聊，记录落「聊天记录」）+ 一键切换默认人物
+       ②聊天记录——左：人物角色选择（头像+名称，同角色注册表样式）；右：大框聊天气泡窗口
+       ③设置——自上而下：叠放卡片固定预览 → 参考图上传管理 → 基本信息+API（含公网访问地址） → 人设引导构建 -->
   <div>
-    <!-- 子页签（不占外层 ?tab= 查询参数；localStorage 记忆，同 CcLightPanel 口径） -->
+    <!-- 子页签（不占外层 ?tab= 查询参数；v1.12.1 起不记忆上次子页签，进 tab 一律回到「数字人界面」） -->
     <div class="dh-subtabs">
       <button v-for="s in SUBS" :key="s.key" :class="{ active: sub === s.key }" @click="sub = s.key">{{ s.label }}</button>
     </div>
@@ -24,17 +25,26 @@
       <!-- ==================== ① 数字人界面 ==================== -->
       <template v-if="sub === 'main'">
         <div class="card dh-main-card">
-          <!-- 画面：比例=人设 aspect（16:9 横 / 9:16 竖 / 1:1），v1 用首图占位实时位 -->
+          <!-- 画面：比例=人设 aspect（16:9 横 / 9:16 竖 / 1:1）。实时开启后 TRTC 在 #dh-live-view 里渲染视频，首图退为占位 -->
           <div class="dh-stage" :style="{ aspectRatio: aspectCss }">
-            <img v-if="frontImg" class="dh-stage-img" :src="imgSrc(frontImg)" alt="" draggable="false" />
-            <div v-else class="dh-stage-empty">当前数字人还没有参考图，去「设置」上传一张（建议胸像~腰像、面朝镜头、手全入画）</div>
-            <div class="dh-stage-live"><i></i>实时画面 · 待接入（设置页完成 API Key 连通测试后开启）</div>
-            <div v-if="cur" class="dh-stage-caption">
+            <img v-if="frontImg && !live.on" class="dh-stage-img" :src="imgSrc(frontImg)" alt="" draggable="false" />
+            <div v-if="!frontImg && !live.on" class="dh-stage-empty">当前数字人还没有参考图，去「设置」上传一张（建议胸像~腰像、面朝镜头、手全入画）</div>
+            <!-- 实时画面容器（常驻 DOM，TRTC 往里塞 video；v-show 控制） -->
+            <div v-show="live.on" class="dh-stage-video" id="dh-live-view"></div>
+            <!-- 角标三态：未配 Key=待接入 · 配了未开=可开始 · 开启=实时中 -->
+            <div v-if="!live.on" class="dh-stage-live" :class="{ ready: cur && cur.hasKey }">
+              <i></i>{{ cur && cur.hasKey ? '实时画面 · 未开启' : '实时画面 · 待接入（设置页完成 API Key 连通测试后开启）' }}
+            </div>
+            <div v-else class="dh-stage-live onair"><i></i>实时{{ live.status && live.status !== '实时' ? ' · ' + live.status : '' }}</div>
+            <!-- 浏览器自动播放策略拦截时一键恢复（TRTC AUTOPLAY_FAILED 的 resume 回调） -->
+            <button v-if="live.needResume" class="dh-stage-resume" @click="resumePlay">▶ 点击开启画面与声音</button>
+            <div v-if="cur && !live.on" class="dh-stage-caption">
               <b>{{ cur.name }}</b>：{{ cur.persona.opening }}
             </div>
           </div>
+          <div v-if="live.err" class="dh-live-err">⚠ {{ live.err }}</div>
 
-          <!-- 摘要 + 悬浮窗入口 -->
+          <!-- 摘要 + 实时会话开关 -->
           <div class="dh-main-info" v-if="cur">
             <div class="dh-chips">
               <span class="dh-chip">{{ cur.type }}</span>
@@ -44,9 +54,31 @@
             </div>
             <p class="dh-main-line">{{ cur.persona.personaLine }}<template v-if="cur.persona.callUser"> · 称呼你「{{ cur.persona.callUser }}」</template></p>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <button class="btn" @click="openPhone"><span class="material-icons" style="font-size:14px;vertical-align:-2px">smartphone</span> 悬浮窗对话</button>
-              <button class="btn ghost" @click="sub = 'chat'">历史对话</button>
+              <button v-if="!live.on" class="btn" :disabled="!cur.hasKey || live.busy"
+                :title="cur.hasKey ? '' : '先在「设置 → API 接入」配置 Vivix API Key 并保存'" @click="startLive">
+                {{ live.busy ? '正在建立…' : '▶ 开始实时对话' }}
+              </button>
+              <template v-else>
+                <button class="btn danger ghost" :disabled="live.busy" @click="stopLive">{{ live.busy ? '正在结束…' : '■ 结束对话' }}</button>
+                <button class="btn ghost" @click="toggleMic">{{ live.micOn ? '🎤 关麦' : '🎤 开麦说话' }}</button>
+              </template>
+              <button class="btn ghost" @click="openPhone"><span class="material-icons" style="font-size:14px;vertical-align:-2px">smartphone</span> 悬浮窗</button>
+              <button class="btn ghost" @click="sub = 'chat'">聊天记录</button>
             </div>
+          </div>
+        </div>
+
+        <!-- 实时对话文字通道（语音对方直接说出来；文字双方都落「聊天记录」） -->
+        <div v-if="live.on" class="card dh-live-chat">
+          <div class="dh-live-log" ref="liveLogEl">
+            <div v-if="!liveItems.length" class="dh-live-empty">实时对话已开始，对方会先开口说开场白。打字或点「开麦」都能聊；这里的每一句都会存进「聊天记录」。</div>
+            <div v-for="(m, i) in liveItems" :key="i" class="dh-lrow" :class="m.role">
+              <div class="dh-lbubble">{{ m.text }}</div>
+            </div>
+          </div>
+          <div class="dh-live-input">
+            <input v-model="liveText" placeholder="打字对 TA 说…（回车发送，对方会开口念出来）" @keyup.enter="sendLive" />
+            <button class="btn" :disabled="!liveText.trim()" @click="sendLive">发送</button>
           </div>
         </div>
 
@@ -86,8 +118,41 @@
             </div>
           </div>
 
-          <!-- 右：编辑器 -->
+          <!-- 右：编辑器（v1.12.1 自上而下：叠放卡片 → 参考图 → 基本信息 → 人设引导设置框） -->
           <div class="dh-editor" v-if="form">
+            <!-- ① 固定预览：叠放卡片（最上面）+ 参考图上传与管理 -->
+            <div class="card">
+              <h3 class="dh-sec">固定预览（叠放卡片）</h3>
+              <DhCardDeck :images="form.images" height="300px" />
+
+              <div class="dh-reg-head" style="margin-top:16px">
+                <h3 style="margin:0;font-size:15px">参考图（首图定格外观，最多 {{ meta.max_images }} 张）</h3>
+                <div style="display:flex;gap:8px">
+                  <label class="btn sm" :class="{ dis: uploading }">
+                    {{ uploading ? '上传中…' : '＋ 上传' }}<input type="file" accept="image/png,image/jpeg,image/webp" hidden :disabled="uploading" @change="uploadImg" />
+                  </label>
+                </div>
+              </div>
+              <p class="dh-img-tip">官方规则：≥512×512、PNG/JPG/WEBP、单张 ≤10MB；推荐<b>胸像~腰像</b>、面朝镜头、<b>手全入画</b>、光线柔和背景简洁——服装/背景/构图全部定格在首图，运行时改不了。建会话取前 5 张，第一张=首图（开场白载体）。</p>
+
+              <div v-if="form.images.length" class="dh-img-list">
+                <div v-for="(im, i) in form.images" :key="im.id" class="dh-img-row">
+                  <img :src="imgSrc(im)" alt="" loading="lazy" />
+                  <div class="dh-img-meta">
+                    <b>{{ i === 0 ? '首图 · ' : '' }}{{ im.orig_name }}<small>{{ (im.size / 1024).toFixed(0) }} KB</small></b>
+                    <input v-model="im.description" placeholder="构图/姿势/服装/场景描述（帮模型理解可动范围）" @change="saveImgMeta(im)" />
+                  </div>
+                  <div class="dh-img-ops">
+                    <button class="btn sm ghost" :disabled="i === 0" title="前移（越小越靠前）" @click="moveImg(i, -1)">↑</button>
+                    <button class="btn sm ghost" :disabled="i === form.images.length - 1" title="后移" @click="moveImg(i, 1)">↓</button>
+                    <button class="btn sm danger ghost" @click="removeImg(im)">删</button>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="dh-img-empty">还没有参考图</div>
+            </div>
+
+            <!-- ② 基本信息 + API 接入 -->
             <div class="card">
               <h3 class="dh-sec">基本信息</h3>
               <div class="dh-grid2">
@@ -116,6 +181,10 @@
                   </select>
                 </div>
               </div>
+              <div class="dh-field"><label>公网访问地址<span class="dh-hint">（Vivix 从公网取参考图用，实时对话必填）</span></label>
+                <input v-model="form.public_base" placeholder="https://cc.in1912.cc（工作台的公网域名，须 https）" />
+              </div>
+              <p class="dh-img-tip" style="margin:-4px 0 10px">Vivix 服务器建会话时要<b>自己下载参考图</b>（不支持 base64）：这里填工作台的公网 HTTPS 地址（内网 IP 它取不到）。没填的话「开始实时对话」会明确提示。</p>
               <div class="dh-actions">
                 <button class="btn sm" :disabled="testing" @click="testKey">{{ testing ? '测试中…' : '连通测试' }}</button>
                 <button v-if="form.hasKey" class="btn sm ghost" :disabled="testing" @click="clearKey">清除已存 Key</button>
@@ -125,7 +194,10 @@
                   <template v-else-if="testResult.ok"> · ⚠ {{ form.model }} 不在可用列表</template>
                 </span>
               </div>
+            </div>
 
+            <!-- ③ 人设引导构建（设置框） -->
+            <div class="card">
               <h3 class="dh-sec">人设引导构建</h3>
               <div class="dh-field"><label>人设一句话</label><input v-model="form.persona.personaLine" placeholder="20 岁女友，性格温柔爱撒娇" /></div>
               <div class="dh-grid2">
@@ -174,79 +246,64 @@
                 <button class="btn ghost" @click="showPreview">会话 JSON 预览</button>
               </div>
             </div>
-
-            <!-- 参考图：上传 + 管理 + 叠放固定预览 -->
-            <div class="card">
-              <div class="dh-reg-head">
-                <h3 style="margin:0;font-size:15px">参考图（首图定格外观，最多 {{ meta.max_images }} 张）</h3>
-                <div style="display:flex;gap:8px">
-                  <label class="btn sm" :class="{ dis: uploading }">
-                    {{ uploading ? '上传中…' : '＋ 上传' }}<input type="file" accept="image/png,image/jpeg,image/webp" hidden :disabled="uploading" @change="uploadImg" />
-                  </label>
-                </div>
-              </div>
-              <p class="dh-img-tip">官方规则：≥512×512、PNG/JPG/WEBP、单张 ≤10MB；推荐<b>胸像~腰像</b>、面朝镜头、<b>手全入画</b>、光线柔和背景简洁——服装/背景/构图全部定格在首图，运行时改不了。建会话取前 5 张，第一张=首图（开场白载体）。</p>
-
-              <div v-if="form.images.length" class="dh-img-list">
-                <div v-for="(im, i) in form.images" :key="im.id" class="dh-img-row">
-                  <img :src="imgSrc(im)" alt="" loading="lazy" />
-                  <div class="dh-img-meta">
-                    <b>{{ i === 0 ? '首图 · ' : '' }}{{ im.orig_name }}<small>{{ (im.size / 1024).toFixed(0) }} KB</small></b>
-                    <input v-model="im.description" placeholder="构图/姿势/服装/场景描述（帮模型理解可动范围）" @change="saveImgMeta(im)" />
-                  </div>
-                  <div class="dh-img-ops">
-                    <button class="btn sm ghost" :disabled="i === 0" title="前移（越小越靠前）" @click="moveImg(i, -1)">↑</button>
-                    <button class="btn sm ghost" :disabled="i === form.images.length - 1" title="后移" @click="moveImg(i, 1)">↓</button>
-                    <button class="btn sm danger ghost" @click="removeImg(im)">删</button>
-                  </div>
-                </div>
-              </div>
-              <div v-else class="dh-img-empty">还没有参考图</div>
-
-              <!-- 固定预览页：卡片叠放（点左后退 / 点右前进） -->
-              <h3 class="dh-sec" style="margin-top:16px">固定预览（叠放卡片）</h3>
-              <DhCardDeck :images="form.images" height="300px" />
-            </div>
           </div>
           <div v-else class="card dh-editor" style="color:var(--muted);text-align:center;padding:40px">选择左侧角色，或点「新建」</div>
         </div>
       </template>
 
-      <!-- ==================== ③ 历史对话 ==================== -->
+      <!-- ==================== ② 聊天记录（左：人物角色选择 · 右：大框聊天气泡窗口） ==================== -->
       <template v-else-if="sub === 'chat'">
-        <div class="card dh-chat-card">
-          <div class="dh-chat-head">
-            <select v-model="chatId" class="dh-chat-sel">
-              <option v-for="p in personas" :key="p.id" :value="p.id">{{ p.name }}（{{ p.type }}）</option>
-            </select>
-            <span class="muted" style="font-size:12px">{{ items.length }} 条</span>
-            <span style="flex:1"></span>
-            <button class="btn sm danger ghost" @click="clearHistory">清空记录</button>
-          </div>
-          <p class="dh-img-tip">气泡对话；接入实时会话后，对方的语音会存成语音气泡（微信样式）。<b>文字试聊</b>走工作台已配置的 AI，人设由上面「人设引导构建」组装。</p>
-
-          <div class="dh-chat" ref="chatEl">
-            <div v-if="!items.length" class="dh-chat-empty">还没有对话{{ chatPersona ? '，跟 ' + chatPersona.name + ' 说第一句吧' : '' }}</div>
-            <div v-for="m in items" :key="m.id" class="dh-crow" :class="m.role">
-              <template v-if="m.role === 'assistant'">
-                <img v-if="chatPersona && chatPersona.images.length" class="dh-cavatar" :src="imgSrc(chatPersona.images[0])" alt="" />
-                <div class="dh-cbubble" :class="{ voice: !!m.audio_file }" :title="m.audio_file ? '语音消息（播放待接入）' : ''">
-                  <template v-if="m.audio_file"><span class="dh-cwave"><i v-for="n in 9" :key="n"></i></span><span>{{ Math.ceil((m.text || '').length / 3) }}"</span></template>
-                  <template v-else>{{ m.text }}</template>
-                </div>
-                <small class="dh-ctime">{{ m.ts }}</small>
-              </template>
-              <template v-else>
-                <small class="dh-ctime">{{ m.ts }}</small>
-                <div class="dh-cbubble">{{ m.text }}</div>
-              </template>
+        <div class="dh-chat-layout">
+          <!-- 左：人物角色选择（头像 + 角色名称，同设置页角色注册表样式） -->
+          <div class="card dh-chat-side">
+            <div class="dh-reg-head">
+              <h3 style="margin:0;font-size:15px">人物角色</h3>
             </div>
-            <div v-if="sending" class="dh-crow assistant"><div class="dh-cbubble dh-typing">正在输入…</div></div>
+            <div v-for="p in personas" :key="p.id" class="dh-reg-item" :class="{ on: p.id === chatId }" @click="chatId = p.id">
+              <img v-if="p.images.length" :src="imgSrc(p.images[0])" alt="" />
+              <span v-else class="material-icons dh-persona-none">smart_toy</span>
+              <div class="dh-persona-name">
+                <b>{{ p.name }}<i v-if="p.is_default" class="dh-reg-def">默认</i></b>
+                <small>{{ p.type }}</small>
+              </div>
+            </div>
           </div>
 
-          <div class="dh-chat-input">
-            <input v-model="chatText" :disabled="!chatPersona || sending" placeholder="说点什么…（回车发送）" @keyup.enter="sendChat" />
-            <button class="btn" :disabled="!chatPersona || sending || !chatText.trim()" @click="sendChat">发送</button>
+          <!-- 右：大框聊天气泡窗口 -->
+          <div class="card dh-chat-main">
+            <div class="dh-chat-head">
+              <img v-if="chatPersona && chatPersona.images.length" class="dh-chat-havatar" :src="imgSrc(chatPersona.images[0])" alt="" />
+              <span v-else class="material-icons dh-persona-none" style="font-size:26px">smart_toy</span>
+              <b style="font-size:14px">{{ chatPersona ? chatPersona.name + ' · ' + chatPersona.type : '选择左侧人物' }}</b>
+              <span class="muted" style="font-size:12px">{{ items.length }} 条</span>
+              <span style="flex:1"></span>
+              <button class="btn sm danger ghost" @click="clearHistory">清空记录</button>
+            </div>
+            <p class="dh-img-tip">气泡对话；接入实时会话后，对方的语音会存成语音气泡（微信样式）。<b>文字试聊</b>走工作台已配置的 AI，人设由「设置 → 人设引导构建」组装。</p>
+
+            <div class="dh-chat" ref="chatEl">
+              <div v-if="!items.length" class="dh-chat-empty">还没有对话{{ chatPersona ? '，跟 ' + chatPersona.name + ' 说第一句吧' : '' }}</div>
+              <div v-for="m in items" :key="m.id" class="dh-crow" :class="m.role">
+                <template v-if="m.role === 'assistant'">
+                  <img v-if="chatPersona && chatPersona.images.length" class="dh-cavatar" :src="imgSrc(chatPersona.images[0])" alt="" />
+                  <div class="dh-cbubble" :class="{ voice: !!m.audio_file }" :title="m.audio_file ? '语音消息（播放待接入）' : ''">
+                    <template v-if="m.audio_file"><span class="dh-cwave"><i v-for="n in 9" :key="n"></i></span><span>{{ Math.ceil((m.text || '').length / 3) }}"</span></template>
+                    <template v-else>{{ m.text }}</template>
+                  </div>
+                  <small class="dh-ctime">{{ m.ts }}</small>
+                </template>
+                <template v-else>
+                  <small class="dh-ctime">{{ m.ts }}</small>
+                  <div class="dh-cbubble">{{ m.text }}</div>
+                </template>
+              </div>
+              <div v-if="sending" class="dh-crow assistant"><div class="dh-cbubble dh-typing">正在输入…</div></div>
+            </div>
+
+            <div class="dh-chat-input">
+              <input v-model="chatText" :disabled="!chatPersona || sending" placeholder="说点什么…（回车发送）" @keyup.enter="sendChat" />
+              <button class="btn" :disabled="!chatPersona || sending || !chatText.trim()" @click="sendChat">发送</button>
+            </div>
           </div>
         </div>
       </template>
@@ -263,7 +320,7 @@
         </div>
         <div class="dh-modal-body">
           <p class="dh-img-tip">真实建会话时 POST 到 <code>{{ form ? form.api_base : '' }}/v1/realtime-avatar/sessions</code> 的载荷（服务端同一函数组装）。
-          参考图 URL 需替换为<b>公网可达 HTTPS 直链</b>（Vivix 服务端来取图，不支持 base64）。</p>
+          参考图 URL 在「公网访问地址」配置后由服务端自动替换为<b>公网直链 + 短时签名令牌</b>（本预览仍显示占位域名；Vivix 不支持 base64）。</p>
           <pre>{{ preview.json }}</pre>
         </div>
       </div>
@@ -272,18 +329,20 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { api, rawUrl } from '../api';
 import { dhState, dhRefresh } from '../dhState';
+import { useDhLive } from '../dhLive';
 import DhCardDeck from './DhCardDeck.vue';
 
 const SUBS = [
   { key: 'main', label: '数字人界面' },
+  { key: 'chat', label: '聊天记录' },
   { key: 'settings', label: '设置' },
-  { key: 'chat', label: '历史对话' },
 ];
-const sub = ref(localStorage.getItem('wb_dh_sub') || 'main');
-watch(sub, (v) => { try { localStorage.setItem('wb_dh_sub', v); } catch { /* 隐私模式 */ } });
+// v1.12.1：进数字人 tab 一律从「数字人界面」开始。此前用 localStorage 记忆上次子页签——
+// 上次停留在「设置」的话，之后每次进来都落在设置页；不再记忆，组件随页签切换重挂载天然归位。
+const sub = ref('main');
 
 // ---------- meta + 注册表 ----------
 const meta = ref({ voices: [], types: ['男友', '女友', '宠物'], aspects: ['9:16', '16:9', '1:1'], resolutions: ['480p', '720p'], max_images: 8 });
@@ -348,6 +407,7 @@ async function save() {
     const body = {
       name: form.value.name, type: form.value.type,
       api_base: form.value.api_base, model: form.value.model, voice_id: form.value.voice_id,
+      public_base: form.value.public_base,
       remark: form.value.remark, note: form.value.note, persona: form.value.persona,
     };
     if (newKey.value.trim()) body.api_key = newKey.value.trim();
@@ -459,6 +519,10 @@ const chatEl = ref(null);
 const chatPersona = computed(() => personas.value.find((p) => p.id === chatId.value) || null);
 
 watch(chatId, loadHistory);
+// 切到「聊天记录」页签时重拉历史（悬浮窗/上次会话可能已经写进库）；
+// 悬浮窗那边发过消息（histVer 变化）也重拉——两处入口共用一张 dh_history 表，必须保持一致
+watch(sub, (v) => { if (v === 'chat') loadHistory(); });
+watch(() => dhState.histVer, () => { if (sub.value === 'chat') loadHistory(); });
 async function loadHistory() {
   if (!chatId.value) return;
   try {
@@ -478,6 +542,7 @@ async function sendChat() {
     const r = await api.post('/dh/chat', { persona_id: chatId.value, text: t });
     if (r.user) items.value.push(r.user);
     if (r.assistant) items.value.push(r.assistant);
+    dhState.histVer++; // 通知悬浮窗等其他入口重拉历史
   } catch (e) {
     items.value.push({ id: 'e' + Date.now(), role: 'assistant', text: '（' + e.message + '）' });
   } finally {
@@ -496,6 +561,14 @@ async function clearHistory() {
 function scrollBottom() {
   nextTick(() => { if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight; });
 }
+
+// ---------- 实时对话（v1.12.1）：逻辑收在 dhLive composable（与 DhPhone 悬浮窗共用同一链路） ----------
+const { live, liveItems, liveText, startLive, stopLive, sendLive, resumePlay, toggleMic } = useDhLive({
+  viewId: 'dh-live-view',            // TRTC 渲染容器（模板里 #dh-live-view）
+  getPersona: () => cur.value,
+});
+// 切走页签/关掉组件：显式关服务端会话（烧额度的会话不挂机；断连 90 秒 auto_close 兜底）
+onBeforeUnmount(() => { stopLive(); });
 
 function openPhone() {
   dhState.phoneOpen = true;
@@ -523,7 +596,34 @@ onMounted(async () => {
 .dh-stage-live { position: absolute; left: 10px; top: 10px; font-size: 11px; color: #fff; background: rgba(0,0,0,.5);
   border-radius: 8px; padding: 3px 9px; }
 .dh-stage-live i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #ec6496; margin-right: 5px; animation: dhPulse 1.6s infinite; }
+.dh-stage-live.ready { background: rgba(30,158,104,.78); }   /* Key 已配：可开始 */
+.dh-stage-live.onair { background: rgba(30,158,104,.9); }    /* 实时中 */
+.dh-stage-live.onair i { background: #fff; }
 @keyframes dhPulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* 实时画面（v1.12.1）：TRTC 渲染容器铺满画面区；自动播放恢复按钮居中 */
+.dh-stage-video { position: absolute; inset: 0; background: #000; }
+.dh-stage-video :deep(video) { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dh-stage-resume { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  border: none; background: rgba(236,100,150,.92); color: #fff; border-radius: 999px; padding: 9px 20px;
+  font-size: 13.5px; cursor: pointer; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
+.dh-stage-resume:hover { background: rgba(236,100,150,1); }
+.dh-live-err { margin: 10px 0 0; padding: 8px 12px; border-radius: 9px; background: rgba(224,108,117,.13);
+  color: #e06c75; font-size: 12.5px; line-height: 1.65; }
+
+/* 实时对话文字通道 */
+.dh-live-chat { padding: 12px 14px; }
+.dh-live-log { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+.dh-live-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 12px; line-height: 1.8; }
+.dh-lrow { display: flex; }
+.dh-lrow.user { justify-content: flex-end; }
+.dh-lbubble { max-width: 76%; padding: 7px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.55;
+  word-break: break-word; white-space: pre-wrap; background: rgba(128,128,128,.16); border-top-left-radius: 4px; }
+.dh-lrow.user .dh-lbubble { background: rgba(79,124,247,.85); color: #fff; border-top-left-radius: 12px; border-top-right-radius: 4px; }
+.dh-live-input { display: flex; gap: 9px; padding-top: 10px; margin-top: 8px; border-top: 1px solid var(--border, rgba(128,128,128,.2)); }
+.dh-live-input input { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 9px; font-size: 13.5px;
+  border: 1px solid var(--border, rgba(128,128,128,.35)); background: transparent; color: var(--text); outline: none; }
+.dh-live-input input:focus { border-color: rgba(236,100,150,.6); }
 .dh-stage-caption { position: absolute; left: 12px; bottom: 10px; right: 12px; color: #fff; font-size: 13.5px;
   background: rgba(0,0,0,.45); border-radius: 10px; padding: 6px 12px; backdrop-filter: blur(4px); }
 .dh-main-info { padding: 12px 4px 2px; }
@@ -592,12 +692,13 @@ onMounted(async () => {
 .dh-img-ops { display: flex; gap: 5px; flex-shrink: 0; }
 .dh-img-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 18px; }
 
-/* ③ 历史对话 */
-.dh-chat-card { padding: 14px; }
+/* ② 聊天记录：左选人 + 右大聊天窗 */
+.dh-chat-layout { display: flex; gap: 12px; align-items: stretch; }
+.dh-chat-side { width: 230px; flex-shrink: 0; padding: 12px; }
+.dh-chat-main { flex: 1; min-width: 0; padding: 14px; display: flex; flex-direction: column; }
+.dh-chat-havatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .dh-chat-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.dh-chat-sel { padding: 5px 9px; border-radius: 8px; border: 1px solid var(--border, rgba(128,128,128,.35));
-  background: transparent; color: var(--text); font-size: 13px; }
-.dh-chat { height: 440px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px 4px;
+.dh-chat { flex: 1; min-height: 440px; max-height: 640px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px 4px;
   border-top: 1px solid var(--border, rgba(128,128,128,.2)); border-bottom: 1px solid var(--border, rgba(128,128,128,.2)); }
 .dh-chat-empty { margin: auto; color: var(--muted); font-size: 13px; }
 .dh-crow { display: flex; align-items: flex-end; gap: 7px; }
@@ -630,10 +731,12 @@ onMounted(async () => {
   line-height: 1.6; overflow: auto; font-family: ui-monospace, Consolas, monospace; margin: 8px 0 0; }
 .sh-close { border: none; background: transparent; font-size: 16px; cursor: pointer; color: var(--muted); padding: 4px 8px; }
 
-/* 窄屏：注册表与编辑器上下排 */
+/* 窄屏：注册表与编辑器、聊天左右栏上下排 */
 @media (max-width: 860px) {
   .dh-settings { flex-direction: column; }
   .dh-reg { width: 100%; }
+  .dh-chat-layout { flex-direction: column; }
+  .dh-chat-side { width: 100%; }
   .dh-grid2 { grid-template-columns: 1fr; }
 }
 </style>

@@ -1,6 +1,6 @@
 {
   "name": "personal-workbench",
-  "version": "1.12.0",
+  "version": "1.12.1",
   "private": true,
   "description": "鑷墭绠′釜浜哄伐浣滃彴锛氫俊鎭仛鍚堛€佷换鍔°€佸搴€佸涔犮€丄I",
   "main": "server/index.js",

@@ -39,6 +39,9 @@ function personaBody(b) {
     api_base: String(o.api_base || '').trim().slice(0, 200) || 'https://api.vivix.ai',
     model: String(o.model || '').trim().slice(0, 80) || 'vivix-a1-stream',
     voice_id: String(o.voice_id || '').trim().slice(0, 60) || 'longanhuan_v3.6',
+    // 公网访问地址（v1.12.1）：https:// 开头、去尾斜杠；格式硬校验放 createSession（存时宽松，
+    // 建会话时给出明确报错指路），这里只做基础规整
+    public_base: String(o.public_base || '').trim().replace(/\/+$/, '').slice(0, 200),
     remark: String(o.remark || '').slice(0, 200),
     note: String(o.note || '').slice(0, 4000),
     persona: JSON.stringify(dh.sanitizePersona(o.persona)),
@@ -63,9 +66,9 @@ router.get('/dh/meta', (req, res) => {
 router.post('/dh/personas', (req, res) => {
   const tdb = req.tdb;
   const f = personaBody(req.body);
-  const r = tdb.prepare(`INSERT INTO dh_personas(name,type,api_base,api_key,model,voice_id,remark,note,persona)
-    VALUES(?,?,?,?,?,?,?,?,?)`).run(f.name, f.type, f.api_base, String(req.body.api_key || '').trim().slice(0, 200),
-    f.model, f.voice_id, f.remark, f.note, f.persona);
+  const r = tdb.prepare(`INSERT INTO dh_personas(name,type,api_base,api_key,model,voice_id,public_base,remark,note,persona)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(f.name, f.type, f.api_base, String(req.body.api_key || '').trim().slice(0, 200),
+    f.model, f.voice_id, f.public_base, f.remark, f.note, f.persona);
   dh.ensureDefault(tdb);
   res.json({ ok: true, id: Number(r.lastInsertRowid) });
 });
@@ -77,13 +80,13 @@ router.put('/dh/personas/:id', (req, res) => {
   const f = personaBody(req.body);
   // api_key：前端只在「填了新值」或「点了清除」时才带该字段（'', 清除）
   if (typeof req.body.api_key === 'string') {
-    tdb.prepare(`UPDATE dh_personas SET name=?,type=?,api_base=?,api_key=?,model=?,voice_id=?,remark=?,note=?,persona=?,
+    tdb.prepare(`UPDATE dh_personas SET name=?,type=?,api_base=?,api_key=?,model=?,voice_id=?,public_base=?,remark=?,note=?,persona=?,
       updated_at=datetime('now','localtime') WHERE id=?`)
-      .run(f.name, f.type, f.api_base, req.body.api_key.trim().slice(0, 200), f.model, f.voice_id, f.remark, f.note, f.persona, p.id);
+      .run(f.name, f.type, f.api_base, req.body.api_key.trim().slice(0, 200), f.model, f.voice_id, f.public_base, f.remark, f.note, f.persona, p.id);
   } else {
-    tdb.prepare(`UPDATE dh_personas SET name=?,type=?,api_base=?,model=?,voice_id=?,remark=?,note=?,persona=?,
+    tdb.prepare(`UPDATE dh_personas SET name=?,type=?,api_base=?,model=?,voice_id=?,public_base=?,remark=?,note=?,persona=?,
       updated_at=datetime('now','localtime') WHERE id=?`)
-      .run(f.name, f.type, f.api_base, f.model, f.voice_id, f.remark, f.note, f.persona, p.id);
+      .run(f.name, f.type, f.api_base, f.model, f.voice_id, f.public_base, f.remark, f.note, f.persona, p.id);
   }
   res.json({ ok: true });
 });
@@ -209,6 +212,48 @@ router.post('/dh/personas/:id/test', async (req, res) => {
   const p = getPersona(req.tdb, req.params.id);
   if (!p) return res.status(404).json({ error: '数字人不存在' });
   try { res.json(await dh.testKey(p)); } catch (e) { res.json({ ok: false, error: e.message }); }
+});
+
+// ---------- 实时会话（v1.12.1）：建会话（API Key 只在服务端；浏览器只拿拉流凭证） ----------
+router.post('/dh/personas/:id/session', async (req, res) => {
+  const tdb = req.tdb;
+  const p = getPersona(tdb, req.params.id);
+  if (!p) return res.status(404).json({ error: '数字人不存在' });
+  try {
+    const s = await dh.createSession(tdb, p);
+    // 建会话的完整载荷（人设/参考图 URL）不出服务端；浏览器拿到的只有连接凭证
+    res.json({
+      ok: true,
+      session_id: s.session_id,
+      control: { url: s.control.url, client_secret: s.control.client_secret },
+      trtc: (s.delivery && s.delivery.media && s.delivery.media.trtc) || null,
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || '建会话失败' });
+  }
+});
+
+// 结束实时会话（status 期望 closing/closed；失败时前端提示重试，auto_close 90 秒兜底）
+router.post('/dh/personas/:id/session/close', async (req, res) => {
+  const tdb = req.tdb;
+  const p = getPersona(tdb, req.params.id);
+  if (!p) return res.status(404).json({ error: '数字人不存在' });
+  const sid = String(req.body.session_id || '').trim();
+  if (!sid) return res.status(400).json({ error: '缺少 session_id' });
+  try { res.json({ ok: true, status: await dh.closeSession(tdb, p, sid) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message || '关闭失败' }); }
+});
+
+// 实时会话落历史：live 会话里的用户文字与对方回复写进同一张 dh_history，
+// 「聊天记录」页与右下角悬浮窗共用这张表（前端写完 bump histVer 互相通知重拉）
+router.post('/dh/history', (req, res) => {
+  const tdb = req.tdb;
+  const pid = int(req.body.persona_id, -1);
+  if (!getPersona(tdb, pid)) return res.status(404).json({ error: '数字人不存在' });
+  const text = String(req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: '空内容' });
+  const role = req.body.role === 'assistant' ? 'assistant' : 'user';
+  res.json({ ok: true, item: dh.addHistory(tdb, pid, role, text) });
 });
 
 module.exports = router;

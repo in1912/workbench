@@ -11,9 +11,19 @@
 // v1.12.0 范围说明：本版交付配置/参考图/人设引导/历史对话（含工作台内置 AI 的「文字试聊」，
 // 走 aiService.chatEx），实时视频拉流（TRTC/Agora SDK + WSS 控制通道）在 API Key 配好并
 // 验证连通后再接——/dh/personas/:id/test 的连通性测试就是那一步的前置检查。
+//
+// v1.12.1 实时会话接入（契约=docs.vivix.ai streaming-avatar，2026-10-07 抓读）：
+//   服务端 POST {api_base}/v1/realtime-avatar/sessions 建会话（API Key 只在服务端出现），
+//   回给浏览器的只有 session_id + control(url/client_secret) + delivery.media.trtc 凭证；
+//   浏览器 WSS 连 control.url?token=client_secret 发 JSON 事件、TRTC SDK 进房拉流。
+//   source_images 的 URL 必须公网 HTTPS 可下载：参考图走 public_base + 短时签名令牌
+//   （?it=，只绑这一张图、2 小时有效），index.js 的鉴权中间件单独放行这一条 GET。
+//   会话顶层带 auto_close{disconnected_timeout_seconds:90}：页面一关 90 秒后 Vivix 自动
+//   结束会话（官方 FAQ 口径），关闭端点校验 status ∈ {closing, closed}。
 const fs = require('fs');
 const path = require('path');
-const { getSetting, setSetting, tenantIdOf } = require('../db');
+const crypto = require('crypto');
+const { db: mainDb, getSetting, setSetting, tenantIdOf } = require('../db');
 const storagePaths = require('./storagePaths');
 const aiService = require('./aiService');
 
@@ -125,17 +135,48 @@ function buildVmps(name, pf) {
   return { speaking, listening };
 }
 
-// ---------- 会话配置组装（预览/复制用；真实建会话在接入实时拉流时用同一函数） ----------
-function buildSessionJson(tdb, p) {
+// ---------- 参考图公网签名令牌（v1.12.1）：Vivix 服务器建会话时要自己下载 source_images ----------
+// 它没有工作台登录态：URL 带 ?it=<uid>.<imgId>.<exp>.<hmac24>，密钥存主库 settings（一次生成），
+// 令牌只绑一张图、默认 2 小时有效——就算外泄也只是一张参考图的短时读权限。index.js 只对
+// GET /dh/images/:id/raw 且带 it= 的请求放行这一条（改/删图仍需登录）。
+function imgSecret() {
+  let s = getSetting(mainDb, 'dh_img_secret', '');
+  if (!s) {
+    s = crypto.randomBytes(32).toString('hex');
+    setSetting(mainDb, 'dh_img_secret', s);
+  }
+  return s;
+}
+function mintImageToken(uid, imgId, hours = 2) {
+  const exp = Date.now() + hours * 3600 * 1000;
+  const sig = crypto.createHmac('sha256', imgSecret()).update(`${uid}.${imgId}.${exp}`).digest('hex').slice(0, 24);
+  return `${uid}.${imgId}.${exp}.${sig}`;
+}
+function resolveImageToken(it, imgId) {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.([0-9a-f]{24})$/.exec(String(it || ''));
+  if (!m) return null;
+  const [, uidS, imgS, expS, sig] = m;
+  if (Number(imgS) !== Number(imgId) || Number(expS) < Date.now()) return null;
+  const calc = crypto.createHmac('sha256', imgSecret()).update(`${uidS}.${imgS}.${expS}`).digest('hex').slice(0, 24);
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(calc, 'hex'), Buffer.from(sig, 'hex'))) return null;
+  } catch { return null; }
+  return { uid: Number(uidS) };
+}
+
+// ---------- 会话配置组装（预览/复制用；真实建会话用同一函数 + opts.publicBase 出真 URL） ----------
+function buildSessionJson(tdb, p, opts = {}) {
   const pf = parsePersona(p);
   const images = tdb.prepare(
     'SELECT * FROM dh_images WHERE persona_id=? ORDER BY sort ASC, id ASC LIMIT 8'
   ).all(p.id);
   const { speaking, listening } = buildVmps(p.name, pf);
-  const mkUrl = (im) => `https://<你的公网域名>/api/dh/images/${im.id}/raw`;
+  const mkUrl = (im) => (opts.publicBase
+    ? `${opts.publicBase}/api/dh/images/${im.id}/raw?it=${encodeURIComponent(mintImageToken(opts.uid, im.id))}`
+    : `https://<你的公网域名>/api/dh/images/${im.id}/raw`);
   const sourceImages = images.slice(0, 5).map((im, i) => ({ // Vivix 限每角色 ≤5 张源图
     source_image_id: `img${im.id}`,
-    // ⚠️ Vivix 要求公网 HTTPS 可下载（不支持 base64）：接入实时会话时这里要换成公网可达直链
+    // ⚠️ Vivix 要求公网 HTTPS 可下载（不支持 base64）：预览给占位域名，真建会话必须先配 public_base
     url: mkUrl(im),
     media_type: im.mime || 'image/png',
     description: im.description || `${pf.shot}、面朝镜头、手在画内${pf.scene ? '，' + pf.scene : ''}`,
@@ -162,6 +203,8 @@ function buildSessionJson(tdb, p) {
     // 可打断（interrupt 默认开）；delivery 默认 trtc，max_duration_seconds 默认 1200（20 分钟）
     delivery: { media: { transport: 'trtc' } },
   };
+  // 真建会话：页面一关（控制连接全断 90 秒）Vivix 自动结束会话——额度兜底，官方 FAQ 口径
+  if (opts.publicBase) session.auto_close = { disconnected_timeout_seconds: 90 };
   return session;
 }
 
@@ -173,6 +216,7 @@ function publicPersona(tdb, p) {
   return {
     id: p.id, name: p.name, type: p.type,
     api_base: p.api_base, model: p.model, voice_id: p.voice_id,
+    public_base: p.public_base || '',
     hasKey: !!p.api_key,
     remark: p.remark, note: p.note,
     persona: parsePersona(p),
@@ -300,9 +344,83 @@ async function testKey(p) {
   }
 }
 
+// ---------- 实时会话（v1.12.1）：服务端建/关会话，API Key 只在服务端出现 ----------
+// 进程内登记每个数字人当前会话（同一角色重复点「开始」先补关旧会话，避免叠着烧额度）；
+// 进程重启丢登记也无碍——auto_close 90 秒兜底 + 浏览器端 session_id 仍可显式关。
+const liveSessions = new Map(); // `${uid}:${personaId}` → { session_id, ts }
+
+function httpErr(msg, status = 500) { return Object.assign(new Error(msg), { status }); }
+
+async function vivixApi(p, apiPath, body, timeoutMs = 30000) {
+  const base = String(p.api_base || '').replace(/\/+$/, '');
+  const res = await fetch(`${base}/v1/${apiPath}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${p.api_key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await res.json().catch(() => ({}));
+  // Vivix 错误信封 {code,message}（10001=key 缺失、10003=key 无效、10008=限流 60/min）
+  if (!res.ok || data.code !== 0) {
+    throw httpErr(String((data && (data.message || data.error)) || `HTTP ${res.status}`), 400);
+  }
+  return data.data;
+}
+
+function normalizePublicBase(s) {
+  return String(s || '').trim().replace(/\/+$/, '');
+}
+
+async function createSession(tdb, p) {
+  if (!p.api_key) throw httpErr('尚未配置 API Key——到「设置 → API 接入」填写并保存', 400);
+  const pb = normalizePublicBase(p.public_base);
+  if (pb && !/^https:\/\/[^/\s]+/i.test(pb)) {
+    throw httpErr('「公网访问地址」必须以 https:// 开头（Vivix 要求公网 HTTPS 直链，内网 IP 它取不到图）', 400);
+  }
+  const imgCount = tdb.prepare('SELECT COUNT(*) AS c FROM dh_images WHERE persona_id=?').get(p.id).c;
+  if (imgCount > 0 && !pb) {
+    throw httpErr('尚未配置「公网访问地址」——Vivix 服务器要从公网下载参考图（不支持 base64）。到「设置 → API 接入」填工作台的公网地址（如 https://cc.in1912.cc）再保存', 400);
+  }
+  const uid = tenantIdOf(tdb);
+  const key = `${uid}:${p.id}`;
+  const prev = liveSessions.get(key);
+  if (prev && prev.session_id) {
+    try { await closeVivixSession(p, prev.session_id, 8000); } catch { /* 关不掉让 auto_close 兜底 */ }
+  }
+  const session = buildSessionJson(tdb, p, { publicBase: pb, uid });
+  let data;
+  try {
+    data = await vivixApi(p, 'realtime-avatar/sessions', session);
+  } catch (e) {
+    if (e.name === 'TimeoutError') throw httpErr('建会话超时（Vivix 30 秒无响应）', 504);
+    throw e;
+  }
+  if (!data || !data.session_id || !data.control || !data.control.url || !data.control.client_secret) {
+    throw httpErr('Vivix 返回的会话数据不完整（缺 session_id / control）');
+  }
+  liveSessions.set(key, { session_id: data.session_id, ts: Date.now() });
+  return data;
+}
+
+async function closeVivixSession(p, sessionId, timeoutMs = 15000) {
+  const data = await vivixApi(p, `realtime-avatar/sessions/${encodeURIComponent(sessionId)}/close`, {}, timeoutMs);
+  const st = data && data.status;
+  if (!['closing', 'closed'].includes(st)) throw httpErr(`会话关闭异常（status=${st}）`);
+  return st;
+}
+async function closeSession(tdb, p, sessionId) {
+  if (!p.api_key) throw httpErr('尚未配置 API Key，无法向 Vivix 发关闭请求', 400);
+  const st = await closeVivixSession(p, sessionId);
+  const key = `${tenantIdOf(tdb)}:${p.id}`;
+  if (liveSessions.get(key) && liveSessions.get(key).session_id === sessionId) liveSessions.delete(key);
+  return st;
+}
+
 module.exports = {
   VOICES, TYPES, PERSONA_DEFAULTS, ASPECTS, RESOLUTIONS,
   sanitizePersona, parsePersona, buildInstructions, buildVmps, buildSessionJson,
+  mintImageToken, resolveImageToken,
   publicPersona, listPersonas, storeImage, nextSort, ensureDefault, seedIfNeeded,
   addHistory, recentHistory, chat, testKey,
+  createSession, closeSession,
 };

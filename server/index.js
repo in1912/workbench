@@ -26,6 +26,7 @@ const mihomeRoutes = require('./routes/mihomeRoutes');
 const ccLightRoutes = require('./routes/ccLightRoutes');
 const xiaozhiRoutes = require('./routes/xiaozhiRoutes');
 const dhRoutes = require('./routes/dhRoutes');
+const dhService = require('./services/dhService'); // 数字人参考图签名令牌校验（v1.12.1，鉴权中间件里用）
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
 const flashToolRoutes = require('./routes/flashToolRoutes');
@@ -97,6 +98,17 @@ const EXEMPT = ['/auth/login', '/auth/fnos-login', '/health', '/tile', '/map-sta
   '/pets/desktop', // 桌面宠物（key 即凭证：state/frame/action）
   '/share', '/note-intake']; // 笔记分享（token+4位码即凭证）/ 外部写入令牌（v1.9.39）。⚠️ 路由内一律 403/404，绝不 401
 app.use('/api', (req, res, next) => {
+  // 数字人参考图公网直取（v1.12.1）：Vivix 服务器建会话时要下载 source_images 的 URL，它没有
+  // 工作台登录态——URL 里带 dhService 签发的短时签名令牌（?it=，只绑这一张图、2 小时有效）。
+  // 只放行 GET /dh/images/:id/raw 且令牌合法这一条（令牌里的 uid 反查租户库注入 req.tdb）；
+  // 图片的改/删与其余 /dh/* 仍走下面的登录闸。伪造/过期令牌一律 403（同 /share 的口径）。
+  if (req.method === 'GET' && /^\/dh\/images\/\d+\/raw$/.test(req.path) && typeof req.query.it === 'string') {
+    const imgId = Number(req.path.split('/')[3]);
+    const hit = dhService.resolveImageToken(req.query.it, imgId);
+    if (!hit) return res.status(403).json({ error: '图片令牌无效或已过期' });
+    req.tdb = getTenantDb(hit.uid);
+    return next();
+  }
   if (EXEMPT.some((e) => req.path === e || req.path.startsWith(e + '/'))) return next();
   // 智能家居独立应用：无登录页，直接注入内置本地账号（管理员），所有 /api 一律放行。
   // 这是「全免登」的实现点——网关内与局域网直连端口走同一段代码，行为一致。

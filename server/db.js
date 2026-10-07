@@ -862,6 +862,7 @@ CREATE TABLE IF NOT EXISTS dh_personas (
   api_key TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT 'vivix-a1-stream',
   voice_id TEXT NOT NULL DEFAULT 'longanhuan_v3.6',
+  public_base TEXT NOT NULL DEFAULT '',          -- 工作台公网地址（Vivix 服务端从这里取参考图；空=未配置）
   remark TEXT NOT NULL DEFAULT '',               -- 备注信息（一句话）
   note TEXT NOT NULL DEFAULT '',                 -- 备注说明（长文本）
   persona TEXT NOT NULL DEFAULT '{}',            -- 人设引导构建的结构化字段 JSON
@@ -933,6 +934,9 @@ function applyColumnMigrations(d) {
   // 归档正文排版（v1.10.18）：老库补列后一律落到 'desc'（新消息在最上面），
   // 已经存在的笔记由 imService.normalizeImNotes 在启动时规整一次。
   addCol(d, 'im_connectors', 'note_order', "TEXT DEFAULT 'desc'");
+  // 数字人实时会话（v1.12.1）：public_base=工作台公网地址（如 https://cc.in1912.cc）——
+  // Vivix 服务器建会话时要自己下载参考图，URL 得是公网 HTTPS 直链（内网地址它取不到）
+  addCol(d, 'dh_personas', 'public_base', "TEXT NOT NULL DEFAULT ''");
   addCol(d, 'business_systems', 'username', "TEXT DEFAULT ''");
   addCol(d, 'business_systems', 'password', "TEXT DEFAULT ''");
   addCol(d, 'emails', 'body', "TEXT DEFAULT ''");
