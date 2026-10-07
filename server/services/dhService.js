@@ -202,6 +202,14 @@ function buildSessionJson(tdb, p, opts = {}) {
       motion_enhanced: { prompt: speaking },   // 说话时动作
       motion_planner: { prompt: listening },   // 倾听/待机时动作
     },
+    // 用户语音转文字（v1.12.5 需求①）：Vivix 这个开关默认关——不显式开，
+    // 控制通道只有 input_audio.speech_started/stopped（模型听得见、VAD 正常），
+    // 但 conversation.item.input_audio_transcription.* 一个都不下发（生产探针实证）。
+    // ASR 本来就在跑（模型要靠它听），开这个只是把结果推给客户端，不产生额外计费。
+    // language 用 auto（doubao 多语言，用户偶尔蹦英文也能转）。
+    conversation: {
+      input_audio_transcription: { enabled: true, language: 'auto' },
+    },
     // 可打断（interrupt 默认开）；delivery 默认 trtc，max_duration_seconds 默认 1200（20 分钟）
     delivery: { media: { transport: 'trtc' } },
   };
