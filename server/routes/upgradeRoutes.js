@@ -256,7 +256,10 @@ router.post('/upgrade/package', async (req, res) => {
 // ---------- 应用升级包：上传 zip → 安全校验 → 覆盖 server/ 与 web/dist/ → 自动重启 ----------
 // 用于 NAS/服务器端接收本地生成的升级包：Docker 的 restart: always 会在进程退出后
 // 自动拉起容器（可写层保留），新代码与新前端快照即生效；本地直跑则需手动重启。
-const applyUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+// 上限 100→256MB（v1.12.6）：server/fnos 的 fpk 随包含 dws/wecom linux 二进制后涨到 66MB，
+// 全量升级包 ~123MB，100MB 上限必拒（v1.9.39 的 103MB 打包事故是同类）；
+// 此路由要管理员登录，提额不扩大攻击面。
+const applyUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 256 * 1024 * 1024 } });
 
 // 应用端路径白名单：容器内只需要可运行部分（server 源码 + 前端构建产物 + tts/vibeasr 引擎文件 + zhizu 子服务）。
 // web/src、scripts、根文件等源码条目不落盘（容器内无构建环境，仅留档于包内）。
