@@ -11,6 +11,11 @@
       <span v-else-if="savedAt" class="saved">已保存 {{ savedAt }}</span>
       <div class="row" style="margin-left:auto; gap:6px">
         <button class="primary" :disabled="saving" @click="$emit('save')">{{ saving ? '保存中…' : '保存' }}</button>
+        <!-- v1.12.6（用户需求④）：保存按钮后面紧跟自动保存开关。关掉后只有手动保存 / Ctrl+S 落盘；
+             离开笔记页时「还有没保存的笔记」确认仍然兜底（NotesShell 的 onBeforeRouteLeave）。 -->
+        <button class="small autosave-btn" :class="{ off: !autosave }"
+                :title="autosave ? '自动保存已开启：改动停下 3 秒后自动保存。点击关闭' : '自动保存已关闭：改动不会自动保存，记得手动点保存或 Ctrl+S'"
+                @click="$emit('toggle-autosave')">{{ autosave ? '自动保存：开' : '自动保存：关' }}</button>
         <template v-if="note.id">
           <button class="small" @click="$emit('share')">🔗 分享</button>
           <button class="small" @click="$emit('manage')">分享 {{ shareStats.link_count }} 条 · 访问 {{ shareStats.view_total }} 次</button>
@@ -68,9 +73,11 @@ defineProps({
   saving: { type: Boolean, default: false },
   savedAt: { type: String, default: '' },
   shareStats: { type: Object, default: () => ({ link_count: 0, view_total: 0 }) },
+  // v1.12.6：自动保存开关（状态与存档都在外壳，头部只显示与转发）
+  autosave: { type: Boolean, default: true },
 });
 defineEmits(['save', 'delete', 'move', 'share', 'manage', 'download-md', 'download-html',
-  'open-record', 'insert-text', 'replace-text']);
+  'open-record', 'insert-text', 'replace-text', 'toggle-autosave']);
 
 const THIS_YEAR = String(new Date().getFullYear());
 
@@ -99,6 +106,8 @@ function fmtTime(s) {
    （完整名字在下拉里、以及悬停的 title 上都看得到） */
 .folder-pick { width: auto; flex: 0 1 auto; min-width: 88px; max-width: 130px; padding: 4px 8px; }
 .dirty { color: var(--amber); font-size: 11.5px; white-space: nowrap; }
+/* 自动保存关闭时用琥珀色提醒（开着时是普通小按钮）——关着忘了存是最容易踩的坑 */
+.autosave-btn.off { color: var(--amber); border-color: var(--amber); }
 .saved { color: var(--text3); font-size: 11.5px; white-space: nowrap; }
 .sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
 .nowrap { white-space: nowrap; }

@@ -57,6 +57,8 @@
         <template v-if="activeKind === 'note' && activeDoc">
           <NoteViewHeader :note="activeDoc.note" :folders="flatFolders" :dirty="!!activeTab?.dirty"
                           :saving="!!activeDoc.saving" :saved-at="activeDoc.savedAt" :share-stats="activeDoc.shareStats"
+                          :autosave="autoSave"
+                          @toggle-autosave="toggleAutosave"
                           @save="saveTab(activeKey)" @delete="delNote" @move="moveActive" @share="shareOpen = true"
                           @manage="manageOpen = true" @download-md="downloadNoteMd(activeDoc.note)"
                           @download-html="downloadNoteHtml(activeDoc.note, catLabel)"
@@ -438,13 +440,32 @@ async function onBacklinked(r) {
 
 // ---------- 保存 ----------
 let autoTimer = null;
-function scheduleAutosave(key) { clearTimeout(autoTimer); autoTimer = setTimeout(() => saveTab(key, true), 3000); }
+// v1.12.6（用户需求④）：自动保存可关（头部「保存」旁边的开关，存档在 localStorage）。
+// 关掉后只有手动保存 / Ctrl+S 落盘；离开笔记页时 onBeforeRouteLeave 的「还有没保存」确认仍兜底。
+const autoSave = ref(localStorage.getItem('notes.autosave') !== '0');
+function toggleAutosave() {
+  autoSave.value = !autoSave.value;
+  try { localStorage.setItem('notes.autosave', autoSave.value ? '1' : '0'); } catch { /* 忽略 */ }
+  clearTimeout(autoTimer); autoTimer = null;
+  // 刚重新打开自动保存：当前这篇若有未保存改动，立刻排一轮，别等下一次按键
+  const t = activeTab.value; const d = t && getDoc(t.key);
+  if (autoSave.value && t?.noteId && d
+    && (d.note.content !== d.base.content || d.note.title !== d.base.title
+      || JSON.stringify(d.note.props || {}) !== d.base.props)) scheduleAutosave(t.key);
+}
+function scheduleAutosave(key) {
+  if (!autoSave.value) return;
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => saveTab(key, true), 3000);
+}
 
 async function saveTab(key, silent = false) {
   const d = getDoc(key);
   const t = tabs.value.find((x) => x.key === key);
   if (!d || !t) return;
-  if (d.saving) return;
+  // 上一轮还在路上又到了下一轮（保存期间用户继续打字 + 网络慢）：排到 3 秒后重试，
+  // 否则这个 timer 白烧，期间的改动要等到下一次按键才会再触发保存
+  if (d.saving) { if (silent && t.noteId) scheduleAutosave(key); return; }
   d.saving = true;
   try {
     const body = {
@@ -455,14 +476,33 @@ async function saveTab(key, silent = false) {
     if (id) await api.put(`/notes/${id}`, body);
     else { const r = await api.post('/notes', body); id = Number(r.id); t.noteId = id; delete t.draft; }
     const full = await api.get(`/notes/${id}`);
-    const fresh = makeDoc(full);
-    fresh.mode = d.mode;
-    fresh.savedAt = new Date().toTimeString().slice(0, 8);
-    fresh.links = d.links;
-    fresh.shareStats = d.shareStats;
-    Object.assign(d, fresh);
-    t.title = full.title || '未命名';
-    setDirty(key, false);
+    // v1.12.6（用户报障②③）：**不再** Object.assign(d, makeDoc(full)) 整个换掉 d.note。
+    // 旧实现在 PUT+GET 两段网络延迟之后把 d.note 换成回包对象——保存期间用户又打/删的字
+    // 比回包新，NoteEditor 的 watch 一看 note 换了对象、内容却比编辑器 doc 旧，就走
+    // syncContent() 全量替换：删掉的整行「复活」（报障③）、光标被钳到旧文本长度上跳走（报障②）。
+    // 现在 d.note 对象身份不变、title/content/props 保持本地最新值，只就地更新服务端派生字段；
+    // 保存期间的新改动 local ≠ base → dirty 保持，下面排下一轮自动保存补上。
+    d.note.id = id;
+    if ((d.note.title || '') === (body.title || '')) d.note.title = full.title ?? d.note.title;
+    if ((d.note.content || '') === (body.content || '')) d.note.content = full.content ?? d.note.content;
+    if (JSON.stringify(d.note.props || {}) === JSON.stringify(body.props || {})) d.note.props = full.props ?? d.note.props;
+    if (full.word_count != null) d.note.word_count = full.word_count;
+    if (full.updated_at) d.note.updated_at = full.updated_at;
+    if (Array.isArray(full.tags)) d.note.tags = full.tags;
+    if (full.summary) { d.note.summary = full.summary; d.note.keywords = full.keywords; }
+    // 草稿首次保存（POST）后 note 对象缺的展示字段就地补上（旧实现靠 makeDoc(full) 自然带进）
+    if (full.created_at) d.note.created_at = full.created_at;
+    if (full.folder_path != null) d.note.folder_path = full.folder_path;
+    if (full.record_id != null) d.note.record_id = full.record_id;
+    if (full.daily_date) d.note.daily_date = full.daily_date;
+    // base = 服务端真身：保存期间有新改动的话 local ≠ base，dirty 重新点亮
+    d.base = { title: full.title || '', content: full.content || '', props: JSON.stringify(full.props || {}) };
+    d.savedAt = new Date().toTimeString().slice(0, 8);
+    t.title = d.note.title || full.title || '未命名';
+    const stillChanged = d.note.title !== d.base.title || d.note.content !== d.base.content
+      || JSON.stringify(d.note.props || {}) !== d.base.props;
+    setDirty(key, stillChanged);
+    if (stillChanged && t.noteId) scheduleAutosave(key);
     // 标题/标签变了，树、列表、双链索引、统计都得跟着变
     titleIndex.value.set(String(full.title || '').trim(), { id, title: full.title });
     loadSide(key, id);

@@ -110,6 +110,8 @@ function buildExtensions() {
   return [
     highlightSpecialChars(),
     history(),
+    // v1.12.6（用户需求①）：编辑默认自动换行。CM6 默认不折行，长段录入会顶出横向滚动条
+    EditorView.lineWrapping,
     drawSelection(),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
