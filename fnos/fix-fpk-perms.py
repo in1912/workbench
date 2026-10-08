@@ -16,7 +16,9 @@ try:
         dirs.append(dp)
         for f in sorted(fn):
             files.append(os.path.join(dp, f))
-    with tarfile.open(dst, 'w:gz') as out:
+    # fileobj 方式写 gzip：直传文件名时 GzipFile 会把目标路径写进 FNAME 头（FLG=8），
+    # fnpack 原版是 FLG=0——为对齐官方包形态（2026-10-08 排查 1.12.6 拒装时定案），改走 fileobj。
+    with open(dst, 'wb') as fobj, tarfile.open(fileobj=fobj, mode='w:gz', compresslevel=9) as out:
         for d in sorted(dirs):
             arc = os.path.relpath(d, tmp).replace('\\', '/')
             ti = tarfile.TarInfo(arc + '/' if arc else './')
