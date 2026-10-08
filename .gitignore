@@ -14,10 +14,15 @@ dist-sh/
 build/
 *.apk
 
-# ========== 交付物：fpk / 分发包（不入 git，clean 前先挪走）==========
-# 工作台的 fpk 例外（server/fnos/*.fpk 历来随 git 分发），JARVIS 这个按交付计划不入库：
-# 它 27MB、且能从 fnos-sh/ 一行命令重打；放进来只会喂大仓库（public）与推送 blob
-server/fnos-sh/*.fpk
+# ========== 交付物：fpk / zip 分发包（一律不入 git，clean 前先挪走）==========
+# 2026-10-08 起工作台自己的 fpk（server/fnos/*.fpk，66MB 级）也不再例外：
+# 它是构建产物（fnos/build-fpk.mjs + bsdtar 三步 + fix-fpk-perms 随时重打），
+# 升级包/最小包打包器扫的是工作区文件，不入库不影响打包；入库只会喂大仓库（public）
+# 与推送 blob（gitea 公网大 blob 必 413 的根源）。*.zip 同时挡根目录三端分发包
+# 被 git add -A 误扫。已入库的 server/vibe7b-repo.zip（<1MB）是刻意保留的例外
+# （gitignore 不影响已跟踪文件）。
+*.fpk
+*.zip
 
 # ========== Python ==========
 .venv/

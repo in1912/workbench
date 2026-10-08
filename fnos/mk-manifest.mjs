@@ -11,7 +11,9 @@ const src = fs.readFileSync(new URL('./manifest', import.meta.url), 'utf8');
 const kept = src.split(/\r?\n/).filter((l) => l.trim() !== '' && !/^checksum=/.test(l));
 const out = kept.map((l) => {
   const i = l.indexOf('=');
-  if (i < 0) throw new Error('manifest 行缺 =：' + l.slice(0, 40));
+  // 无 '=' 的行是上一个键的续行（changelog 越写越长后 v1.11.x 起出现），原样透传——
+  // 真 fnpack 对多行 value 也是这么处理的；旧版这里直接 throw，1.12.5 的大 manifest 一打就炸
+  if (i < 0) return l;
   return l.slice(0, i).padEnd(27) + '= ' + l.slice(i + 1);
 });
 out.push('checksum'.padEnd(27) + '= ' + md5);
