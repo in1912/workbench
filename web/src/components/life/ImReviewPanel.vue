@@ -30,6 +30,41 @@
         </div>
       </div>
 
+      <!-- 数据脱敏（v1.13.0）：默认折叠。本页只放**一个开关 + 本轮对照显示**，
+           规则配置（识别类型 / 固定关键词 / 数值是否脱敏）在「效率工具 → AI脱敏」里。 -->
+      <div class="card" style="margin-bottom:14px">
+        <h3 class="foldhead">
+          <span class="ft" @click="maskOpen = !maskOpen">
+            <span class="caret">{{ maskOpen ? '▾' : '▸' }}</span>数据脱敏
+          </span>
+          <span class="muted" style="font-weight:400;font-size:12.5px">{{ maskOn ? '本次开启' : '本次关闭' }}</span>
+        </h3>
+        <label class="row" style="gap:8px;cursor:pointer">
+          <input type="checkbox" v-model="maskOn" style="width:auto" />
+          <span>本次喂给 AI 前脱敏<span class="muted">（把聊天里的公司 / 人名 / 部门 / 群名 / 账号等换成本轮随机代码，AI 返回后再自动拼回原词）</span></span>
+        </label>
+        <div class="muted small" style="margin-top:6px">规则在「效率工具 → AI脱敏」里配置；这里只决定本次用不用。</div>
+        <div v-show="maskOpen">
+          <template v-if="job && job.mask && job.mask.mapping.length">
+            <label class="fl">本轮对照表<span class="muted" style="font-weight:400">{{ job.mask.count }} 项（AI 只看到右列的代码）</span></label>
+            <div class="maptable">
+              <div v-for="(m, i) in job.mask.mapping" :key="i" class="maprow">
+                <span class="badge blue">{{ typeLabel(m.type) }}</span>
+                <span class="term">{{ m.term }}</span>
+                <span class="arrow">→</span>
+                <code>{{ m.code }}</code>
+              </div>
+            </div>
+          </template>
+          <div v-else-if="job && running" class="muted small" style="margin-top:8px">
+            脱敏在「组装语料」之后、调用 AI 之前进行，对照表稍后出现在这里…
+          </div>
+          <div v-else class="muted small" style="margin-top:8px">
+            本轮还没有脱敏记录。勾上开关再点「生成复盘」，这里会列出「哪个名词 → 哪个随机代码」。
+          </div>
+        </div>
+      </div>
+
       <!-- 引导词：默认收起，点标题展开；复制按钮收起时也在（不用展开就能复制当前引导词） -->
       <div class="card" style="margin-bottom:14px">
         <h3 class="foldhead">
@@ -147,6 +182,9 @@ const days = ref(1);
 const prompt = ref('');
 const promptOpen = ref(false);   // v1.11.5：引导词默认收起，点标题展开
 const promptEl = ref(null);
+const maskOn = ref(false);       // v1.13.0：本次喂给 AI 前是否脱敏（默认关，记在本地）
+const maskOpen = ref(false);     // 脱敏卡默认折叠
+const typeLabel = (k) => ({ org: '公司', person: '人名', dept: '部门', group: '群名', acct: '账号', pwd: '密码', apikey: 'KEY', email: '邮箱', phone: '手机', idcard: '身份证', custom: '自定义', numbers: '数值' }[k] || k);
 const res = ref(null);
 const busyAdd = ref(false);
 const checked = ref(new Set());
@@ -266,6 +304,7 @@ async function run() {
   try {
     const j = await api.post('/life/im-review/jobs', {
       folder_id: folderId.value, days: days.value, prompt: prompt.value,
+      desensitize: maskOn.value,   // v1.13.0：本次是否先脱敏再喂 AI
     });
     job.value = j;
     if (j.resumed) emit('toast', '上一次整理还在进行，已接上它的进度');
@@ -314,6 +353,9 @@ function resetPrompt() {
 
 // 用户改过的引导词记在本地；「恢复默认」清掉
 watch(prompt, (v) => { if (v) localStorage.setItem(LS_KEY, v); });
+// 脱敏开关也记在本地（多数人一旦选了就长期想用同一个选择）
+const LS_MASK = 'lifeImReview.mask';
+watch(maskOn, (v) => localStorage.setItem(LS_MASK, v ? '1' : '0'));
 watch(() => job.value && job.value.logs.length, scrollLogs);
 
 // 本页全页自适应（同领域/关系/知识地图页）：挂载打开不限宽开关，卸载（切页签/离开 /life）自动关
@@ -321,6 +363,7 @@ const mainFull = inject('wbMainFull', null);
 
 onMounted(async () => {
   if (mainFull) mainFull.value = true;
+  maskOn.value = localStorage.getItem(LS_MASK) === '1';
   try {
     meta.value = await api.get('/life/im-review/meta');
     ranges.value = meta.value.ranges || [];
@@ -371,6 +414,13 @@ onUnmounted(() => {
 .trow .t { flex: 1; min-width: 0; line-height: 1.5; }
 .note { margin: 3px 0 0 24px; }
 .err-hint { color: #d93025; font-size: 13px; margin-top: 8px; }
+/* v1.13.0 脱敏对照表：等宽代码列，长表内滚 */
+.maptable { margin-top: 6px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.maprow { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.maprow:last-child { border-bottom: none; }
+.maprow .term { flex: 1; min-width: 0; word-break: break-all; }
+.maprow .arrow { color: var(--text3); }
+.maprow code { background: var(--bg3); border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
 .badge.warn { background: #b26a00; color: #fff; }
 .bar { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .bar .fill { height: 100%; background: var(--accent, #4a7dff); border-radius: 999px; transition: width .6s ease; }

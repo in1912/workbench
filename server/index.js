@@ -30,6 +30,7 @@ const dhService = require('./services/dhService'); // 数字人参考图签名�
 const fnosRoutes = require('./routes/fnosRoutes');
 const authRoutes = require('./routes/authRoutes');
 const flashToolRoutes = require('./routes/flashToolRoutes');
+const desensitizeRoutes = require('./routes/desensitizeRoutes'); // AI 数据脱敏（v1.13.0）：所有 /desensitize/*
 const noteRoutes = require('./routes/noteRoutes'); // 笔记知识系统（v1.9.41）：所有 /notes/* 的唯一所有者
 const noteShareRoutes = require('./routes/noteShareRoutes'); // 笔记分享 + 外部写入令牌（v1.9.39）
 const lifeRoutes = require('./routes/lifeRoutes'); // 人生管理系统（v1.10.0）：所有 /life/* 的唯一所有者
@@ -175,6 +176,7 @@ app.use('/api', xiaozhiRoutes);
 app.use('/api', dhRoutes); // 数字人（v1.12.0）：/dh/*（角色注册表/参考图/历史对话/Vivix 会话预览）
 app.use('/api', vstudyRoutes); // 视频中心（智能家居最后一个 tab）用的 /vc 接口
 app.use('/api', flashToolRoutes); // 本地烧录工具包（v2.0.0 新增）
+app.use('/api', desensitizeRoutes); // AI 数据脱敏（v1.13.0）：效率工具页「AI脱敏」tab 的配置/试运行/历史
 app.use('/api', fnosRoutes);
 if (!SH_MODE) {
   // 以下模块在智能家居独立应用里不存在：不挂路由 = 请求 404，前端也没有入口

@@ -78,6 +78,8 @@ function pageForPath(p) {
   if (p.startsWith('/overview')) return 'dashboard';
   // v1.7.0 模块重组：全局搜索/文件存档并入「效率工具」页 tab
   if (p.startsWith('/search')) return 'tools';
+  // AI 数据脱敏（v1.13.0）：效率工具页「AI脱敏」tab 的配置/试运行/历史。漏这行 = 落 null=仅需登录
+  if (p.startsWith('/desensitize')) return 'tools';
   if (p.startsWith('/news')) return 'news';
   if (p.startsWith('/emails')) return 'email';
   if (p.startsWith('/contacts')) return 'email'; // 邮箱页「通讯录」tab（email_contacts 表）
@@ -207,6 +209,8 @@ const TAB_PATHS = {
   tools: [
     ['clip', ['/clipboard']],
     ['links', ['/links']],
+    // AI 数据脱敏（v1.13.0）：效率工具页「AI脱敏」tab——规则配置 / 试运行 / 对照历史
+    ['desens', ['/desensitize']],
     // monitor (v1.3.5)
     ['monitor', ['/monitor']],
     // 电子宠物（v1.10.10 需求⑨）：整页从独立侧栏页并入本页的一个 tab。

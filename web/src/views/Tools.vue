@@ -15,6 +15,8 @@
       <button v-if="canTab('tools','pets')" :class="{active: tab==='pets'}" @click="switchTab('pets')">电子宠物</button>
       <!-- 推送任务（原「业务系统」独立页整页并入，2026-09 v1.7.0；内含 4 个子 tab，任一子 tab 有权限即可见） -->
       <button v-if="canBusiness" :class="{active: tab==='business'}" @click="switchTab('business')">推送任务</button>
+      <!-- AI 脱敏（v1.13.0）：给其他页面调用的脱敏能力中心 -->
+      <button v-if="canTab('tools','desens')" :class="{active: tab==='desens'}" @click="switchTab('desens')">AI脱敏</button>
       <!-- 文件存档（原独立页并入）：倒数第二个 tab -->
       <button v-if="canTab('tools','files')" :class="{active: tab==='files'}" @click="switchTab('files')">文件存档</button>
       <!-- 全局搜索（原独立页并入）：最后一个 tab（右下角悬浮搜索框直达） -->
@@ -165,6 +167,9 @@
     <!-- ============ 推送任务（原「业务系统」页整页并入，v1.7.0） ============ -->
     <BusinessPanel v-else-if="tab==='business'" />
 
+    <!-- ============ AI 脱敏（v1.13.0）：规则配置 / 原理说明 / 试运行 / 脱敏历史 ============ -->
+    <DesensitizePanel v-else-if="tab==='desens'" />
+
     <!-- ============ 文件存档（原独立页并入，v1.7.0） ============ -->
     <FilesPanel v-else-if="tab==='files'" />
 
@@ -194,6 +199,8 @@ import TtsPanel from '../learning/TtsPanel.vue';
 import BusinessPanel from './Business.vue';
 import FilesPanel from './Files.vue';
 import SearchPanel from './Search.vue';
+// AI 脱敏（v1.13.0）：规则配置 / 原理说明 / 试运行 / 脱敏历史
+import DesensitizePanel from '../components/DesensitizePanel.vue';
 // 电子宠物（v1.10.10，需求⑨）：原独立页整页并入本页的一个 tab（embedded 少画一层页标题）
 import PetsPanel from './Pets.vue';
 

@@ -93,6 +93,10 @@ export const TAB_DEFS = {
     { key: 'skill', label: 'Skill 任务', hidden: true },
     { key: 'push', label: '推送记录', hidden: true },
     { key: 'config', label: '定时配置', hidden: true },
+    // AI 脱敏（v1.13.0）：给其他页面调用的能力中心——规则配置 / 原理说明 / 试运行 / 脱敏历史。
+    // 后端 TAB_PATHS.tools 的 'desens' 键 = /api/desensitize（IM复盘、笔记AI 的接入不走这里，
+    // 只受各自页权限约束，所以调用方不必另有本 tab 权限）。
+    { key: 'desens', label: 'AI脱敏' },
     // 文件存档从独立页并入（2026-09 v1.7.0）：倒数第二个 tab
     { key: 'files', label: '文件存档' },
     // 全局搜索从独立页并入（2026-09 v1.7.0）：最后一个 tab（右下角悬浮框直达）

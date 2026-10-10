@@ -625,9 +625,10 @@ try {
     const sel = p.locator('.xz-field', { hasText: '屏幕【测试】按钮走哪条' }).locator('select');
     ok((await sel.count()) === 1, '「屏幕【测试】按钮走哪条」下拉渲染出来了');
     const opts = (await sel.locator('option').allInnerTexts()).map((s) => s.trim());
-    ok(JSON.stringify(opts) === JSON.stringify(['飞书', '钉钉']), '只有飞书/钉钉两项（与后端白名单一致，飞书在前）', opts.join(','));
+    // v1.9.37 起飞书那条改由上面的 agent 档案自己发，选项文案因此带上后缀（断言同步跟上）
+    ok(JSON.stringify(opts) === JSON.stringify(['飞书（走上面的 agent）', '钉钉']), '只有飞书/钉钉两项（与后端白名单一致，飞书在前）', opts.join(','));
     ok((await sel.inputValue()) === 'feishu', '默认飞书（v1.9.37：飞书是默认 IM，钉钉只是备选）');
-    ok((await p.locator('text=只发一条，不双发').count()) === 1, '旁边写清了「只发一条、不双发」和收件人是谁');
+    ok((await p.locator('text=选了哪条就发哪条').count()) >= 1, '旁边写清了「选了哪条就发哪条、不发第二条」和收件人是谁');
 
     await sel.selectOption('feishu');
     await p.locator('button', { hasText: '保存语音助手配置' }).click();

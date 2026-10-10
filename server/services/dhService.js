@@ -26,6 +26,8 @@ const crypto = require('crypto');
 const { db: mainDb, getSetting, setSetting, tenantIdOf } = require('../db');
 const storagePaths = require('./storagePaths');
 const aiService = require('./aiService');
+const xiaozhiSvc = require('./xiaozhiService');
+const { planDeviceCommand } = require('./dhDeviceIntent');
 
 // Vivix 内置 Qwen Audio 九音色（voice.md 全表；无台湾腔——调研已确认，要特定口音走外接/克隆，暂未开通）
 // ⚠️ 2026-10-07 生产实测：longwanxiao_v3.6 在 Vivix 侧 TTS 上游损坏（505001 AUDIO_PREPARE_UPSTREAM_ERROR，
@@ -100,6 +102,12 @@ function parsePersona(p) {
 }
 
 // ---------- 人设 → avatars[].instructions（官方五段式的中文落地；指令语言无关） ----------
+// 设备诚实规则（v1.13.3）：家里智能家居的开关由**工作台系统**执行，数字人本人没有这双手。
+// 之前没写清楚，云端模型就顺着人设编「好哒哥哥，我去开！」——用户以为开了，设备纹丝不动。
+const HOME_RULE = '家里的智能家居（灯、空调这类）由工作台系统直接控制，你自己没有开关设备的手：'
+  + '用户让你开关设备时，可以说「我让工作台去开/关了」，但**不要**说你做不到，更不要声称自己已经打开了什么或说「已经打开了」这类没有依据的话——'
+  + '真结果会由系统告诉你，你照实转述即可';
+
 function buildInstructions(name, pf) {
   const parts = [`你是${name}，${pf.personaLine}`];
   const style = [];
@@ -109,6 +117,10 @@ function buildInstructions(name, pf) {
   if (style.length) parts.push(style.join('，'));
   parts.push('你像真人一样自然聊天，不说教、不列长清单，只说适合开口说的话');
   if (pf.extra) parts.push(pf.extra);
+  // 设备诚实规则（v1.13.3）：实时会话里的话由 Vivix 云端模型生成，工作台插不进去；
+  // 但**人设指令是工作台发过去的**——所以在这里把「谁在干活」讲清楚，模型就不会再编
+  // 「好哒哥哥，我去开！」「已经打开了」这种没有依据的话（生产实测里用户正是被这句骗了）。
+  parts.push(HOME_RULE);
   return parts.join('。') + '。';
 }
 
@@ -307,13 +319,36 @@ function recentHistory(tdb, personaId, n) {
   ).all(personaId, n);
 }
 
+// ---------- 对话里的设备指令（v1.13.2）：认出「开关 + 设备名」就直连米家 ----------
+// 根因见 dhDeviceIntent.js 头部：数字人的模型没有 tools 通道，让它自己处理「打开台灯」只会
+// 得到「我没有这个能力」或者编造的「已经打开了」。这里复用智能板同一条链路
+// （dispatch('control') → resolveDevice → mihome.setProp，含别名接管 / 多候选追问 / 离线 /
+// 智能屏转述兜底），回复直接用回执原文，**不经模型转述**（转述正是失败被润成成功的源头）。
+async function tryDeviceControl(text) {
+  let devices = [];
+  try { devices = await xiaozhiSvc.listDevicesForBridge(); } catch { /* 未绑米家：交给 dispatch 回业务话术 */ }
+  const plan = planDeviceCommand(text, devices);
+  if (!plan) return null;
+  return xiaozhiSvc.dispatch('control', { device: plan.target, action: plan.action });
+}
+
 // ---------- 文字试聊：走工作台已配置的 AI（aiService 总配置），system=组装好的人设 ----------
 // 实时 Vivix 会话接入后，同一张 dh_history 表继续接语音转写与回复，气泡区一套 UI。
 async function chat(tdb, personaId, text) {
   const p = tdb.prepare('SELECT * FROM dh_personas WHERE id=?').get(personaId);
   if (!p) throw new Error('数字人不存在');
   const pf = parsePersona(p);
-  const system = buildInstructions(p.name, pf)
+  // 控制指令先在服务端截下：模型没有 tools 通道，让它转述只会把失败润成成功（v1.13.2）
+  let ctl = null;
+  try { ctl = await tryDeviceControl(text); }
+  catch (e) { ctl = { ok: false, message: `智能家居接口调用失败：${e.message}` }; }
+  if (ctl) {
+    const reply = String(ctl.message || (ctl.ok ? '好的' : '这条指令没能执行')).trim();
+    const user = addHistory(tdb, personaId, 'user', text);
+    const assistant = addHistory(tdb, personaId, 'assistant', reply);
+    return { reply, user, assistant, control: ctl, model: null, usage: null };
+  }
+  const system = buildInstructions(p.name, pf)   // 含 HOME_RULE：设备由工作台执行，不许编「已经打开了」
     + (pf.scene ? `（场景设定：${pf.scene}，仅作背景理解，不要主动报幕）` : '');
   const msgs = [{ role: 'system', content: system }];
   for (const h of recentHistory(tdb, personaId, 12)) {
@@ -472,6 +507,6 @@ module.exports = {
   sanitizePersona, parsePersona, buildInstructions, buildVmps, buildSessionJson,
   mintImageToken, resolveImageToken,
   publicPersona, listPersonas, storeImage, nextSort, ensureDefault, seedIfNeeded,
-  addHistory, recentHistory, chat, testKey, getBalance,
+  addHistory, recentHistory, chat, tryDeviceControl, testKey, getBalance,
   createSession, closeSession,
 };

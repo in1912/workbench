@@ -18,6 +18,13 @@ export function useDhLive({ viewId, getPersona }) {
   const resumes = new Set();
   let closingByUser = false, deltaBuf = '', deltaTimer = 0, respondTimer = 0, pendingRespond = false;
   let dimTimer = 0;
+  // v1.13.3 设备指令：实时会话的对话内容**不经过工作台服务器**（浏览器直连 Vivix 的 WSS），
+  // 所以这里由浏览器先问服务端「这句是不是设备指令」——是就当场执行，拿真实回执回来，
+  // 再包成一句「系统指令」喂回 Vivix 让它照实念。不这么办，Vivix 的云端模型就会顺着人设
+  // 编「好哒哥哥，我去开！」（2026-10-10 生产实测：用户以为开了，设备纹丝不动）。
+  let responding = false;        // 是否有回复正在生成（决定补话是立刻发还是等它收口）
+  let queuedDeviceTurn = false;  // 系统指令已塞进上下文，等回复收口后触发它开口
+  let deviceTimer = 0;
   // vw/vh=直播流的真实宽高（首帧后从 TRTC 塞进来的 video 元素量出）——舞台盒用它等比呈现，
   // 不再按人设 aspect 硬套（v1.12.2：竖流在 16:9 盒子里被 cover 裁成只剩中间条）
   const live = reactive({ on: false, busy: false, sessionId: '', status: '', err: '', needResume: false, micOn: false, vw: 0, vh: 0 });
@@ -25,6 +32,37 @@ export function useDhLive({ viewId, getPersona }) {
   const liveItems = ref([]); // 本次会话内的即时气泡（{role,text}；正式记录以 dh_history 为准）
 
   function pushLive(role, text) { liveItems.value.push({ role, text }); }
+
+  // ---------- 设备指令（v1.13.3） ----------
+  function deviceDirective(said, result) {
+    return `【工作台系统指令·这句用户看不到】用户刚说的是「${said}」。`
+      + `这条智能家居指令已由工作台系统执行完毕，真实结果：「${result}」。`
+      + `请用你的口吻把「${result}」如实确认一句：不要说你做不到，也不要改动里面的房间名与设备名；`
+      + `若结果里是「没找到」或「匹配到多台」，就照实转达，并请用户说清楚是哪一台。`;
+  }
+  function fireDeviceTurn() {
+    if (!live.on || !queuedDeviceTurn) return;
+    queuedDeviceTurn = false;
+    wsSend({ type: 'response.create', response: { modalities: ['audio', 'text'] } });
+  }
+  // 把「真实回执」塞回会话：有回复在途就等它收口（completed 里补），否则稍等一拍再开口
+  function injectDeviceTurn(said, result) {
+    if (!live.on) return;
+    wsSend({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: deviceDirective(said, result) }] },
+    });
+    queuedDeviceTurn = true;
+    live.status = '设备指令已执行…';
+    clearTimeout(deviceTimer);
+    if (responding) return;
+    deviceTimer = setTimeout(() => { if (!responding) fireDeviceTurn(); }, 600);
+  }
+  // 判一次「是不是设备指令」；命中就真执行（服务端调米家）并把回执交回来
+  async function checkDeviceCommand(text) {
+    try { return await api.post('/dh/smarthome/command', { text }); }
+    catch { return null; }   // 判不了（未绑米家/网络抖动）就当普通对话，别拦着用户说话
+  }
 
   function scheduleFlush() { clearTimeout(deltaTimer); deltaTimer = setTimeout(flushDelta, 2500); }
   async function flushDelta() {
@@ -79,12 +117,15 @@ export function useDhLive({ viewId, getPersona }) {
     let d; try { d = JSON.parse(ev.data); } catch { return; }
     const t = d.type || '';
     if (t === 'response.output_text.delta') {
+      responding = true;
       deltaBuf += String(d.delta != null ? d.delta : '');
       live.status = '对方回应中…';
       scheduleFlush(); // 没有 completed 事件也兜底落一段（2.5 秒无新 delta 即收口）
     } else if (t === 'response.completed' || t === 'response.done') {
+      responding = false;
       live.status = '实时';
       flushDelta();
+      if (queuedDeviceTurn) fireDeviceTurn();   // 设备回执等这轮说完再补（见 injectDeviceTurn）
     } else if (t === 'conversation.item.created' && pendingRespond) {
       // 用户消息已被服务端确认 → 触发一次回复（音+字都要，文字回流进气泡区）
       pendingRespond = false; clearTimeout(respondTimer);
@@ -104,12 +145,19 @@ export function useDhLive({ viewId, getPersona }) {
           .then(() => { dhState.histVer++; })
           .catch(() => { /* 落库失败不影响会话进行 */ });
       }
+      // v1.13.3：**说话**里的设备指令也接管——Vivix 已经听见了（拦不住），但工作台可以
+      // 真去执行，并把真实结果塞回会话让它照实念。在此之前它多半已经顺着人设编了一句
+      // 「好哒哥哥我去开」——那句是它的云端模型说的，工作台拦不住，只能接着把真相补上。
+      checkDeviceCommand(tx).then((r) => { if (r && r.matched) injectDeviceTurn(tx, r.message); });
     } else if (t === 'session.closed') {
       flushDelta();
       live.on = false;
       live.err = closedReason(d.reason);
       cleanupLive();
     } else if (t === 'error') {
+      // 「已有回复在生成中」这类良性拒绝不弹给用户看：设备回执的补话本来就等它收口再发
+      const raw = String((d.error && (d.error.message || d.error)) || '');
+      if (/already|in ?progress|active response|busy|conversation_item/i.test(raw)) { live.status = '实时'; return; }
       live.err = friendlyErr(d.error);
     }
   }
@@ -221,6 +269,8 @@ export function useDhLive({ viewId, getPersona }) {
     const r = rtc; rtc = null;
     resumes.clear();
     clearInterval(dimTimer);
+    clearTimeout(deviceTimer);
+    responding = false; queuedDeviceTurn = false;
     live.needResume = false; live.micOn = false; live.sessionId = ''; live.vw = 0; live.vh = 0;
     closingByUser = false;
     if (r) r.exitRoom().catch(() => {}).finally(() => { try { r.destroy(); } catch { /* 已销毁 */ } });
@@ -230,9 +280,22 @@ export function useDhLive({ viewId, getPersona }) {
     const t = liveText.value.trim();
     const p = getPersona();
     if (!t || !live.on || !p) return;
+    liveText.value = '';
+    pushLive('user', t);
+    live.status = '已发送…';
+    try {
+      await api.post('/dh/history', { persona_id: p.id, role: 'user', text: t });
+      dhState.histVer++;
+    } catch { /* 落库失败不影响会话进行 */ }
+    // v1.13.3：打字这条**完全由我们做主**——是设备指令就真执行，且**原句不发给 Vivix**，
+    // 只发一句带真实回执的「系统指令」让它照实念（不会出现「编一句 + 补一句」的双声）。
+    live.status = '检查设备指令…';
+    const cmd = await checkDeviceCommand(t);
+    const text = cmd && cmd.matched ? deviceDirective(t, cmd.message) : t;
+    if (cmd && cmd.matched) live.status = '设备指令已执行…';
     wsSend({
       type: 'conversation.item.create',
-      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] },
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
     });
     pendingRespond = true;
     clearTimeout(respondTimer); // created 事件 2 秒没到也照常触发回复，不卡对话
@@ -242,13 +305,6 @@ export function useDhLive({ viewId, getPersona }) {
         wsSend({ type: 'response.create', response: { modalities: ['audio', 'text'] } });
       }
     }, 2000);
-    liveText.value = '';
-    pushLive('user', t);
-    live.status = '已发送…';
-    try {
-      await api.post('/dh/history', { persona_id: p.id, role: 'user', text: t });
-      dhState.histVer++;
-    } catch { /* 落库失败不影响会话进行 */ }
   }
 
   return { live, liveItems, liveText, startLive, stopLive, sendLive, resumePlay, toggleMic, cleanupLive, pushLive };

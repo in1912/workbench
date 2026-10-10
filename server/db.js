@@ -895,6 +895,34 @@ CREATE TABLE IF NOT EXISTS dh_history (
   audio_file TEXT NOT NULL DEFAULT '',
   ts TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+
+-- AI 数据脱敏（v1.13.0）：规则配置单行表 + 每轮调用留一份对照历史（均属租户库）。
+-- 配置面向全部接入页面（IM复盘 / 笔记AI 共用一套），各页面只用「本次是否脱敏」的开关决定用不用。
+CREATE TABLE IF NOT EXISTS desensitize_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 1,          -- 总开关（默认开；关掉=各页面即使勾了也不脱敏）
+  mask_numbers INTEGER NOT NULL DEFAULT 0,      -- 数值是否也脱敏（会影响 AI 计算，默认关）
+  types_json TEXT NOT NULL DEFAULT '{}',        -- {org:false, person:true, ...}（缺省视为开启）
+  fixed_terms_json TEXT NOT NULL DEFAULT '[]',  -- [{term,code}] 固定必过滤关键词表
+  aggressive TEXT NOT NULL DEFAULT 'balanced',
+  updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+INSERT OR IGNORE INTO desensitize_config (id) VALUES (1);
+
+-- 脱敏对照历史：scope=im_review（AI复盘IM）/ note_ai（笔记AI总结续写翻译）/ manual（试运行）。
+-- mapping_json 是「名词→随机代码」对照表；masked_preview 是脱敏后片段（截断）。只存本机租户库。
+CREATE TABLE IF NOT EXISTS desensitize_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT NOT NULL,
+  ref TEXT NOT NULL DEFAULT '',
+  user_id INTEGER,
+  item_count INTEGER NOT NULL DEFAULT 0,
+  mapping_json TEXT NOT NULL DEFAULT '[]',
+  masked_text TEXT NOT NULL DEFAULT '',         -- 完整脱敏文本（笔记AI 确认后按它发送，避免预览截断改内容）
+  masked_preview TEXT NOT NULL DEFAULT '',      -- 脱敏片段（截断，只用于历史回看展示）
+  status TEXT NOT NULL DEFAULT 'done',          -- preview / sent / failed
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 `;
 
 // 为已有表补充新列（SQLite ADD COLUMN，幂等）
@@ -1091,6 +1119,8 @@ function initBusinessSchema(d) {
     CREATE INDEX IF NOT EXISTS idx_note_propdefs_sort ON note_property_defs(sort_order, id);
     CREATE INDEX IF NOT EXISTS idx_note_board_items ON note_board_items(board_id, z);
     CREATE INDEX IF NOT EXISTS idx_note_board_edges ON note_board_edges(board_id);
+    -- AI 数据脱敏（v1.13.0）：历史按来源 + 时间倒序翻页
+    CREATE INDEX IF NOT EXISTS idx_desensitize_history ON desensitize_history(scope, id DESC);
     CREATE INDEX IF NOT EXISTS idx_todos ON todos(done, due_date);
     CREATE INDEX IF NOT EXISTS idx_events ON events(start_time);
     CREATE INDEX IF NOT EXISTS idx_news ON news(category, fetched_at);
@@ -2008,6 +2038,8 @@ const TENANT_TABLES = [
   'im_connectors', 'im_chats', 'im_sync_logs',
   // 数字人（v1.12.0）：角色注册表 + 参考图 + 历史对话（智能家居页「数字人」tab）
   'dh_personas', 'dh_images', 'dh_history',
+  // AI 数据脱敏（v1.13.0）：规则配置 + 对照历史（效率工具页「AI脱敏」tab）
+  'desensitize_config', 'desensitize_history',
 ];
 // 归租户库的 settings 键（其余留在主库）
 const TENANT_SETTING_KEYS = [

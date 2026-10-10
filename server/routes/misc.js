@@ -17,6 +17,7 @@ const storagePaths = require('../services/storagePaths');
 const multer = require('multer');
 const fileTextService = require('../services/fileTextService');
 const shApp = require('../shApp'); // 智能家居独立应用的身份常量（sh 模式下的名称/版本兜底）
+const desensitizeService = require('../services/desensitizeService'); // AI 数据脱敏（LLM在线模型对话接入，v1.13.1）
 // 上传中间件（文件存档 / AI 附件共用）：内存暂存，限 20MB
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -680,6 +681,42 @@ router.get('/ai/sessions/:id/stats', (req, res) => {
     percent: Math.round((tokens / limit) * 1000) / 10,
   });
 });
+// ---- AI 脱敏（LLM在线模型对话接入） ----
+// 把消息数组里所有「文本槽位」抽出来：多条消息共用一张对照表，同一个名字在整轮里只有一个代码
+//（否则 AI 读到 ORG-7K2M9 和 PER-3QW8Z 两个代码会当成两个人，用户也看不懂对照表）。
+function desensSlots(msgs) {
+  const slots = [];
+  for (const m of msgs || []) {
+    if (Array.isArray(m.content)) {
+      for (const p of m.content) if (p && p.type === 'text') slots.push({ m, p });
+    } else if (typeof m.content === 'string') {
+      slots.push({ m, p: null });
+    }
+  }
+  return slots;
+}
+function desensApply(slots, masked) {
+  slots.forEach((s, i) => { if (s.p) s.p.text = masked[i]; else s.m.content = masked[i]; });
+}
+
+// 脱敏面板要的规则摘要。**故意不复用 /api/desensitize/meta**：那条归「效率工具」页权限，
+// 而这里属于「人工智能 → LLM在线模型」，两处权限互不隶属 —— 借道会让没有效率工具权限的人拿不到
+// 自己的规则说明（甚至误以为脱敏没生效）。走 /ai/* 前缀即自动继承 smarthome.llm 权限（见 auth.js）。
+router.get('/ai/desensitize-meta', (req, res) => {
+  try {
+    const cfg = desensitizeService.getConfig(req.tdb);
+    res.json({
+      types: desensitizeService.TYPES,
+      enabled: cfg.enabled !== false,
+      mask_numbers: !!cfg.mask_numbers,
+      types_on: cfg.types || {},
+      fixed_count: Array.isArray(cfg.fixed_terms) ? cfg.fixed_terms.length : 0,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/ai/chat', async (req, res) => {
   try {
     const tdb = req.tdb;
@@ -718,6 +755,27 @@ router.post('/ai/chat', async (req, res) => {
         return res.json({ content, skill: hit.name, session_id: sessionId });
       }
     }
+    // ---- AI 脱敏：本轮要发出去的文本先换成代码（本地纯规则，不调 AI、不联网）----
+    // 说明：用户消息已在上面按原文落库（本地库留真名），这里只改发往在线模型的那一份。
+    // 命中业务 Skill 的分支在上面就 return 了 —— 那是本地任务通道，不发在线模型，故不经脱敏。
+    const wantMask = !!req.body.desensitize;
+    let maskInfo = null;
+    if (wantMask) {
+      const opts = desensitizeService.optionsFrom(tdb);
+      if (!opts.enabled) {
+        // 总开关关着 —— 如实告知，绝不假装脱敏
+        maskInfo = { skipped: true, reason: 'AI脱敏总开关处于关闭状态（效率工具 → AI脱敏）' };
+      } else {
+        const slots = desensSlots(messages);
+        const r = desensitizeService.encodeMany(slots.map((s) => (s.p ? s.p.text : s.m.content)), opts);
+        desensApply(slots, r.masked);
+        maskInfo = { mapping: r.mapping, count: r.count };
+      }
+    }
+    const maskMapping = maskInfo && !maskInfo.skipped ? maskInfo.mapping : [];
+    // 已发出去的复原文本长度：流式过程中用它算「这一块新增了什么」
+    let sentLen = 0;
+
     // 流式对话：SSE 逐块转发（推理模型边思考边输出，连接持续活跃，避免网关无活动超时 408）
     if (req.body.stream) {
       const cfg = aiService.getConfig(tdb);
@@ -756,6 +814,24 @@ router.post('/ai/chat', async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders?.();
+      // 先把手里的对照表交给前端（面板要立刻显示「本轮对照关系」）
+      if (wantMask) res.write(`data: ${JSON.stringify({ mask: maskInfo })}\n\n`);
+      // 增量复原：AI 的回复里可能有 ORG-7K2M9 这种代码，中途切开会把代码断成两截显示出乱码。
+      // 所以尾巴留 maxCode 个字符不发，等下一个 chunk 补齐。
+      //
+      // ⚠️ 光留 maxCode 个字符**不够**：留出的那段里如果再往前走一点正好跨着一个代码的开头，
+      // 那半个代码（`ORG-CZ`）会被当普通文本先发出去；等代码补齐、这一遍 decode 把它换成真名，
+      // 已经发走的那截却永远停在那里 —— 前端拼出来的文本和 done.content 对不上（实测症状：
+      // 气泡里显示「联系人 ORG-CZR3公司 …」）。所以还要**把尾巴上那个半截代码整个扣住不发**
+      // （v1.13.1 e2e「所有 delta 拼起来 == 最终 content」当场抓到这个 bug）。
+      const maxCode = maskMapping.reduce((n, m) => Math.max(n, String(m.code || '').length), 0);
+      const maskCodes = maskMapping.map((m) => String(m.code || '')).filter(Boolean);
+      const safeHeadLen = (s) => {
+        let i = s.length;
+        while (i > 0 && /[A-Za-z0-9-]/.test(s[i - 1])) i--;   // 回退到最后一个 token 的开头
+        const frag = s.slice(i);
+        return frag && maskCodes.some((c) => c.length > frag.length && c.startsWith(frag)) ? i : s.length;
+      };
       const reader = upRes.body.getReader();
       const decoder = new TextDecoder();
       let full = '';
@@ -773,24 +849,63 @@ router.post('/ai/chat', async (req, res) => {
               const delta = d.choices?.[0]?.delta?.content || '';
               if (delta) {
                 full += delta;
-                res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+                if (maskMapping.length) {
+                  const safe = Math.max(0, full.length - maxCode);
+                  const head = full.slice(0, safeHeadLen(full.slice(0, safe)));
+                  const dec = desensitizeService.decode(head, maskMapping);
+                  if (dec.length > sentLen) {
+                    res.write(`data: ${JSON.stringify({ delta: dec.slice(sentLen) })}\n\n`);
+                    sentLen = dec.length;
+                  }
+                } else {
+                  res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+                }
               }
             } catch { /* 跳过无法解析的行 */ }
           }
         }
       } finally {
-        // 保存完整回复
-        if (full) tdb.prepare('INSERT INTO ai_messages(session_id, role, content) VALUES(?,?,?)').run(sessionId, 'assistant', full);
+        // 收尾：把留在缓冲里的尾巴也复原发出去
+        let shown = full;
+        if (maskMapping.length) {
+          shown = desensitizeService.decode(full, maskMapping);
+          if (shown.length > sentLen) res.write(`data: ${JSON.stringify({ delta: shown.slice(sentLen) })}\n\n`);
+          sentLen = shown.length;
+        }
+        // 保存完整回复（存复原后的真名 —— 本地库不留代码）
+        if (shown) tdb.prepare('INSERT INTO ai_messages(session_id, role, content) VALUES(?,?,?)').run(sessionId, 'assistant', shown);
         tdb.prepare("UPDATE ai_sessions SET updated_at=datetime('now','localtime') WHERE id=?").run(sessionId);
-        res.write(`data: ${JSON.stringify({ done: true, content: full })}\n\n`);
+        if (maskMapping.length) {
+          try {
+            desensitizeService.record(tdb, {
+              scope: 'llm_chat', ref: String(sessionId), userId: req.user && req.user.id,
+              mapping: maskMapping, maskedText: full, maskedPreview: full.slice(0, 400), status: 'sent',
+            });
+          } catch { /* 留痕失败不影响对话 */ }
+        }
+        res.write(`data: ${JSON.stringify({ done: true, content: shown, masked: maskMapping.length > 0, mask_skipped: maskInfo && maskInfo.skipped ? maskInfo.reason : '' })}\n\n`);
         res.end();
       }
       return;
     }
-    const text = await aiService.chat(messages, { maxTokens: 4096, reasoningEffort: 'low', tdb });
+    // 非流式：同样先脱敏再发、回包复原
+    const rawText = await aiService.chat(messages, { maxTokens: 4096, reasoningEffort: 'low', tdb });
+    const text = maskMapping.length ? desensitizeService.decode(rawText, maskMapping) : rawText;
     tdb.prepare('INSERT INTO ai_messages(session_id, role, content) VALUES(?,?,?)').run(sessionId, 'assistant', text);
     tdb.prepare("UPDATE ai_sessions SET updated_at=datetime('now','localtime') WHERE id=?").run(sessionId);
-    res.json({ content: text, session_id: sessionId });
+    if (maskMapping.length) {
+      try {
+        desensitizeService.record(tdb, {
+          scope: 'llm_chat', ref: String(sessionId), userId: req.user && req.user.id,
+          mapping: maskMapping, maskedText: rawText, maskedPreview: rawText.slice(0, 400), status: 'sent',
+        });
+      } catch { /* 留痕失败不影响对话 */ }
+    }
+    res.json({
+      content: text, session_id: sessionId,
+      masked: maskMapping.length > 0, count: maskMapping.length, mapping: maskMapping,
+      mask_skipped: maskInfo && maskInfo.skipped ? maskInfo.reason : '',
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

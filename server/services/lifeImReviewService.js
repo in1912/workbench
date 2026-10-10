@@ -27,6 +27,7 @@ const noteService = require('./noteService');
 const lifeService = require('./lifeService');
 const ai = require('./aiService');
 const im = require('./imService');
+const desens = require('./desensitizeService');
 
 const RANGES = [
   { days: 1, label: '日报（1 天内）' },
@@ -133,6 +134,7 @@ function snapshot(job) {
     started_at: job.started_at, finished_at: job.finished_at,
     ai_started_at: job.stage === 'ai' ? job.ai_started_at : null,
     error: job.error, result: job.result,
+    mask: job.mask || null,   // 脱敏对照表（v1.13.0）：本轮「名词 → 随机代码」，供页面显示
     logs: job.logs.slice(),
   };
   return s;
@@ -155,6 +157,8 @@ function startJob(tdb, tenantKey, body) {
   const job = {
     id: ++jobSeq, state: 'running', stage: 'scan', stage_label: '扫描文件夹', progress: 0,
     days, folder_id: folderId, prompt: String(body.prompt || DEFAULT_PROMPT).trim() || DEFAULT_PROMPT,
+    // v1.13.0：本次是否先脱敏再喂 AI（规则取自「效率工具 → AI脱敏」，此处只是个开关）
+    desensitize: !!body.desensitize, mask: null, tenantKey: String(tenantKey || ''),
     started_at: Date.now(), finished_at: null, error: null, result: null, logs: [],
     ai_started_at: null, ai_estimate_s: null,
     _tdb: tdb,
@@ -238,12 +242,33 @@ async function runJob(job) {
     const linesUsed = convs.reduce((a, c) => a + c.lines.length, 0);
     log(job, `语料 ${corpus.length} 字（预算 ${MAX_CORPUS_CHARS}${truncated ? '，超了：按会话保留最新' : ''}），覆盖 ${convs.length} 个会话 / ${linesUsed} 条消息`);
 
+    // ③.5 脱敏（v1.13.0，可选）：把「引导词 + 语料」里的专有名词换成本轮随机代码再喂 AI。
+    // 名字提示表用会话名与每行发送者——IM 语料里这两个字段确定是人名/群名，比纯姓氏启发式准得多。
+    const dataIntro = `\n\n（以下是时间范围：最近 ${days} 天内的聊天记录，每行开头 [时间] 发送者：内容）\n\n`;
+    let aiBody = `${job.prompt}${dataIntro}${corpus}`;
+    if (job.desensitize) {
+      const hints = [];
+      for (const c of convs) { if (c.who) hints.push(c.who); for (const l of c.lines) if (l.who) hints.push(l.who); }
+      const opts = desens.optionsFrom(tdb, { nameHints: [...new Set(hints)] });
+      if (!opts.enabled) {
+        // 总开关关了就不脱敏，但要如实说一声——否则用户会以为他勾的开关生效了
+        log(job, '脱敏已跳过：AI脱敏总开关处于关闭状态（效率工具 → AI脱敏）');
+      } else {
+        const enc = desens.encode(aiBody, opts);
+        aiBody = enc.masked;
+        job.mask = { mapping: enc.mapping, count: enc.count };
+        log(job, enc.count
+          ? `脱敏：${enc.count} 个专有名词已换成随机代码（公司/人名/部门/群名/账号/密码/API KEY 等），AI 只看到代码`
+          : '脱敏：未识别到需要替换的专有名词（本次原样发送）');
+      }
+    }
+
     // ④ 交给总配置的 AI（aiService 自带 150 秒超时 × 2 次尝试与空回复报错——真实可能要几分钟）。
     // 生产实测有的模型偶尔不按 JSON 输出（v1.10.30 探针：语料才 1132 字、6 秒返回却是一段散文），
     // 所以解析失败自动用更严格的 JSON 指令重问一次，再不行才把任务判失败。
     setStage(job, 'ai', 'AI 生成中', 40);
     job.ai_started_at = Date.now();
-    job.ai_estimate_s = 20 + Math.round(corpus.length / 1200);
+    job.ai_estimate_s = 20 + Math.round(aiBody.length / 1200);
     const model = ai.getConfig(tdb).model || '';
     const NUDGE = '\n\n（注意：你上一次的输出不是合法 JSON。这一次从第一个字符起就只输出一个 JSON 对象本身——不要 markdown 代码围栏、不要解释、不要思考过程。）';
     let o = null, usedModel = '', usage = null;
@@ -254,7 +279,7 @@ async function runJob(job) {
         : '输出不是合法 JSON，自动重试一次（换更严格的 JSON 指令）…');
       const { content, model: m, usage: u } = await ai.chatEx([
         { role: 'system', content: '你是中文沟通复盘助手。严格按用户要求的 JSON 结构输出，只输出一个 JSON 对象本身，不要 markdown 代码围栏，不要任何解释。' },
-        { role: 'user', content: `${job.prompt}${attempt > 1 ? NUDGE : ''}\n\n（以下是时间范围：最近 ${days} 天内的聊天记录，每行开头 [时间] 发送者：内容）\n\n${corpus}` },
+        { role: 'user', content: `${aiBody}${attempt > 1 ? NUDGE : ''}` },
       ], { maxTokens: 3000, temperature: 0.3, tdb });
       if (job.state === 'cancelled') {
         log(job, `AI 已返回（${((Date.now() - tAi) / 1000).toFixed(0)} 秒），但任务已被取消——结果丢弃`);
@@ -271,6 +296,11 @@ async function runJob(job) {
       }
     }
     setStage(job, 'parse', '解析结果', 97);
+    // ④.5 复原（v1.13.0）：AI 回包里出现的代码按对照表拼回真名，页面/行动里看到的仍是原词
+    if (job.mask && job.mask.mapping.length) {
+      o = desens.decodeDeep(o, job.mask.mapping);
+      log(job, '复原：AI 输出里的随机代码已按对照表拼回原始名词');
+    }
     log(job, `解析完成：概要 1 段 · 重点 ${o.highlights.length} 条 · 待办参考 ${o.todos.length} 条`);
     job.result = {
       range: RANGES.find((r) => r.days === days),
@@ -281,6 +311,16 @@ async function runJob(job) {
       model: usedModel, usage,
       generated_at_ms: Date.now(),
     };
+    // 对照历史落库（v1.13.0）：本轮「名词 → 随机代码」可回查（只在本机租户库）
+    if (job.mask && job.mask.count) {
+      const uid = Number(job.tenantKey);
+      try {
+        desens.record(tdb, {
+          scope: 'im_review', ref: String(job.id), userId: Number.isFinite(uid) ? uid : null,
+          mapping: job.mask.mapping, maskedPreview: aiBody, status: 'sent',
+        });
+      } catch (e) { log(job, `脱敏历史落库失败（不影响复盘）：${e.message}`); }
+    }
     job.state = 'done'; job.stage = 'done'; job.stage_label = '完成'; job.progress = 100;
     job.finished_at = Date.now();
   } catch (e) {

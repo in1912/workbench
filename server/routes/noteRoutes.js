@@ -303,34 +303,89 @@ router.post('/notes/:id/ai-meta', async (req, res) => {
 });
 
 // AI 辅助写作：总结 / 续写 / 翻译（结果不落库，由前端决定插入还是替换）
+// v1.13.0：支持「先脱敏再发送」——前端先调 /ai-assist/preview 拿对照表给用户确认，
+// 确认后带 session_id 再调本接口；服务端用那份已脱敏的文本发 AI，返回前按对照表复原。
+// 不带 session_id 时行为与本功能上线前**逐字一致**（不脱敏）。
+const SYSTEM_WRITER = '你是中文写作助手，输出直接可用，不要客套话。';
+
+/** 组装本轮要发给 AI 的 user 文本（preview 与正式发送共用，保证两次内容完全一致）。 */
+function buildAssistPrompt(action, src) {
+  if (action === 'summarize') {
+    return `请用 150 字以内总结下面这篇笔记的核心要点，直接输出总结本身，不要任何前后缀。\n\n${src.slice(0, 8000)}`;
+  }
+  if (action === 'continue') {
+    return `请顺着下面这段笔记的思路继续写下去，保持原有的语气、人称与 Markdown 结构，只输出续写的内容，不要重复原文，也不要解释。\n\n${src.slice(-2000)}`;
+  }
+  if (action === 'translate') {
+    return `请把下面的内容翻译成英文，保留 Markdown 结构与代码块，只输出译文，不要解释。\n\n${src.slice(0, 6000)}`;
+  }
+  return null;
+}
+
+// 脱敏预览：不调 AI，只把「本轮会发给 AI 的文本」脱敏后连同对照表给前端确认。
+router.post('/notes/:id/ai-assist/preview', (req, res) => {
+  const b = req.body || {};
+  const action = String(b.action || 'summarize');
+  const row = req.tdb.prepare('SELECT * FROM notes WHERE id=?').get(int(req.params.id, -1));
+  if (!row) return res.status(404).json({ error: '笔记不存在' });
+  const src = String(b.selection || '') || String(row.content || '');
+  if (!src.trim()) return res.status(400).json({ error: '没有可处理的正文' });
+  const prompt = buildAssistPrompt(action, src);
+  if (!prompt) return res.status(400).json({ error: `不支持的 action：${action}` });
+  const desens = require('../services/desensitizeService');
+  const opts = desens.optionsFrom(req.tdb, {});
+  // 总开关在「效率工具 → AI脱敏」里关掉时如实告知，而不是假装脱敏了还照原文发出去
+  if (!opts.enabled) return res.json({ session_id: 0, disabled: true, mapping: [], count: 0, masked_preview: '' });
+  const enc = desens.encode(prompt, opts);
+  const sessionId = desens.record(req.tdb, {
+    scope: 'note_ai', ref: String(row.id), userId: req.user && req.user.id,
+    mapping: enc.mapping, maskedText: enc.masked, maskedPreview: enc.masked, status: 'preview',
+  });
+  // 预览只回显前 4000 字，避免整篇正文回传；真正发送时用库里的完整脱敏文本
+  res.json({ session_id: sessionId, masked_preview: enc.masked.slice(0, 4000), mapping: enc.mapping, count: enc.count });
+});
+
 router.post('/notes/:id/ai-assist', async (req, res) => {
   const b = req.body || {};
   const action = String(b.action || 'summarize');
   const row = req.tdb.prepare('SELECT * FROM notes WHERE id=?').get(int(req.params.id, -1));
   if (!row) return res.status(404).json({ error: '笔记不存在' });
-  const content = String(row.content || '');
-  const selection = String(b.selection || '');
-  const src = selection || content;
-  if (!src.trim()) return res.status(400).json({ error: '没有可处理的正文' });
-  let prompt;
-  if (action === 'summarize') {
-    prompt = `请用 150 字以内总结下面这篇笔记的核心要点，直接输出总结本身，不要任何前后缀。\n\n${src.slice(0, 8000)}`;
-  } else if (action === 'continue') {
-    prompt = `请顺着下面这段笔记的思路继续写下去，保持原有的语气、人称与 Markdown 结构，只输出续写的内容，不要重复原文，也不要解释。\n\n${src.slice(-2000)}`;
-  } else if (action === 'translate') {
-    prompt = `请把下面的内容翻译成英文，保留 Markdown 结构与代码块，只输出译文，不要解释。\n\n${src.slice(0, 6000)}`;
+
+  const desens = require('../services/desensitizeService');
+  const sessionId = int(b.session_id, 0);
+  let prompt, mapping = null;
+  if (sessionId) {
+    // 已确认的脱敏会话：用预览时存下的脱敏文本直接发，杜绝「预览与发送不一致」
+    const sess = desens.getHistory(req.tdb, sessionId);
+    if (!sess || sess.scope !== 'note_ai' || sess.ref !== String(row.id)) {
+      return res.status(400).json({ error: '脱敏会话不存在或已失效，请重新发起' });
+    }
+    prompt = sess.masked_text;
+    mapping = sess.mapping;
   } else {
-    return res.status(400).json({ error: `不支持的 action：${action}` });
+    const src = String(b.selection || '') || String(row.content || '');
+    // 参数校验一律排在「有没有配 AI」之前——没配模型时也该先告诉用户「正文是空的」
+    // 「action 不认识」，而不是拿一句「未配置 AI 模型」把真正的错因盖掉。
+    if (!src.trim()) return res.status(400).json({ error: '没有可处理的正文' });
+    prompt = buildAssistPrompt(action, src);
+    if (!prompt) return res.status(400).json({ error: `不支持的 action：${action}` });
   }
+
   const aiService = require('../services/aiService');
   if (!aiService.hasConfig(req.tdb)) return res.status(400).json({ error: '未配置 AI 模型' });
   try {
     const r = await aiService.chatEx(
-      [{ role: 'system', content: '你是中文写作助手，输出直接可用，不要客套话。' }, { role: 'user', content: prompt }],
+      [{ role: 'system', content: SYSTEM_WRITER }, { role: 'user', content: prompt }],
       { maxTokens: 1500, temperature: action === 'translate' ? 0.3 : 0.7, tdb: req.tdb }
     );
-    res.json({ ok: true, action, result: String(r.content || ''), model: r.model || '', usage: r.usage || null });
+    let result = String(r.content || '');
+    if (mapping && mapping.length) result = desens.decode(result, mapping);   // 复原真名
+    if (sessionId) {
+      try { desens.setHistoryStatus(req.tdb, sessionId, 'sent'); } catch { /* 状态更新失败不影响结果 */ }
+    }
+    res.json({ ok: true, action, result, model: r.model || '', usage: r.usage || null, masked: !!mapping });
   } catch (e) {
+    if (sessionId) { try { desens.setHistoryStatus(req.tdb, sessionId, 'failed'); } catch { /* 忽略 */ } }
     res.status(400).json({ error: e.message });
   }
 });

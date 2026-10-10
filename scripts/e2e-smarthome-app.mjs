@@ -101,7 +101,9 @@ try {
   ck('B1 打开就是应用外壳，没有被踢到登录页', (await p.locator('.sh-shell').count()) === 1 && !p.url().includes('login'), p.url());
   ck('B2 页面上没有登录表单', (await p.locator('input[type=password]').count()) === 0);
   const navTexts = (await p.locator('.sh-nav-item .sh-label').allInnerTexts()).map((t) => t.trim());
-  ck('B3 左侧 6 个模块（原来那 6 个页签）', navTexts.join('|') === '米家|智能板|Agent红绿灯|米家设置|米家参数翻译|视频中心', navTexts.join('|'));
+  // v1.12.0/1.12.4 起智能家居页各 tab 都有增改（数字人、LLM在线模型并入），侧栏随之对齐，断言同步更新
+  ck('B3 左侧 8 个模块（与工作台智能家居页页签一一对应）',
+    navTexts.join('|') === '米家|数字人|LLM在线模型|智能板|Agent红绿灯|米家设置|米家参数翻译|视频中心', navTexts.join('|'));
   ck('B4 原来的页内 tab 条不再出现（已升格为侧栏）', (await p.locator('h2.page-title').count()) === 0 && (await p.locator('.tabs').count()) === 0);
   ck('B5 顶栏显示应用名与版本', (await p.locator('.sh-title').innerText()).includes('JARVIS') && (await p.locator('.sh-ver').count()) === 1, await p.locator('.sh-brand').innerText());
   await p.waitForFunction(() => { const el = document.querySelector('.sh-net'); return el && /在线|离线/.test(el.textContent); }, null, { timeout: 8000 });

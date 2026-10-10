@@ -14,8 +14,110 @@
     <div v-if="err" class="msg err" style="margin-bottom:10px">{{ err }}</div>
     <div v-if="okMsg" class="msg ok" style="margin-bottom:10px">{{ okMsg }}</div>
 
+    <!-- ==================== ⑤ 智能家居控制（v1.13.1） ====================
+         控制「人工智能 → 米家」里已绑定的设备。与「智能板 → 语音控米家」共用同一份配置
+         （控制通道 / 智能屏点位 / 家庭过滤 / 设备别名——都在主库 settings 的 xiaozhi_config 里），
+         任一处改完另一处刷新即见。按用户要求，板子侧内容（桥接地址/桥接密钥/编译烧录/固件/串口）
+         这里一律没有——只保留控制通道的方法、可控设备一览、别名对照。
+         放在「没有数字人」那条分支之前：这一页跟数字人角色没关系，一个角色都没有时也该能用。 -->
+    <div v-if="sub === 'smarthome'" class="card">
+      <h3 style="margin:0 0 4px">🏠 智能家居控制（米家）</h3>
+      <p class="sh-hint" style="margin:0 0 14px">
+        这里直接控制「人工智能 → 米家」里已绑定的设备（同一套云端通道，不经过数字人）。
+        <b>配置与「智能板 → 语音控米家」共用同一份</b>——控制通道 / 智能屏点位 / 家庭过滤 / 设备别名
+        在任一处改完，另一处刷新即见，不是两份。
+      </p>
+
+      <div v-if="sm.loading" class="sh-hint">加载中…</div>
+      <template v-else>
+        <div v-if="sm.error" class="msg err" style="margin:0 0 10px">{{ sm.error }}</div>
+
+        <!-- 控制通道（方法复刻自「智能板 → 语音控米家」） -->
+        <div class="sh-field">
+          <label>控制通道</label>
+          <div class="sh-radios">
+            <label class="sh-radio"><input type="radio" value="direct" v-model="sm.channel" :disabled="!sm.isAdmin" />
+              <b>直接米家</b><span class="sh-hint">开关类指令直达 MIoT（快、有回执，默认）</span></label>
+            <label class="sh-radio"><input type="radio" value="speaker" v-model="sm.channel" :disabled="!sm.isAdmin" />
+              <b>智能屏转述</b><span class="sh-hint">指令转成文字发给小爱解析（能控空调温度等复杂指令，无回执、尽力而为）</span></label>
+          </div>
+        </div>
+        <div v-if="!sm.isAdmin" class="sh-hint" style="margin-top:6px">
+          （控制通道 / 智能屏点位 / 家庭过滤 / 别名登记只有管理员能改；下方的设备通断测试所有人可用）
+        </div>
+
+        <!-- 智能屏备用通道 -->
+        <div class="sh-sub">
+          <div class="sh-sub-title">智能屏备用通道（xiaomi.wifispeaker.x10a）</div>
+          <div class="sh-inline">
+            <label class="sh-lbl">did</label>
+            <input v-model="sm.speaker.did" :disabled="!sm.isAdmin" class="sh-mid" placeholder="智能屏设备 did" />
+          </div>
+          <div class="sh-inline" style="margin-top:8px">
+            <label class="sh-lbl">动作点位</label>
+            <input v-model="sm.speaker.siid_play" :disabled="!sm.isAdmin" placeholder="播放 siid" class="sh-mini" />
+            <input v-model="sm.speaker.aiid_play" :disabled="!sm.isAdmin" placeholder="aiid 3" class="sh-mini" />
+            <span class="sh-hint">播放文本</span>
+            <input v-model="sm.speaker.siid_exec" :disabled="!sm.isAdmin" placeholder="执行 siid" class="sh-mini" />
+            <input v-model="sm.speaker.aiid_exec" :disabled="!sm.isAdmin" placeholder="aiid 4" class="sh-mini" />
+            <span class="sh-hint">执行指令</span>
+            <button class="btn sm" :disabled="!sm.isAdmin || sm.busy.probe" @click="probeSpeaker">{{ sm.busy.probe ? '探测中…' : '自动探测 siid' }}</button>
+          </div>
+          <small v-if="sm.probeMsg" class="sh-hint">{{ sm.probeMsg }}</small>
+          <div class="sh-inline" style="margin-top:8px">
+            <input v-model="sm.testText" placeholder="试播/试执行内容，如：今天天气不错" style="flex:1;max-width:420px" />
+            <button class="btn sm" :disabled="!sm.testText.trim()" @click="speakerTest('play')">🔈 试播</button>
+            <button class="btn sm" :disabled="!sm.testText.trim()" @click="speakerTest('exec')">▶ 试执行指令</button>
+          </div>
+          <small v-if="sm.testMsg" class="sh-hint">{{ sm.testMsg }}</small>
+        </div>
+
+        <div class="sh-actions">
+          <button class="btn" :disabled="!sm.isAdmin || sm.busy.save" @click="saveSmConfig">{{ sm.busy.save ? '保存中…' : '保存通道与点位' }}</button>
+        </div>
+
+        <!-- 可控设备一览 + 别名对照（与「米家」tab 同源） -->
+        <div class="sh-sub">
+          <div class="sh-sub-title sh-click" @click="toggleSmDevices">
+            可控设备一览（{{ smShown.length }} 台）{{ sm.show ? ' ▴' : ' ▾' }}
+            <button class="btn sm" style="margin-left:8px" :disabled="sm.busy.devs" @click.stop="loadSmDevices(true)">{{ sm.busy.devs ? '同步中…' : '⟳ 同步米家' }}</button>
+            <select v-if="sm.show && sm.homes.length > 1" v-model="sm.homeFilter" class="sh-home-sel" @click.stop @change="saveSmHomeFilter">
+              <option value="all">全部家庭（{{ sm.devices.length }}）</option>
+              <option v-for="h in sm.homes" :key="h" :value="h">{{ h }}（{{ sm.devices.filter((d) => d.home === h).length }}）</option>
+            </select>
+          </div>
+          <div v-if="sm.show">
+            <p class="sh-hint" style="margin:2px 0 8px">
+              与「米家」tab 同一数据源：进本页、展开列表、点 ⟳ 都会刷新（⟳ 额外强制同步小米云端）。
+              <b>别名</b>=给设备起的语音叫法，登记后<b>只认别名、本名退出匹配</b>——两台重名设备给其中一台起别名即可消歧；
+              输完回车或点别处即保存{{ sm.isAdmin ? '' : '（登记需管理员）' }}；左侧开关可直接通断测试。
+            </p>
+            <div v-if="!smShown.length" class="sh-hint">
+              <template v-if="sm.bound === false">⚠️ 本服务器还没绑定米家（{{ sm.boundMsg || '未绑定' }}）——到「米家」tab 绑定后这里自动出现。</template>
+              <template v-else>（{{ sm.homeFilter !== 'all' ? `「${sm.homeFilter}」里没有可控设备` : '没有可控设备' }}）</template>
+            </div>
+            <div v-for="d in smShown" :key="d.did" class="sh-dev" :class="{ busy: d._busy }">
+              <button v-if="d.sw" class="sh-toggle" :class="{ on: d.sw.v, wait: d._busy }" :disabled="!d.online || d._busy"
+                      :title="d.online ? '快速通断测试' : '设备离线'" @click="toggleSmDevice(d)"><i></i></button>
+              <i v-else class="sh-dot" :class="{ 'sh-on': d.online }" :title="d.online ? (d.is_parent ? '在线（父设备）' : '在线（无开关属性）') : '离线'"></i>
+              <span class="sh-dev-name" :title="`${d.room === '未分区' ? '' : d.room + ' · '}${d.name}${d.home ? '（' + d.home + '）' : ''}`">{{ d.room === '未分区' ? '' : d.room + ' · ' }}{{ d.name }}</span>
+              <span v-if="d.is_parent" class="sh-parent-tag" title="多路开关的父设备——本体没有开关，各分路在下方独立可控">父设备</span>
+              <template v-else>
+                <span class="sh-alias-arrow" title="语音别名（登记后只认别名，本名退出匹配——重名设备消歧用）">叫→</span>
+                <input v-model="d.aliasDraft" class="sh-alias" placeholder="语音别名" maxlength="32"
+                       :disabled="!sm.isAdmin" @blur="saveSmAlias(d)" @keyup.enter="$event.target.blur()" />
+                <button class="btn sm ghost sh-alias-save" :class="{ dirty: d.aliasDraft !== (d.alias || '') }"
+                        :disabled="!sm.isAdmin || d.aliasDraft === (d.alias || '')" @mousedown.prevent @click="saveSmAlias(d)">存</button>
+                <small v-if="d.sw" class="sh-hint sh-sw-state">{{ d.sw.v ? '开' : '关' }}</small>
+              </template>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
     <!-- 没有任何数字人：引导去设置新建 -->
-    <div v-if="loaded && !personas.length" class="card" style="text-align:center;padding:40px">
+    <div v-else-if="loaded && !personas.length" class="card" style="text-align:center;padding:40px">
       <span class="material-icons" style="font-size:44px;color:var(--muted)">smart_toy</span>
       <h3 style="margin:12px 0 8px">还没有数字人</h3>
       <p style="color:var(--muted);margin:0 0 16px">先建一个角色：选类型（男友/女友/宠物）、上传参考图、调人设，就能在右下角和悬浮窗里见到 TA。</p>
@@ -373,6 +475,9 @@ const SUBS = [
   { key: 'chat', label: '聊天记录' },
   { key: 'settings', label: '设置' },
   { key: 'role', label: '角色设置' }, // v1.12.4：设置拆两页——设置只管 API 接入，角色外观/声音/人设归这里
+  // v1.13.1：智能家居控制——控制「人工智能 → 米家」的设备。方法复刻自「智能板 → 语音控米家」，
+  // 但去掉了所有板子/烧录相关（桥接地址、桥接密钥、编译烧录、固件、串口、装机向导）。
+  { key: 'smarthome', label: '智能家居控制' },
 ];
 // v1.12.1：进数字人 tab 一律从「数字人界面」开始。此前用 localStorage 记忆上次子页签——
 // 上次停留在「设置」的话，之后每次进来都落在设置页；不再记忆，组件随页签切换重挂载天然归位。
@@ -644,7 +749,120 @@ function openPhone() {
 onMounted(async () => {
   await loadMeta();
   if (!chatId.value && cur.value) chatId.value = cur.value.id;
+  if (sub.value === 'smarthome') loadSm();
 });
+
+// ---------- 智能家居控制（v1.13.1） ----------
+// 方法复刻自「智能板 → 语音控米家」，板子/烧录相关内容一概不带。
+// 所有读写都走 /dh/smarthome/*（挂在 /dh 前缀下自动继承数字人 tab 的权限——/xiaozhi 归智能板 tab，
+// 只有 dh 权限的人调不到，所以不能直接复用那几条）。
+const sm = reactive({
+  loading: false, error: '', bound: null, boundMsg: '', isAdmin: false,
+  devices: [], homes: [], homeFilter: 'all', show: true,
+  channel: 'direct',
+  speaker: { did: '', siid_play: '', aiid_play: 3, siid_exec: '', aiid_exec: 4 },
+  testText: '', probeMsg: '', testMsg: '',
+  busy: { devs: false, probe: false, save: false },
+  loaded: false,
+});
+const smShown = computed(() => sm.homeFilter === 'all' ? sm.devices : sm.devices.filter((d) => d.home === sm.homeFilter));
+
+async function loadSm(fresh) {
+  if (sm.loading) return;
+  sm.loading = true; sm.error = '';
+  try {
+    const r = await api.get('/dh/smarthome/devices' + (fresh ? '?fresh=1' : ''));
+    sm.isAdmin = !!r.is_admin;
+    sm.devices = (r.devices || []).map((d) => ({ ...d, aliasDraft: d.alias || '' }));
+    sm.homes = r.homes || [];
+    sm.bound = !!r.bound;
+    sm.boundMsg = r.message || '';
+    sm.channel = r.channel || 'direct';
+    const sp = r.speaker || {};
+    sm.speaker = {
+      did: sp.did || '', siid_play: sp.siid_play ?? '', aiid_play: sp.aiid_play ?? 3,
+      siid_exec: sp.siid_exec ?? '', aiid_exec: sp.aiid_exec ?? 4,
+    };
+    // 默认家庭（存在主库 xiaozhi_config 的 home_filter）：家庭改名/删除后回「全部」
+    const hf = r.home_filter || 'all';
+    sm.homeFilter = (hf !== 'all' && sm.homes.includes(hf)) ? hf : 'all';
+    sm.loaded = true;
+  } catch (e) { sm.error = '加载失败：' + e.message; }
+  sm.loading = false;
+}
+watch(sub, (v) => { if (v === 'smarthome' && !sm.loaded) loadSm(); });
+
+async function saveSmConfig() {
+  if (!sm.isAdmin || sm.busy.save) return;
+  sm.busy.save = true;
+  try {
+    await api.put('/dh/smarthome/config', { channel: sm.channel, speaker: { ...sm.speaker } });
+    flashOk('控制通道与智能屏点位已保存（与「智能板 → 语音控米家」是同一份配置）');
+  } catch (e) { flashErr('保存失败：' + e.message); }
+  finally { sm.busy.save = false; }
+}
+async function saveSmHomeFilter() {
+  if (!sm.isAdmin) return; // 非管理员只改本会话显示，不落配置
+  try { await api.put('/dh/smarthome/config', { home_filter: sm.homeFilter }); }
+  catch (e) { flashErr('默认家庭保存失败：' + e.message); }
+}
+async function probeSpeaker() {
+  sm.busy.probe = true; sm.probeMsg = '';
+  try {
+    const r = await api.post('/dh/smarthome/speaker-probe', {});
+    sm.speaker = { ...sm.speaker, ...(r.speaker || {}) };
+    sm.probeMsg = r.message || '';
+    await saveSmConfig();
+  } catch (e) { sm.probeMsg = '探测失败：' + e.message; }
+  finally { sm.busy.probe = false; }
+}
+async function speakerTest(kind) {
+  const text = sm.testText.trim();
+  if (!text) return;
+  sm.testMsg = '发送中…';
+  try {
+    const r = await api.post('/dh/smarthome/speaker-test', { kind, text });
+    sm.testMsg = r.message || (r.ok ? '已发送' : '失败');
+    if (r.ok) flashOk('已发送');
+  } catch (e) { sm.testMsg = '失败：' + e.message; }
+}
+function toggleSmDevices() {
+  sm.show = !sm.show;
+  if (sm.show) loadSmDevices(false); // 每次展开都拉最新——「米家」tab 那边动过这里立刻跟上
+}
+async function loadSmDevices(fresh) {
+  sm.busy.devs = true;
+  try {
+    const r = await api.get('/dh/smarthome/devices' + (fresh ? '?fresh=1' : ''));
+    sm.isAdmin = !!r.is_admin;
+    sm.bound = !!r.bound;
+    sm.boundMsg = r.message || '';
+    sm.devices = (r.devices || []).map((d) => ({ ...d, aliasDraft: d.alias || '' }));
+    sm.homes = r.homes || [];
+    if (sm.homeFilter !== 'all' && !sm.homes.includes(sm.homeFilter)) sm.homeFilter = 'all';
+  } catch (e) { flashErr('设备列表加载失败：' + e.message); }
+  sm.busy.devs = false;
+}
+async function toggleSmDevice(d) {
+  if (d._busy || !d.sw) return;
+  const want = !d.sw.v;
+  d._busy = true; d.sw.v = want; // 乐观更新，失败回读校正
+  try {
+    const r = await api.post('/dh/smarthome/control', { did: d.did, action: want ? 'on' : 'off' });
+    if (!r.ok) { d.sw.v = !want; flashErr(r.message || '控制失败'); }
+    else flashOk(r.message || `已${want ? '打开' : '关闭'}${d.name}`);
+  } catch (e) { d.sw.v = !want; flashErr('控制失败：' + e.message); }
+  finally { d._busy = false; }
+}
+async function saveSmAlias(d) {
+  const v = String(d.aliasDraft || '').trim();
+  if (v === (d.alias || '')) return;
+  try {
+    await api.put('/dh/smarthome/alias', { did: d.did, alias: v });
+    d.alias = v || null;
+    flashOk(v ? `已登记别名「${v}」` : '已清除别名');
+  } catch (e) { flashErr('别名保存失败：' + e.message); }
+}
 </script>
 
 <style scoped>
@@ -807,4 +1025,51 @@ onMounted(async () => {
   .dh-chat-side { width: 100%; }
   .dh-grid2 { grid-template-columns: 1fr; }
 }
+
+/* ============ ⑤ 智能家居控制（v1.13.1） ============
+   样式取自「智能板 → 语音控米家」的 .xz-*（同一套观感），改名前缀成 .sh-*，
+   因为 DhPanel 是 scoped 组件、且板子侧的规则不该被这里继承。 */
+.sh-hint { color: var(--muted); font-size: 13px; line-height: 1.7; margin: 4px 0; }
+.sh-field { display: flex; flex-direction: column; gap: 6px; }
+.sh-field > label { font-size: 12px; color: var(--muted); }
+.sh-field input { min-width: 170px; }
+.sh-inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sh-lbl { font-size: 12px; color: var(--muted); }
+.sh-mini { width: 86px !important; min-width: 86px !important; }
+.sh-mid { width: 190px !important; min-width: 190px !important; }
+.sh-radios { display: flex; gap: 10px; flex-wrap: wrap; }
+.sh-radio { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; cursor: pointer; min-width: 240px; }
+.sh-radio input { margin-right: 6px; }
+.sh-radio .sh-hint { margin: 0; font-size: 12px; }
+.sh-sub { border-top: 1px dashed var(--border); margin-top: 14px; padding-top: 10px; }
+.sh-sub-title { font-weight: 600; font-size: 13.5px; margin-bottom: 8px; }
+.sh-click { cursor: pointer; }
+.sh-actions { display: flex; gap: 10px; align-items: center; margin: 12px 0 4px; flex-wrap: wrap; }
+.sh-home-sel { font-size: 12.5px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: inherit; margin-left: 8px; }
+.sh-dev { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 4px 8px;
+  background: rgba(0,0,0,.03); border-radius: 6px; margin-bottom: 4px; }
+.sh-dev.busy { opacity: .7; }
+.sh-dev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 44%; flex: 0 1 auto; }
+.sh-toggle { position: relative; width: 34px; height: 18px; border-radius: 9px; border: none; background: #c8c8c8;
+  cursor: pointer; padding: 0; flex: none; transition: background .2s; }
+.sh-toggle i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff;
+  transition: left .2s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.sh-toggle.on { background: var(--ok, #1e9e68); }
+.sh-toggle.on i { left: 18px; }
+.sh-toggle.wait { opacity: .6; }
+.sh-toggle:disabled { cursor: not-allowed; }
+.sh-dot { width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: none; margin: 0 13px; }
+.sh-dot.sh-on { background: var(--ok, #1e9e68); }
+.sh-alias-arrow { font-size: 11px; color: var(--muted); flex: none; opacity: .55; }
+.sh-dev:hover .sh-alias-arrow { opacity: 1; color: var(--accent); }
+.sh-alias { width: 108px; flex: none; font-size: 12px; padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: transparent; color: inherit; }
+.sh-dev:hover .sh-alias { border-color: var(--accent); }
+.sh-alias-save { flex: none; padding: 2px 8px !important; font-size: 12px; opacity: .45; }
+.sh-alias-save.dirty { opacity: 1; border-color: var(--accent); color: var(--accent); }
+.sh-sw-state { margin-left: auto; flex: none; }
+.sh-parent-tag { flex: none; margin-left: 8px; font-size: 11px; line-height: 1; font-weight: 600; padding: 4px 9px;
+  border-radius: 9px; background: var(--accent); color: #fff; }
 </style>

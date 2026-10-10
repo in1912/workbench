@@ -263,4 +263,137 @@ router.post('/dh/history', (req, res) => {
   res.json({ ok: true, item: dh.addHistory(tdb, pid, role, text) });
 });
 
+// =====================================================================================
+// 智能家居控制（v1.13.1）—— 数字人设置里的新 tab，控制「人工智能 → 米家」的设备
+//
+// 为什么新开 /dh/smarthome/* 而不是直接复用 /xiaozhi/*：
+//   /xiaozhi 在 auth.js 里归「智能板」那个 tab，只有 dh 权限的人调不到。挂在 /dh 前缀下就自动
+//   继承 smarthome.dh 的权限，不必动 auth.js。（漏这层映射会让权限静默失效——§4 的规矩）
+//
+// 数据是**同一份** xiaozhi_config（主库 settings，家庭共享，不是租户库）：控制通道 / 智能屏点位 /
+// 家庭过滤 / 设备别名都只有一处。也就是说这一页和「智能板 → 语音控米家」改的是同一份配置，
+// 两边任一处改完另一处刷新即见——面板里已如实写明，免得以为是两份。
+//
+// 这里刻意**不含**板子侧内容：桥接地址、桥接密钥、编译烧录、固件、串口、装机向导一律没有。
+// =====================================================================================
+const xiaozhiSvc = require('../services/xiaozhiService');
+
+const asyncH = (fn) => (req, res) => Promise.resolve(fn(req, res))
+  .catch((e) => { console.error('[dh/smarthome]', e.message); res.status(503).json({ error: e.message || '智能家居接口调用失败' }); });
+function dhAdminOnly(req, res) {
+  if (req.user.role !== 'admin') { res.status(403).json({ error: '仅管理员可操作' }); return false; }
+  return true;
+}
+const dhNormName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+
+// 设备一览 + 家庭清单 + 当前配置（一次拿全，面板不用发三次请求）
+router.get('/dh/smarthome/devices', asyncH(async (req, res) => {
+  const cfg = xiaozhiSvc.getPublicConfig();
+  const base = { home_filter: cfg.home_filter || 'all', channel: cfg.channel || 'direct', speaker: cfg.speaker || {}, is_admin: req.user.role === 'admin' };
+  try {
+    const devices = await xiaozhiSvc.listDevicesForBridge(req.query.fresh === '1', { includeParents: true });
+    const homes = [...new Set(devices.map((d) => d.home).filter(Boolean))];
+    res.json({ bound: true, devices, homes, ...base });
+  } catch (e) {
+    // 未绑米家等：不 500，让面板能区分「没绑」和「绑了但没设备」
+    res.json({ bound: false, devices: [], homes: [], message: e.message, ...base });
+  }
+}));
+
+// 逐台快捷开关（登录 + dh 权限即可，与智能板面板同口径）
+router.post('/dh/smarthome/control', asyncH(async (req, res) => {
+  const did = String((req.body || {}).did || '').trim();
+  const action = String((req.body || {}).action || '').trim();
+  if (!/^[\w.-]{1,64}$/.test(did)) return res.status(400).json({ error: 'did 格式不对' });
+  if (!['on', 'off', 'toggle'].includes(action)) return res.status(400).json({ error: 'action 只支持 on / off / toggle' });
+  res.json(await xiaozhiSvc.dispatch('control', { device: did, action }));
+}));
+
+// 实时会话里的设备指令判定 + 执行（v1.13.3）。
+// 为什么需要它：实时会话（说话 / 在数字人界面打字）的内容**不经过工作台服务器**——浏览器把
+// 音视频与文字直连 Vivix 的 WSS 控制通道，回话也是 Vivix 的云端模型生成的。所以服务端只能
+// 反过来被浏览器问一次：「这句是不是设备指令？」是就当场执行（与智能板同一条 mihome 链路），
+// 把**真实回执**交给浏览器，由浏览器再喂给 Vivix 让它照实念（见 web/src/dhLive.js）。
+// 不影响打字试聊：那条路（/dh/chat）自己就会截，不会走这里。
+router.post('/dh/smarthome/command', asyncH(async (req, res) => {
+  const text = String((req.body || {}).text || '').trim().slice(0, 200);
+  if (!text) return res.status(400).json({ error: 'text 不能为空' });
+  const ctl = await dh.tryDeviceControl(text);
+  res.json(ctl ? { matched: true, control: ctl, message: String(ctl.message || '') } : { matched: false, message: '' });
+}));
+
+// 别名对照表（管理员；校验逻辑与 /xiaozhi/device-alias 同款：
+// 别名等于本名起不到接管作用、两台同别名照样分不开，都在保存时拦下）
+router.put('/dh/smarthome/alias', asyncH(async (req, res) => {
+  if (!dhAdminOnly(req, res)) return;
+  const did = String(req.body?.did || '').trim();
+  const alias = String(req.body?.alias || '').trim();
+  if (alias) {
+    let devices = [];
+    try { devices = await xiaozhiSvc.listDevicesForBridge(); } catch { /* 未绑米家：跳过交叉校验，仅做格式检查 */ }
+    const me = devices.find((d) => String(d.did) === did);
+    if (me && dhNormName(alias) === dhNormName(me.name)) {
+      return res.status(400).json({ error: `别名「${alias}」和设备本名相同——起不到消歧作用，请换一个不同的叫法` });
+    }
+    const clash = devices.find((d) => String(d.did) !== did && d.alias && dhNormName(d.alias) === dhNormName(alias));
+    if (clash) {
+      return res.status(400).json({ error: `别名「${alias}」已被「${clash.room === '未分区' ? '' : clash.room + '的'}${clash.name}」占用——两台同别名还是分不开，请换个名字` });
+    }
+  }
+  try { res.json({ ok: true, device_aliases: xiaozhiSvc.setDeviceAlias(did, alias) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+}));
+
+// 控制通道 / 智能屏备用通道 / 家庭过滤（管理员）——校验与 /xiaozhi/config 逐条对齐
+router.put('/dh/smarthome/config', asyncH(async (req, res) => {
+  if (!dhAdminOnly(req, res)) return;
+  const b = req.body || {};
+  const patch = {};
+  if (b.channel !== undefined) {
+    if (!['direct', 'speaker'].includes(b.channel)) return res.status(400).json({ error: 'channel 只支持 direct（直接米家）/ speaker（智能屏转述）' });
+    patch.channel = b.channel;
+  }
+  if (b.home_filter !== undefined) {
+    const v = String(b.home_filter || '').trim();
+    if (v.length > 32) return res.status(400).json({ error: '家庭名最长 32 个字' });
+    patch.home_filter = v || 'all';
+  }
+  if (b.speaker) {
+    const did = String(b.speaker.did || '').trim();
+    if (!/^\d{1,20}$/.test(did)) return res.status(400).json({ error: '智能屏 did 需为纯数字' });
+    const pt = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+    const sp = {
+      did, siid_play: pt(b.speaker.siid_play), aiid_play: pt(b.speaker.aiid_play) || 3,
+      siid_exec: pt(b.speaker.siid_exec), aiid_exec: pt(b.speaker.aiid_exec) || 4,
+      piid_play: pt(b.speaker.piid_play) || 1, piid_exec: pt(b.speaker.piid_exec) || 1,
+    };
+    for (const [k, v] of Object.entries(sp)) {
+      if (k === 'did') continue; // did 是纯数字字符串（走上面的正则），其余点位才要求整数
+      if (v != null && !Number.isInteger(v)) return res.status(400).json({ error: `speaker.${k} 需为整数` });
+    }
+    patch.speaker = sp;
+  }
+  if (!Object.keys(patch).length) return res.status(400).json({ error: '没有可保存的字段' });
+  const cfg = xiaozhiSvc.saveConfig(patch);
+  res.json({ ok: true, config: { home_filter: cfg.home_filter || 'all', channel: cfg.channel || 'direct', speaker: cfg.speaker || {} } });
+}));
+
+// 智能屏点位自动探测 + 试播 / 试执行
+router.post('/dh/smarthome/speaker-probe', asyncH(async (req, res) => {
+  const sp = await xiaozhiSvc.ensureSpeakerPoints(true);
+  res.json({
+    ok: !!(sp.siid_play || sp.siid_exec),
+    speaker: sp,
+    message: sp.siid_play && sp.siid_exec
+      ? `已定位：播放文本 siid${sp.siid_play}/aiid${sp.aiid_play}，执行指令 siid${sp.siid_exec}/aiid${sp.aiid_exec}`
+      : 'spec 里没找到 play-text / execute-text-directive 动作，请手动填 siid',
+  });
+}));
+router.post('/dh/smarthome/speaker-test', asyncH(async (req, res) => {
+  const b = req.body || {};
+  const text = String(b.text || '').trim().slice(0, 200);
+  if (!text) return res.status(400).json({ error: 'text 不能为空' });
+  res.json(await xiaozhiSvc.speakerAction(b.kind === 'exec' ? 'exec' : 'play', text));
+}));
+
 module.exports = router;
